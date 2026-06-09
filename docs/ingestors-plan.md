@@ -35,9 +35,8 @@ Purpose: run as a LaunchAgent/cron-style one-shot on MacBooks and Mac desktops.
 Next useful work:
 
 - Add LaunchAgent example packaging.
-- Add Homebrew service state collection.
-- Add battery health trend states.
 - Add optional expensive `system_profiler` sections with clear timeout config.
+- Add more battery trend context once Pulse has history-aware views.
 
 ## Priority 3: infrastructure targets
 

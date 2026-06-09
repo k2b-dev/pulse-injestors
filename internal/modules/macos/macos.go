@@ -160,6 +160,7 @@ func collectHomebrew(ctx context.Context, b *monitoring.Builder, timeout time.Du
 		version := strings.Split(strings.TrimSpace(string(out)), "\n")[0]
 		b.State("package.homebrew.version", version, nil)
 	}
+	collectHomebrewServices(ctx, b, path, timeout)
 	env := []string{"HOMEBREW_NO_AUTO_UPDATE=1", "HOMEBREW_NO_ANALYTICS=1"}
 	out, err := run(ctx, timeout, env, path, "outdated", "--json=v2")
 	if err != nil {
@@ -179,6 +180,42 @@ func collectHomebrew(ctx context.Context, b *monitoring.Builder, timeout time.Du
 	b.Metric("system.packages.homebrew.outdated.casks", "gauge", float64(len(parsed.Casks)), "count", nil)
 	b.Metric("system.packages.homebrew.outdated.total", "gauge", float64(len(parsed.Formulae)+len(parsed.Casks)), "count", nil)
 	return nil
+}
+
+func collectHomebrewServices(ctx context.Context, b *monitoring.Builder, path string, timeout time.Duration) {
+	out, err := run(ctx, timeout, []string{"HOMEBREW_NO_AUTO_UPDATE=1", "HOMEBREW_NO_ANALYTICS=1"}, path, "services", "info", "--all", "--json")
+	if err != nil {
+		b.State("package.homebrew.services.available", false, nil)
+		b.Event("package.homebrew.services.failed", nil, map[string]any{"error": err.Error()})
+		return
+	}
+	services, err := parseHomebrewServices(out)
+	if err != nil {
+		b.State("package.homebrew.services.available", false, nil)
+		b.Event("package.homebrew.services.failed", nil, map[string]any{"error": err.Error()})
+		return
+	}
+	b.State("package.homebrew.services.available", true, nil)
+	b.Metric("system.service.homebrew.services", "gauge", float64(len(services)), "count", nil)
+	states := map[string]int{}
+	for _, service := range services {
+		dims := map[string]string{"service": service.Name}
+		b.State("system.service.homebrew.present", true, dims)
+		if service.Status != "" {
+			b.State("system.service.homebrew.status", service.Status, dims)
+			states[service.Status]++
+		}
+		if service.User != "" {
+			b.State("system.service.homebrew.user", service.User, dims)
+		}
+		if service.File != "" {
+			b.State("system.service.homebrew.file", service.File, dims)
+		}
+		b.State("system.service.homebrew.running", service.Status == "started", dims)
+	}
+	for state, count := range states {
+		b.Metric("system.service.homebrew.by_status", "gauge", float64(count), "count", map[string]string{"status": state})
+	}
 }
 
 func collectSoftwareUpdate(ctx context.Context, b *monitoring.Builder, timeout time.Duration) error {
@@ -256,6 +293,7 @@ func collectBattery(ctx context.Context, b *monitoring.Builder) error {
 			b.Metric(target.name, "gauge", float64(v), target.unit, nil)
 		}
 	}
+	emitBatteryHealth(b, nums)
 	if v, ok := nums["Temperature"]; ok {
 		b.Metric("system.battery.temperature", "gauge", float64(v)/100, "celsius", nil)
 	}
@@ -265,6 +303,54 @@ func collectBattery(ctx context.Context, b *monitoring.Builder) error {
 	b.State("macos.thermal.cpu.available", false, map[string]string{"source": "powermetrics", "reason": "privileged_or_tool_required"})
 	b.State("macos.thermal.gpu.available", false, map[string]string{"source": "powermetrics", "reason": "privileged_or_tool_required"})
 	return nil
+}
+
+func emitBatteryHealth(b *monitoring.Builder, nums map[string]uint64) {
+	maxCapacity, maxOK := nums["AppleRawMaxCapacity"]
+	if !maxOK {
+		maxCapacity, maxOK = nums["NominalChargeCapacity"]
+	}
+	designCapacity, designOK := nums["DesignCapacity"]
+	if maxOK && designOK && designCapacity > 0 {
+		b.Metric("system.battery.health", "gauge", (float64(maxCapacity)/float64(designCapacity))*100, "percent", nil)
+	}
+	cycles, cyclesOK := nums["CycleCount"]
+	designCycles, designCyclesOK := nums["DesignCycleCount9C"]
+	if cyclesOK && designCyclesOK && designCycles > 0 {
+		b.Metric("system.battery.cycle_usage", "gauge", (float64(cycles)/float64(designCycles))*100, "percent", nil)
+	}
+}
+
+type HomebrewService struct {
+	Name   string
+	Status string
+	User   string
+	File   string
+}
+
+func parseHomebrewServices(out []byte) ([]HomebrewService, error) {
+	var raw []struct {
+		Name   string `json:"name"`
+		Status string `json:"status"`
+		User   string `json:"user"`
+		File   string `json:"file"`
+	}
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return nil, err
+	}
+	services := make([]HomebrewService, 0, len(raw))
+	for _, service := range raw {
+		if service.Name == "" {
+			continue
+		}
+		services = append(services, HomebrewService{
+			Name:   service.Name,
+			Status: strings.ToLower(strings.TrimSpace(service.Status)),
+			User:   service.User,
+			File:   service.File,
+		})
+	}
+	return services, nil
 }
 
 func collectDisplays(ctx context.Context, b *monitoring.Builder) error {

@@ -339,6 +339,8 @@ Registry freshness checks are opt-in with `docker.enable_registry_checks` / `PUL
 | `system.battery.amperage` | gauge | `milliampere` | | `ioreg` | cheap |
 | `system.battery.temperature` | gauge | `celsius` | | `ioreg` | cheap |
 | `system.battery.virtual_temperature` | gauge | `celsius` | | `ioreg` | cheap |
+| `system.battery.health` | gauge | `percent` | | derived from max/design capacity | cheap |
+| `system.battery.cycle_usage` | gauge | `percent` | | derived from cycle/design cycle count | cheap |
 | `system.gpu.cores` | gauge | `count` | `gpu` | `system_profiler` | moderate |
 | `system.display.count` | gauge | `count` | | `system_profiler` | moderate |
 | `system.display.width` | gauge | `pixels` | `display`, `gpu` | `system_profiler` | moderate |
@@ -347,6 +349,15 @@ Registry freshness checks are opt-in with `docker.enable_registry_checks` / `PUL
 | `system.packages.homebrew.outdated.formulae` | gauge | `count` | | `brew outdated --json=v2` | optional |
 | `system.packages.homebrew.outdated.casks` | gauge | `count` | | `brew outdated --json=v2` | optional |
 | `system.packages.homebrew.outdated.total` | gauge | `count` | | derived | optional |
+| `package.homebrew.services.available` | state bool | | `brew services info --all --json` | optional |
+| `system.service.homebrew.services` | gauge | `count` | | `brew services info --all --json` | optional |
+| `system.service.homebrew.present` | state bool | `service` | `brew services info --all --json` | optional |
+| `system.service.homebrew.status` | state string | `service` | `brew services info --all --json` | optional |
+| `system.service.homebrew.running` | state bool | `service` | derived from service status | optional |
+| `system.service.homebrew.user` | state string | `service` | `brew services info --all --json` | optional |
+| `system.service.homebrew.file` | state string | `service` | `brew services info --all --json` | optional |
+| `system.service.homebrew.by_status` | gauge | `count` | `status` | derived | optional |
+| `package.homebrew.services.failed` | event | | `brew services info --all --json` | optional |
 | `system.packages.macos.updates` | gauge | `count` | | `softwareupdate -l` when enabled | optional |
 
 ## Script module
