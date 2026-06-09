@@ -348,6 +348,24 @@ Registry freshness checks are opt-in with `docker.enable_registry_checks` / `PUL
 | `proxmox.resource.disk.total` | gauge | `bytes` | `type`, `resource`, `node` | Proxmox API `/cluster/resources` | optional |
 | `proxmox.resource.disk.usage` | gauge | `percent` | `type`, `resource`, `node` | derived | optional |
 | `proxmox.resource.uptime` | gauge | `seconds` | `type`, `resource`, `node` | Proxmox API `/cluster/resources` | optional |
+| `proxmox.tasks.recent` | gauge | `count` | | Proxmox API `/cluster/tasks` | optional |
+| `proxmox.tasks.by_status` | gauge | `count` | `status` | Proxmox API `/cluster/tasks` | optional |
+| `proxmox.tasks.by_type_status` | gauge | `count` | `type`, `status` | Proxmox API `/cluster/tasks` | optional |
+| `proxmox.backup.tasks.recent` | gauge | `count` | | derived from `/cluster/tasks` type `vzdump` | optional |
+| `proxmox.backup.tasks.success` | gauge | `count` | | derived from `/cluster/tasks` type `vzdump` | optional |
+| `proxmox.backup.tasks.failed` | gauge | `count` | | derived from `/cluster/tasks` type `vzdump` | optional |
+| `proxmox.backup.last_success.time` | state string | | derived from successful `vzdump` task end time | optional |
+| `proxmox.backup.last_success.age` | gauge | `seconds` | | derived from successful `vzdump` task end time | optional |
+| `proxmox.backup.jobs.total` | gauge | `count` | | Proxmox API `/cluster/backup` | optional |
+| `proxmox.backup.jobs.enabled` | gauge | `count` | | Proxmox API `/cluster/backup` | optional |
+| `proxmox.backup.jobs.disabled` | gauge | `count` | | Proxmox API `/cluster/backup` | optional |
+| `proxmox.backup.job.present` | state bool | `job` | Proxmox API `/cluster/backup` | optional |
+| `proxmox.backup.job.enabled` | state bool | `job` | Proxmox API `/cluster/backup` | optional |
+| `proxmox.backup.job.schedule` | state string | `job` | Proxmox API `/cluster/backup` | optional |
+| `proxmox.backup.job.storage` | state string | `job` | Proxmox API `/cluster/backup` | optional |
+| `proxmox.backup.job.mode` | state string | `job` | Proxmox API `/cluster/backup` | optional |
+| `proxmox.backup.guests.not_backed_up` | gauge | `count` | | Proxmox API `/cluster/backup-info/not-backed-up` | optional |
+| `proxmox.backup.guest.covered` | state bool | `vmid`, `guest`, `type`, `node` | Proxmox API `/cluster/backup-info/not-backed-up` | optional |
 | `proxmox.ceph.api.enabled` | state bool | | config | optional |
 | `proxmox.ceph.available` | state bool | | Proxmox API `/cluster/ceph/status` | optional |
 | `proxmox.ceph.health.status` | state string | | Proxmox API `/cluster/ceph/status` | optional |
@@ -369,6 +387,11 @@ Registry freshness checks are opt-in with `docker.enable_registry_checks` / `PUL
 | `proxmox.version.failed` | event | | Proxmox API `/version` | optional |
 | `proxmox.cluster.status.failed` | event | | Proxmox API `/cluster/status` | optional |
 | `proxmox.cluster.resources.failed` | event | | Proxmox API `/cluster/resources` | optional |
+| `proxmox.cluster.tasks.failed` | event | | Proxmox API `/cluster/tasks` | optional |
+| `proxmox.task.failed` | event | `node`, `type`, `id` | derived from `/cluster/tasks` status | optional |
+| `proxmox.backup.failed` | event | `node`, `type`, `id` | derived from failed `vzdump` task | optional |
+| `proxmox.backup.jobs.failed` | event | | Proxmox API `/cluster/backup` | optional |
+| `proxmox.backup.coverage.failed` | event | | Proxmox API `/cluster/backup-info/not-backed-up` | optional |
 | `proxmox.ceph.status.failed` | event | | Proxmox API `/cluster/ceph/status` | optional |
 | `proxmox.ceph.pools.failed` | event | | Proxmox API `/nodes/{node}/ceph/pools` | optional |
 

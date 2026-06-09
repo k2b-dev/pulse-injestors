@@ -46,6 +46,7 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 	if err := collectResources(ctx, b, client); err != nil {
 		b.Event("proxmox.cluster.resources.failed", nil, map[string]any{"error": err.Error()})
 	}
+	collectTasksAndBackups(ctx, b, client)
 	if c.EnableCephAPI {
 		collectCephAPI(ctx, b, client, nodes)
 	} else {
@@ -229,6 +230,213 @@ func emitUsage(b *monitoring.Builder, prefix string, used, max float64, dims map
 	}
 }
 
+func collectTasksAndBackups(ctx context.Context, b *monitoring.Builder, client Client) {
+	tasks, err := getClusterTasks(ctx, client)
+	if err != nil {
+		b.Event("proxmox.cluster.tasks.failed", nil, map[string]any{"error": err.Error()})
+	} else {
+		emitTaskSignals(b, tasks)
+		emitBackupTaskSignals(b, tasks)
+	}
+	if err := collectBackupJobs(ctx, b, client); err != nil {
+		b.Event("proxmox.backup.jobs.failed", nil, map[string]any{"error": err.Error()})
+	}
+	if err := collectBackupCoverage(ctx, b, client); err != nil {
+		b.Event("proxmox.backup.coverage.failed", nil, map[string]any{"error": err.Error()})
+	}
+}
+
+func getClusterTasks(ctx context.Context, client Client) ([]Task, error) {
+	var rows []Task
+	if err := client.get(ctx, "/cluster/tasks", &rows); err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func emitTaskSignals(b *monitoring.Builder, tasks []Task) {
+	byStatus := map[string]int{}
+	byTypeStatus := map[string]int{}
+	failedEvents := 0
+	b.Metric("proxmox.tasks.recent", "gauge", float64(len(tasks)), "count", nil)
+	for _, task := range tasks {
+		status := taskStatusClass(task)
+		typ := task.Type
+		if typ == "" {
+			typ = "unknown"
+		}
+		byStatus[status]++
+		byTypeStatus[typ+":"+status]++
+		if status == "error" && failedEvents < 10 {
+			b.Event("proxmox.task.failed", taskDims(task), taskPayload(task))
+			failedEvents++
+		}
+	}
+	for status, count := range byStatus {
+		b.Metric("proxmox.tasks.by_status", "gauge", float64(count), "count", map[string]string{"status": status})
+	}
+	for key, count := range byTypeStatus {
+		typ, status, _ := strings.Cut(key, ":")
+		b.Metric("proxmox.tasks.by_type_status", "gauge", float64(count), "count", map[string]string{"type": typ, "status": status})
+	}
+}
+
+func emitBackupTaskSignals(b *monitoring.Builder, tasks []Task) {
+	total := 0
+	success := 0
+	failed := 0
+	var lastSuccess int64
+	for _, task := range tasks {
+		if task.Type != "vzdump" {
+			continue
+		}
+		total++
+		switch taskStatusClass(task) {
+		case "ok":
+			success++
+			if task.EndTime > lastSuccess {
+				lastSuccess = task.EndTime
+			}
+		case "error":
+			failed++
+			b.Event("proxmox.backup.failed", taskDims(task), taskPayload(task))
+		}
+	}
+	b.Metric("proxmox.backup.tasks.recent", "gauge", float64(total), "count", nil)
+	b.Metric("proxmox.backup.tasks.success", "gauge", float64(success), "count", nil)
+	b.Metric("proxmox.backup.tasks.failed", "gauge", float64(failed), "count", nil)
+	if lastSuccess > 0 {
+		ts := time.Unix(lastSuccess, 0).UTC()
+		b.State("proxmox.backup.last_success.time", ts.Format(time.RFC3339), nil)
+		b.Metric("proxmox.backup.last_success.age", "gauge", time.Since(ts).Seconds(), "seconds", nil)
+	}
+}
+
+func collectBackupJobs(ctx context.Context, b *monitoring.Builder, client Client) error {
+	var rows []map[string]any
+	if err := client.get(ctx, "/cluster/backup", &rows); err != nil {
+		return err
+	}
+	jobs := parseBackupJobs(rows)
+	enabled := 0
+	disabled := 0
+	for _, job := range jobs {
+		dims := map[string]string{"job": job.ID}
+		b.State("proxmox.backup.job.present", true, dims)
+		b.State("proxmox.backup.job.enabled", job.Enabled, dims)
+		if job.Enabled {
+			enabled++
+		} else {
+			disabled++
+		}
+		if job.Schedule != "" {
+			b.State("proxmox.backup.job.schedule", job.Schedule, dims)
+		}
+		if job.Storage != "" {
+			b.State("proxmox.backup.job.storage", job.Storage, dims)
+		}
+		if job.Mode != "" {
+			b.State("proxmox.backup.job.mode", job.Mode, dims)
+		}
+	}
+	b.Metric("proxmox.backup.jobs.total", "gauge", float64(len(jobs)), "count", nil)
+	b.Metric("proxmox.backup.jobs.enabled", "gauge", float64(enabled), "count", nil)
+	b.Metric("proxmox.backup.jobs.disabled", "gauge", float64(disabled), "count", nil)
+	return nil
+}
+
+func collectBackupCoverage(ctx context.Context, b *monitoring.Builder, client Client) error {
+	var rows []map[string]any
+	if err := client.get(ctx, "/cluster/backup-info/not-backed-up", &rows); err != nil {
+		return err
+	}
+	b.Metric("proxmox.backup.guests.not_backed_up", "gauge", float64(len(rows)), "count", nil)
+	for _, row := range rows {
+		dims := map[string]string{}
+		addDim(dims, "vmid", firstString(row, "vmid"))
+		addDim(dims, "guest", firstString(row, "name"))
+		addDim(dims, "type", firstString(row, "type"))
+		addDim(dims, "node", firstString(row, "node"))
+		b.State("proxmox.backup.guest.covered", false, dims)
+	}
+	return nil
+}
+
+type Task struct {
+	UPID      string `json:"upid"`
+	Node      string `json:"node"`
+	Type      string `json:"type"`
+	ID        string `json:"id"`
+	User      string `json:"user"`
+	Status    string `json:"status"`
+	StartTime int64  `json:"starttime"`
+	EndTime   int64  `json:"endtime"`
+}
+
+func taskStatusClass(task Task) string {
+	if task.EndTime == 0 && task.Status == "" {
+		return "running"
+	}
+	if task.Status == "OK" {
+		return "ok"
+	}
+	if task.Status == "" {
+		return "unknown"
+	}
+	return "error"
+}
+
+func taskDims(task Task) map[string]string {
+	dims := map[string]string{}
+	addDim(dims, "node", task.Node)
+	addDim(dims, "type", task.Type)
+	addDim(dims, "id", task.ID)
+	return dims
+}
+
+func taskPayload(task Task) map[string]any {
+	payload := map[string]any{
+		"status": task.Status,
+		"upid":   task.UPID,
+	}
+	if task.User != "" {
+		payload["user"] = task.User
+	}
+	if task.StartTime > 0 {
+		payload["startTime"] = time.Unix(task.StartTime, 0).UTC().Format(time.RFC3339)
+	}
+	if task.EndTime > 0 {
+		payload["endTime"] = time.Unix(task.EndTime, 0).UTC().Format(time.RFC3339)
+	}
+	return payload
+}
+
+type BackupJob struct {
+	ID       string
+	Enabled  bool
+	Schedule string
+	Storage  string
+	Mode     string
+}
+
+func parseBackupJobs(rows []map[string]any) []BackupJob {
+	jobs := make([]BackupJob, 0, len(rows))
+	for _, row := range rows {
+		id := firstString(row, "id")
+		if id == "" {
+			continue
+		}
+		jobs = append(jobs, BackupJob{
+			ID:       id,
+			Enabled:  firstBool(row, true, "enabled"),
+			Schedule: firstString(row, "schedule"),
+			Storage:  firstString(row, "storage"),
+			Mode:     firstString(row, "mode"),
+		})
+	}
+	return jobs
+}
+
 func collectCephAPI(ctx context.Context, b *monitoring.Builder, client Client, nodes []string) {
 	b.State("proxmox.ceph.api.enabled", true, nil)
 	status, err := getCephStatus(ctx, client)
@@ -376,11 +584,49 @@ func firstString(row map[string]any, keys ...string) string {
 		if !ok {
 			continue
 		}
-		if text, ok := value.(string); ok && text != "" {
-			return text
+		switch v := value.(type) {
+		case string:
+			if v != "" {
+				return v
+			}
+		case int:
+			return fmt.Sprint(v)
+		case int64:
+			return fmt.Sprint(v)
+		case float64:
+			return fmt.Sprintf("%.0f", v)
+		case json.Number:
+			return v.String()
 		}
 	}
 	return ""
+}
+
+func firstBool(row map[string]any, fallback bool, keys ...string) bool {
+	for _, key := range keys {
+		value, ok := row[key]
+		if !ok {
+			continue
+		}
+		switch v := value.(type) {
+		case bool:
+			return v
+		case int:
+			return v != 0
+		case int64:
+			return v != 0
+		case float64:
+			return v != 0
+		case json.Number:
+			parsed, err := v.Int64()
+			if err == nil {
+				return parsed != 0
+			}
+		case string:
+			return v != "0" && v != "false" && v != "no"
+		}
+	}
+	return fallback
 }
 
 func firstFloat(row map[string]any, keys ...string) float64 {
@@ -402,6 +648,12 @@ func firstFloat(row map[string]any, keys ...string) float64 {
 		}
 	}
 	return 0
+}
+
+func addDim(dims map[string]string, key, value string) {
+	if value != "" {
+		dims[key] = value
+	}
 }
 
 type ClusterStatus struct {

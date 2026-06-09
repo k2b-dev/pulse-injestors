@@ -53,6 +53,19 @@ func TestCollectorEmitsVersionClusterAndResources(t *testing.T) {
 				{"id":"qemu/100","type":"qemu","node":"pve1","name":"vm-100","status":"running","cpu":0.5,"maxcpu":2,"mem":512,"maxmem":1024,"disk":100,"maxdisk":200,"uptime":10},
 				{"id":"lxc/101","type":"lxc","node":"pve2","name":"ct-101","status":"stopped"}
 			]}`))
+		case "/api2/json/cluster/tasks":
+			_, _ = w.Write([]byte(`{"data":[
+				{"upid":"UPID:pve1:1","node":"pve1","type":"vzdump","id":"100","user":"root@pam","status":"OK","starttime":1700000000,"endtime":1700000300},
+				{"upid":"UPID:pve1:2","node":"pve1","type":"vzdump","id":"101","user":"root@pam","status":"ERROR: backup failed","starttime":1700000400,"endtime":1700000500},
+				{"upid":"UPID:pve1:3","node":"pve1","type":"qmstart","id":"100","user":"root@pam","status":"OK","starttime":1700000600,"endtime":1700000610}
+			]}`))
+		case "/api2/json/cluster/backup":
+			_, _ = w.Write([]byte(`{"data":[
+				{"id":"backup-daily","enabled":1,"schedule":"daily","storage":"pbs","mode":"snapshot"},
+				{"id":"backup-disabled","enabled":0,"schedule":"weekly","storage":"local"}
+			]}`))
+		case "/api2/json/cluster/backup-info/not-backed-up":
+			_, _ = w.Write([]byte(`{"data":[{"vmid":102,"name":"ct-102","type":"lxc","node":"pve1"}]}`))
 		case "/api2/json/cluster/ceph/status":
 			_, _ = w.Write([]byte(`{"data":{
 				"health":{"status":"HEALTH_OK"},
@@ -104,6 +117,21 @@ func TestCollectorEmitsVersionClusterAndResources(t *testing.T) {
 	}
 	if countMetric(batch.Metrics, "proxmox.ceph.pool.bytes.used") != 1 {
 		t.Fatalf("missing ceph pool metric: %#v", batch.Metrics)
+	}
+	if countMetric(batch.Metrics, "proxmox.tasks.by_type_status") != 3 {
+		t.Fatalf("missing task status metrics: %#v", batch.Metrics)
+	}
+	if countMetric(batch.Metrics, "proxmox.backup.last_success.age") != 1 {
+		t.Fatalf("missing backup freshness metric: %#v", batch.Metrics)
+	}
+	if countMetric(batch.Metrics, "proxmox.backup.guests.not_backed_up") != 1 {
+		t.Fatalf("missing backup coverage metric: %#v", batch.Metrics)
+	}
+	if countEvent(batch.Events, "proxmox.backup.failed") != 1 {
+		t.Fatalf("missing backup failed event: %#v", batch.Events)
+	}
+	if countState(batch.States, "proxmox.backup.job.enabled") != 2 {
+		t.Fatalf("missing backup job states: %#v", batch.States)
 	}
 }
 
@@ -164,6 +192,23 @@ func TestParseCephPools(t *testing.T) {
 	}
 	if pools[1].Name != "cephfs" || pools[1].BytesUsed != 11 || pools[1].BytesAvailable != 22 || pools[1].Objects != 4 {
 		t.Fatalf("second = %#v", pools[1])
+	}
+}
+
+func TestParseBackupJobs(t *testing.T) {
+	jobs := parseBackupJobs([]map[string]any{
+		{"id": "daily", "enabled": float64(1), "schedule": "daily", "storage": "pbs", "mode": "snapshot"},
+		{"id": "weekly", "enabled": "false"},
+		{"enabled": float64(1)},
+	})
+	if len(jobs) != 2 {
+		t.Fatalf("jobs = %d", len(jobs))
+	}
+	if jobs[0].ID != "daily" || !jobs[0].Enabled || jobs[0].Schedule != "daily" || jobs[0].Storage != "pbs" || jobs[0].Mode != "snapshot" {
+		t.Fatalf("first = %#v", jobs[0])
+	}
+	if jobs[1].ID != "weekly" || jobs[1].Enabled {
+		t.Fatalf("second = %#v", jobs[1])
 	}
 }
 
