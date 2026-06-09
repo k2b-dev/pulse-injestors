@@ -22,6 +22,7 @@ type Config struct {
 	Linux   LinuxConfig    `toml:"linux"`
 	MacOS   MacOSConfig    `toml:"macos"`
 	Proxmox ProxmoxConfig  `toml:"proxmox"`
+	PBS     PBSConfig      `toml:"pbs"`
 	Scripts []ScriptConfig `toml:"script"`
 }
 
@@ -91,6 +92,13 @@ type ProxmoxConfig struct {
 	EnableLocalCeph    bool   `toml:"enable_local_ceph"`
 }
 
+type PBSConfig struct {
+	APIURL             string `toml:"api_url"`
+	APIToken           string `toml:"api_token"`
+	TimeoutSeconds     int    `toml:"timeout_seconds"`
+	InsecureSkipVerify bool   `toml:"insecure_skip_verify"`
+}
+
 type ScriptConfig struct {
 	Name           string            `toml:"name"`
 	Command        []string          `toml:"command"`
@@ -134,6 +142,10 @@ type Overlay struct {
 	ProxmoxInsecureSkipVerify     bool
 	ProxmoxEnableCephAPI          bool
 	ProxmoxEnableLocalCeph        bool
+	PBSAPIURL                     string
+	PBSAPIToken                   string
+	PBSTimeoutSeconds             int
+	PBSInsecureSkipVerify         bool
 	AllowMissingPulse             bool
 }
 
@@ -218,6 +230,9 @@ func Resolve(file Config, overlay Overlay) (Config, error) {
 	if cfg.Proxmox.TimeoutSeconds <= 0 {
 		return cfg, errors.New("proxmox timeout_seconds must be positive")
 	}
+	if cfg.PBS.TimeoutSeconds <= 0 {
+		return cfg, errors.New("pbs timeout_seconds must be positive")
+	}
 	if cfg.Linux.PackageTimeoutSeconds <= 0 {
 		return cfg, errors.New("linux package_timeout_seconds must be positive")
 	}
@@ -299,6 +314,10 @@ func (c Config) ProxmoxTimeout() time.Duration {
 	return time.Duration(c.Proxmox.TimeoutSeconds) * time.Second
 }
 
+func (c Config) PBSTimeout() time.Duration {
+	return time.Duration(c.PBS.TimeoutSeconds) * time.Second
+}
+
 func defaults() Config {
 	return Config{
 		Entity: EntityConfig{
@@ -336,6 +355,9 @@ func defaults() Config {
 			SystemProfilerTimeoutSeconds: 10,
 		},
 		Proxmox: ProxmoxConfig{
+			TimeoutSeconds: 10,
+		},
+		PBS: PBSConfig{
 			TimeoutSeconds: 10,
 		},
 	}
@@ -459,6 +481,18 @@ func merge(dst *Config, src Config) {
 	if src.Proxmox.EnableLocalCeph {
 		dst.Proxmox.EnableLocalCeph = true
 	}
+	if src.PBS.APIURL != "" {
+		dst.PBS.APIURL = src.PBS.APIURL
+	}
+	if src.PBS.APIToken != "" {
+		dst.PBS.APIToken = src.PBS.APIToken
+	}
+	if src.PBS.TimeoutSeconds != 0 {
+		dst.PBS.TimeoutSeconds = src.PBS.TimeoutSeconds
+	}
+	if src.PBS.InsecureSkipVerify {
+		dst.PBS.InsecureSkipVerify = true
+	}
 	if len(src.Scripts) > 0 {
 		dst.Scripts = src.Scripts
 	}
@@ -564,6 +598,18 @@ func applyOverlay(dst *Config, o Overlay) {
 	}
 	if o.ProxmoxEnableLocalCeph {
 		dst.Proxmox.EnableLocalCeph = true
+	}
+	if o.PBSAPIURL != "" {
+		dst.PBS.APIURL = o.PBSAPIURL
+	}
+	if o.PBSAPIToken != "" {
+		dst.PBS.APIToken = o.PBSAPIToken
+	}
+	if o.PBSTimeoutSeconds != 0 {
+		dst.PBS.TimeoutSeconds = o.PBSTimeoutSeconds
+	}
+	if o.PBSInsecureSkipVerify {
+		dst.PBS.InsecureSkipVerify = true
 	}
 }
 

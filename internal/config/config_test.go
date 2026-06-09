@@ -135,6 +135,30 @@ func TestResolveProxmoxOverlay(t *testing.T) {
 	}
 }
 
+func TestResolvePBSOverlay(t *testing.T) {
+	cfg, err := Resolve(Config{
+		Pulse: PulseConfig{IngestURL: "https://example.com/ingest", IngestToken: "token"},
+		Entity: EntityConfig{
+			ID: "node",
+		},
+		PBS: PBSConfig{APIURL: "https://file.example:8007", APIToken: "file", TimeoutSeconds: 11},
+	}, Overlay{
+		PBSAPIURL:             "https://env.example:8007",
+		PBSAPIToken:           "env",
+		PBSTimeoutSeconds:     12,
+		PBSInsecureSkipVerify: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PBS.APIURL != "https://env.example:8007" || cfg.PBS.APIToken != "env" {
+		t.Fatalf("pbs = %#v", cfg.PBS)
+	}
+	if cfg.PBS.TimeoutSeconds != 12 || !cfg.PBS.InsecureSkipVerify {
+		t.Fatalf("pbs = %#v", cfg.PBS)
+	}
+}
+
 func TestResolveMergesHostZfsFlag(t *testing.T) {
 	enabled := false
 	cfg, err := Resolve(Config{

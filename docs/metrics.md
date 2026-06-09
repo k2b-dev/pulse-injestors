@@ -395,6 +395,48 @@ Registry freshness checks are opt-in with `docker.enable_registry_checks` / `PUL
 | `proxmox.ceph.status.failed` | event | | Proxmox API `/cluster/ceph/status` | optional |
 | `proxmox.ceph.pools.failed` | event | | Proxmox API `/nodes/{node}/ceph/pools` | optional |
 
+## Proxmox Backup Server module
+
+| Name | Type | Unit | Dimensions | Source | Cost |
+|---|---|---:|---|---|---|
+| `pbs.available` | state bool | | PBS API `/version` | optional |
+| `pbs.version` | state string | | PBS API `/version` | optional |
+| `pbs.release` | state string | | PBS API `/version` | optional |
+| `pbs.repoid` | state string | | PBS API `/version` | optional |
+| `pbs.datastores.total` | gauge | `count` | | PBS API `/status/datastore-usage` | optional |
+| `pbs.datastore.present` | state bool | `datastore` | PBS API `/status/datastore-usage` | optional |
+| `pbs.datastore.bytes.used` | gauge | `bytes` | `datastore` | PBS API `/status/datastore-usage` | optional |
+| `pbs.datastore.bytes.total` | gauge | `bytes` | `datastore` | PBS API `/status/datastore-usage` | optional |
+| `pbs.datastore.bytes.usage` | gauge | `percent` | `datastore` | derived | optional |
+| `pbs.datastore.bytes.available` | gauge | `bytes` | `datastore` | PBS API `/status/datastore-usage` | optional |
+| `pbs.datastore.estimated_full.time` | state string | `datastore` | PBS API `/status/datastore-usage` | optional |
+| `pbs.datastore.estimated_full.seconds_until` | gauge | `seconds` | `datastore` | derived | optional |
+| `pbs.datastore.snapshots.total` | gauge | `count` | `datastore` | PBS API `/admin/datastore/{store}/snapshots` | optional |
+| `pbs.datastore.snapshots.by_type` | gauge | `count` | `datastore`, `type` | PBS API `/admin/datastore/{store}/snapshots` | optional |
+| `pbs.datastore.snapshot.latest.time` | state string | `datastore` | PBS API `/admin/datastore/{store}/snapshots` | optional |
+| `pbs.datastore.snapshot.latest.age` | gauge | `seconds` | `datastore` | derived | optional |
+| `pbs.jobs.total` | gauge | `count` | `kind` | PBS API `/admin/gc`, `/admin/prune`, `/admin/sync`, `/admin/verify` | optional |
+| `pbs.jobs.enabled` | gauge | `count` | `kind` | PBS API `/admin/gc`, `/admin/prune`, `/admin/sync`, `/admin/verify` | optional |
+| `pbs.job.present` | state bool | `kind`, `job`, `datastore` | PBS job APIs | optional |
+| `pbs.job.enabled` | state bool | `kind`, `job`, `datastore` | PBS job APIs | optional |
+| `pbs.job.schedule` | state string | `kind`, `job`, `datastore` | PBS job APIs | optional |
+| `pbs.job.last_run.state` | state string | `kind`, `job`, `datastore` | PBS job APIs | optional |
+| `pbs.job.last_run.time` | state string | `kind`, `job`, `datastore` | PBS job APIs | optional |
+| `pbs.job.last_run.age` | gauge | `seconds` | `kind`, `job`, `datastore` | derived | optional |
+| `pbs.job.next_run.time` | state string | `kind`, `job`, `datastore` | PBS job APIs | optional |
+| `pbs.job.next_run.seconds_until` | gauge | `seconds` | `kind`, `job`, `datastore` | derived | optional |
+| `pbs.tasks.recent` | gauge | `count` | | PBS API `/nodes/localhost/tasks` | optional |
+| `pbs.tasks.by_status` | gauge | `count` | `status` | PBS API `/nodes/localhost/tasks` | optional |
+| `pbs.tasks.by_type_status` | gauge | `count` | `type`, `status` | PBS API `/nodes/localhost/tasks` | optional |
+| `pbs.config.failed` | event | | config validation | optional |
+| `pbs.version.failed` | event | | PBS API `/version` | optional |
+| `pbs.datastore.usage.failed` | event | | PBS API `/status/datastore-usage` | optional |
+| `pbs.datastore.snapshots.failed` | event | `datastore` | PBS API `/admin/datastore/{store}/snapshots` | optional |
+| `pbs.job.list.failed` | event | `kind` | PBS job APIs | optional |
+| `pbs.job.failed` | event | `kind`, `job`, `datastore` | derived from PBS job last-run state | optional |
+| `pbs.tasks.failed` | event | | PBS API `/nodes/localhost/tasks` | optional |
+| `pbs.task.failed` | event | `node`, `type`, `id` | derived from PBS task status | optional |
+
 ## macOS module
 
 | Name | Type | Unit | Dimensions | Source | Cost |

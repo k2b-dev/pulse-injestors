@@ -1,0 +1,22 @@
+[pulse]
+ingest_url = "https://pulse.example.com/ingest/source"
+ingest_token = "replace-me"
+
+[entity]
+id = "pbs-1"
+type = "proxmox-backup-server"
+
+[runner]
+interval_seconds = 60
+collector_timeout_seconds = 60
+
+[http]
+timeout_seconds = 10
+max_retries = 3
+initial_backoff_ms = 500
+
+[pbs]
+api_url = "https://pbs.example.com:8007"
+api_token = "root@pam!pulse:replace-me"
+timeout_seconds = 10
+insecure_skip_verify = false
