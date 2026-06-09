@@ -35,8 +35,10 @@ type cli struct {
 	MaxRetries              int `name:"max-retries" help:"HTTP retry count for network, 408, 429 and 5xx failures." env:"PULSE_HTTP_MAX_RETRIES"`
 	InitialBackoffMS        int `name:"initial-backoff-ms" help:"Initial retry backoff in milliseconds." env:"PULSE_HTTP_INITIAL_BACKOFF_MS"`
 
-	HomebrewTimeoutSeconds       int `name:"homebrew-timeout-seconds" help:"Homebrew outdated timeout in seconds." env:"PULSE_MACOS_HOMEBREW_TIMEOUT_SECONDS"`
-	SoftwareUpdateTimeoutSeconds int `name:"softwareupdate-timeout-seconds" help:"softwareupdate timeout in seconds." env:"PULSE_MACOS_SOFTWAREUPDATE_TIMEOUT_SECONDS"`
+	HomebrewTimeoutSeconds       int  `name:"homebrew-timeout-seconds" help:"Homebrew outdated timeout in seconds." env:"PULSE_MACOS_HOMEBREW_TIMEOUT_SECONDS"`
+	SoftwareUpdateTimeoutSeconds int  `name:"softwareupdate-timeout-seconds" help:"softwareupdate timeout in seconds." env:"PULSE_MACOS_SOFTWAREUPDATE_TIMEOUT_SECONDS"`
+	DisableSystemProfiler        bool `name:"disable-system-profiler" help:"Disable macOS system_profiler based collectors." env:"PULSE_MACOS_DISABLE_SYSTEM_PROFILER"`
+	SystemProfilerTimeoutSeconds int  `name:"system-profiler-timeout-seconds" help:"system_profiler timeout in seconds." env:"PULSE_MACOS_SYSTEM_PROFILER_TIMEOUT_SECONDS"`
 
 	Local   bool `name:"local" help:"Write collected Pulse batch JSON to stdout instead of sending it." env:"PULSE_LOCAL"`
 	Pretty  bool `name:"pretty" help:"With --local, print a human-readable report instead of JSON." env:"PULSE_LOCAL_PRETTY"`
@@ -127,6 +129,8 @@ func loadConfig(c cli) (config.Config, error) {
 		CollectorTimeoutSeconds:      c.CollectorTimeoutSeconds,
 		HomebrewTimeoutSeconds:       c.HomebrewTimeoutSeconds,
 		SoftwareUpdateTimeoutSeconds: c.SoftwareUpdateTimeoutSeconds,
+		DisableSystemProfiler:        c.DisableSystemProfiler,
+		SystemProfilerTimeoutSeconds: c.SystemProfilerTimeoutSeconds,
 		AllowMissingPulse:            c.Local,
 	})
 }
@@ -152,6 +156,8 @@ func collectors(cfg config.Config) []monitoring.Collector {
 			HomebrewTimeout:       cfg.HomebrewTimeout(),
 			EnableSoftwareUpdate:  cfg.SoftwareUpdateEnabled(),
 			SoftwareUpdateTimeout: cfg.SoftwareUpdateTimeout(),
+			EnableSystemProfiler:  cfg.SystemProfilerEnabled(),
+			SystemProfilerTimeout: cfg.SystemProfilerTimeout(),
 		},
 	}
 	if len(cfg.Scripts) > 0 {

@@ -77,6 +77,40 @@ func TestResolveAllowsMissingPulseForLocalMode(t *testing.T) {
 	}
 }
 
+func TestResolveMacOSSystemProfilerDefaultsEnabled(t *testing.T) {
+	cfg, err := Resolve(Config{}, Overlay{EntityID: "node", AllowMissingPulse: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.SystemProfilerEnabled() {
+		t.Fatal("expected system profiler enabled")
+	}
+	if cfg.MacOS.SystemProfilerTimeoutSeconds != 10 {
+		t.Fatalf("timeout = %d", cfg.MacOS.SystemProfilerTimeoutSeconds)
+	}
+}
+
+func TestResolveMacOSSystemProfilerCanBeDisabled(t *testing.T) {
+	enabled := false
+	cfg, err := Resolve(Config{
+		Pulse:  PulseConfig{IngestURL: "https://example.com/ingest", IngestToken: "token"},
+		Entity: EntityConfig{ID: "node"},
+		MacOS:  MacOSConfig{EnableSystemProfiler: &enabled, SystemProfilerTimeoutSeconds: 12},
+	}, Overlay{
+		DisableSystemProfiler:        true,
+		SystemProfilerTimeoutSeconds: 15,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SystemProfilerEnabled() {
+		t.Fatal("expected system profiler disabled")
+	}
+	if cfg.MacOS.SystemProfilerTimeoutSeconds != 15 {
+		t.Fatalf("timeout = %d", cfg.MacOS.SystemProfilerTimeoutSeconds)
+	}
+}
+
 func TestResolveMergesHostZfsFlag(t *testing.T) {
 	enabled := false
 	cfg, err := Resolve(Config{

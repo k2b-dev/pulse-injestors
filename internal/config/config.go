@@ -77,6 +77,8 @@ type MacOSConfig struct {
 	HomebrewTimeoutSeconds       int   `toml:"homebrew_timeout_seconds"`
 	EnableSoftwareUpdate         *bool `toml:"enable_software_update"`
 	SoftwareUpdateTimeoutSeconds int   `toml:"software_update_timeout_seconds"`
+	EnableSystemProfiler         *bool `toml:"enable_system_profiler"`
+	SystemProfilerTimeoutSeconds int   `toml:"system_profiler_timeout_seconds"`
 }
 
 type ScriptConfig struct {
@@ -114,6 +116,8 @@ type Overlay struct {
 	LinuxDiskHealthTimeoutSeconds int
 	HomebrewTimeoutSeconds        int
 	SoftwareUpdateTimeoutSeconds  int
+	DisableSystemProfiler         bool
+	SystemProfilerTimeoutSeconds  int
 	AllowMissingPulse             bool
 }
 
@@ -182,6 +186,9 @@ func Resolve(file Config, overlay Overlay) (Config, error) {
 	}
 	if cfg.MacOS.SoftwareUpdateTimeoutSeconds <= 0 {
 		return cfg, errors.New("macos software_update_timeout_seconds must be positive")
+	}
+	if cfg.MacOS.SystemProfilerTimeoutSeconds <= 0 {
+		return cfg, errors.New("macos system_profiler_timeout_seconds must be positive")
 	}
 	if cfg.Docker.Concurrency <= 0 {
 		return cfg, errors.New("docker concurrency must be positive")
@@ -253,12 +260,20 @@ func (c Config) SoftwareUpdateEnabled() bool {
 	return c.MacOS.EnableSoftwareUpdate != nil && *c.MacOS.EnableSoftwareUpdate
 }
 
+func (c Config) SystemProfilerEnabled() bool {
+	return c.MacOS.EnableSystemProfiler == nil || *c.MacOS.EnableSystemProfiler
+}
+
 func (c Config) HomebrewTimeout() time.Duration {
 	return time.Duration(c.MacOS.HomebrewTimeoutSeconds) * time.Second
 }
 
 func (c Config) SoftwareUpdateTimeout() time.Duration {
 	return time.Duration(c.MacOS.SoftwareUpdateTimeoutSeconds) * time.Second
+}
+
+func (c Config) SystemProfilerTimeout() time.Duration {
+	return time.Duration(c.MacOS.SystemProfilerTimeoutSeconds) * time.Second
 }
 
 func defaults() Config {
@@ -295,6 +310,7 @@ func defaults() Config {
 		MacOS: MacOSConfig{
 			HomebrewTimeoutSeconds:       20,
 			SoftwareUpdateTimeoutSeconds: 60,
+			SystemProfilerTimeoutSeconds: 10,
 		},
 	}
 }
@@ -393,6 +409,12 @@ func merge(dst *Config, src Config) {
 	if src.MacOS.SoftwareUpdateTimeoutSeconds != 0 {
 		dst.MacOS.SoftwareUpdateTimeoutSeconds = src.MacOS.SoftwareUpdateTimeoutSeconds
 	}
+	if src.MacOS.EnableSystemProfiler != nil {
+		dst.MacOS.EnableSystemProfiler = src.MacOS.EnableSystemProfiler
+	}
+	if src.MacOS.SystemProfilerTimeoutSeconds != 0 {
+		dst.MacOS.SystemProfilerTimeoutSeconds = src.MacOS.SystemProfilerTimeoutSeconds
+	}
 	if len(src.Scripts) > 0 {
 		dst.Scripts = src.Scripts
 	}
@@ -473,6 +495,13 @@ func applyOverlay(dst *Config, o Overlay) {
 	}
 	if o.SoftwareUpdateTimeoutSeconds != 0 {
 		dst.MacOS.SoftwareUpdateTimeoutSeconds = o.SoftwareUpdateTimeoutSeconds
+	}
+	if o.DisableSystemProfiler {
+		enabled := false
+		dst.MacOS.EnableSystemProfiler = &enabled
+	}
+	if o.SystemProfilerTimeoutSeconds != 0 {
+		dst.MacOS.SystemProfilerTimeoutSeconds = o.SystemProfilerTimeoutSeconds
 	}
 }
 

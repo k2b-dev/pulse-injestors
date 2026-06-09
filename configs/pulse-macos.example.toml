@@ -20,3 +20,5 @@ enable_homebrew = true
 homebrew_timeout_seconds = 20
 enable_software_update = false
 software_update_timeout_seconds = 60
+enable_system_profiler = true
+system_profiler_timeout_seconds = 10

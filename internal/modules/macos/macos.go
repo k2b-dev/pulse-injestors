@@ -22,6 +22,8 @@ type Collector struct {
 	HomebrewTimeout       time.Duration
 	EnableSoftwareUpdate  bool
 	SoftwareUpdateTimeout time.Duration
+	EnableSystemProfiler  bool
+	SystemProfilerTimeout time.Duration
 }
 
 func (c Collector) Name() string { return "macos" }
@@ -40,8 +42,13 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 	if err := collectBattery(ctx, b); err != nil {
 		reportSubmoduleError(b, "battery", err)
 	}
-	if err := collectDisplays(ctx, b); err != nil {
-		reportSubmoduleError(b, "display", err)
+	if c.EnableSystemProfiler {
+		if err := collectDisplays(ctx, b, c.SystemProfilerTimeout); err != nil {
+			reportSubmoduleError(b, "display", err)
+		}
+	} else {
+		b.State("system.display.available", false, map[string]string{"reason": "system_profiler_disabled"})
+		b.State("macos.system_profiler.enabled", false, nil)
 	}
 	if c.EnableHomebrew {
 		if err := collectHomebrew(ctx, b, c.HomebrewTimeout); err != nil {
@@ -353,8 +360,12 @@ func parseHomebrewServices(out []byte) ([]HomebrewService, error) {
 	return services, nil
 }
 
-func collectDisplays(ctx context.Context, b *monitoring.Builder) error {
-	out, err := run(ctx, 6*time.Second, nil, "system_profiler", "SPDisplaysDataType", "-json")
+func collectDisplays(ctx context.Context, b *monitoring.Builder, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	b.State("macos.system_profiler.enabled", true, nil)
+	out, err := run(ctx, timeout, nil, "system_profiler", "SPDisplaysDataType", "-json")
 	if err != nil {
 		b.State("system.display.available", false, nil)
 		return fmt.Errorf("system_profiler SPDisplaysDataType: %w", err)

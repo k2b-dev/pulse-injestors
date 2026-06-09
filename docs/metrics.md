@@ -327,6 +327,7 @@ Registry freshness checks are opt-in with `docker.enable_registry_checks` / `PUL
 | `macos.product_name` | state string | | `sw_vers` | cheap |
 | `macos.version` | state string | | `sw_vers` | cheap |
 | `macos.build` | state string | | `sw_vers` | cheap |
+| `macos.system_profiler.enabled` | state bool | | config | cheap |
 | `macos.thermal.cpu.available` | state bool | `source`, `reason` | availability marker | cheap |
 | `macos.thermal.gpu.available` | state bool | `source`, `reason` | availability marker | cheap |
 | `system.battery.available` | state bool | | `ioreg` | cheap |
@@ -342,6 +343,7 @@ Registry freshness checks are opt-in with `docker.enable_registry_checks` / `PUL
 | `system.battery.health` | gauge | `percent` | | derived from max/design capacity | cheap |
 | `system.battery.cycle_usage` | gauge | `percent` | | derived from cycle/design cycle count | cheap |
 | `system.gpu.cores` | gauge | `count` | `gpu` | `system_profiler` | moderate |
+| `system.display.available` | state bool | `reason` when disabled | `system_profiler` / config | moderate |
 | `system.display.count` | gauge | `count` | | `system_profiler` | moderate |
 | `system.display.width` | gauge | `pixels` | `display`, `gpu` | `system_profiler` | moderate |
 | `system.display.height` | gauge | `pixels` | `display`, `gpu` | `system_profiler` | moderate |
