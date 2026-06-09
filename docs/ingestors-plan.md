@@ -34,7 +34,6 @@ Purpose: run as a LaunchAgent/cron-style one-shot on MacBooks and Mac desktops.
 
 Next useful work:
 
-- Add LaunchAgent example packaging.
 - Add optional expensive `system_profiler` sections with clear timeout config.
 - Add more battery trend context once Pulse has history-aware views.
 

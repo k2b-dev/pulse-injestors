@@ -11,6 +11,7 @@ Current binaries:
 
 Metric names, units, dimensions, sources, and cost classes are listed in [docs/metrics.md](docs/metrics.md).
 Planned next ingestors and module priorities are listed in [docs/ingestors-plan.md](docs/ingestors-plan.md).
+The macOS LaunchAgent example is documented in [docs/macos-launchagent.md](docs/macos-launchagent.md).
 
 ```sh
 docker run -d \
