@@ -93,3 +93,20 @@ func TestResolveMergesHostZfsFlag(t *testing.T) {
 		t.Fatal("expected zfs disabled")
 	}
 }
+
+func TestResolveMergesHostCephFlag(t *testing.T) {
+	enabled := true
+	cfg, err := Resolve(Config{
+		Pulse: PulseConfig{IngestURL: "https://example.com/ingest", IngestToken: "token"},
+		Entity: EntityConfig{
+			ID: "node",
+		},
+		Host: HostConfig{EnableCeph: &enabled},
+	}, Overlay{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.CephEnabled() {
+		t.Fatal("expected ceph enabled")
+	}
+}

@@ -295,6 +295,31 @@ Registry freshness checks are opt-in with `docker.enable_registry_checks` / `PUL
 | `system.zfs.datasets.failed` | event | | `zfs list` | optional |
 | `system.zfs.snapshots.failed` | event | | `zfs list -t snapshot` | optional |
 
+## Ceph module
+
+| Name | Type | Unit | Dimensions | Source | Cost |
+|---|---|---:|---|---|---|
+| `system.ceph.available` | state bool | | `ceph` lookup | optional |
+| `system.ceph.health.status` | state string | | `ceph status --format json` | optional |
+| `system.ceph.health.healthy` | state bool | | derived from health status | optional |
+| `system.ceph.mons.quorum` | gauge | `count` | | `ceph status --format json` | optional |
+| `system.ceph.mon.in_quorum` | state bool | `monitor` | `ceph status --format json` | optional |
+| `system.ceph.osds.total` | gauge | `count` | | `ceph status --format json` | optional |
+| `system.ceph.osds.up` | gauge | `count` | | `ceph status --format json` | optional |
+| `system.ceph.osds.in` | gauge | `count` | | `ceph status --format json` | optional |
+| `system.ceph.pgs.total` | gauge | `count` | | `ceph status --format json` | optional |
+| `system.ceph.pgs.by_state` | gauge | `count` | `state` | `ceph status --format json` | optional |
+| `system.ceph.bytes.used` | gauge | `bytes` | | `ceph status --format json` | optional |
+| `system.ceph.bytes.total` | gauge | `bytes` | | `ceph status --format json` | optional |
+| `system.ceph.bytes.available` | gauge | `bytes` | | `ceph status --format json` | optional |
+| `system.ceph.pools` | gauge | `count` | | `ceph df --format json` | optional |
+| `system.ceph.pool.present` | state bool | `pool` | `ceph df --format json` | optional |
+| `system.ceph.pool.bytes.used` | gauge | `bytes` | `pool` | `ceph df --format json` | optional |
+| `system.ceph.pool.bytes.available` | gauge | `bytes` | `pool` | `ceph df --format json` | optional |
+| `system.ceph.pool.objects` | gauge | `count` | `pool` | `ceph df --format json` | optional |
+| `system.ceph.status.failed` | event | | `ceph status --format json` | optional |
+| `system.ceph.df.failed` | event | | `ceph df --format json` | optional |
+
 ## macOS module
 
 | Name | Type | Unit | Dimensions | Source | Cost |

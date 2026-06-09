@@ -15,6 +15,7 @@ import (
 
 	"github.com/valentinkolb/pulse-injestors/internal/config"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/btrfs"
+	"github.com/valentinkolb/pulse-injestors/internal/modules/ceph"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/diskhealth"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/filesystem"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/linuxruntime"
@@ -195,6 +196,9 @@ func collectors(cfg config.Config) []monitoring.Collector {
 	}
 	if cfg.ZfsEnabled() {
 		out = append(out, zfs.Collector{Timeout: 5 * time.Second})
+	}
+	if cfg.CephEnabled() {
+		out = append(out, ceph.Collector{Timeout: 5 * time.Second})
 	}
 	if len(cfg.Scripts) > 0 {
 		scripts := make([]script.Script, 0, len(cfg.Scripts))

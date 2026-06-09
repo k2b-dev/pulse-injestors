@@ -70,7 +70,7 @@ Shared optional modules should stay reusable from `pulse-docker` and `pulse-linu
 
 - `btrfs`: expand device/error/scrub status.
 - `zfs`: expand first-pass collector with deeper scrub history and error counters.
-- `ceph`: cluster health, OSD states, pool usage, PG health.
+- `ceph`: expand first-pass local CLI collector with Proxmox/API-backed details.
 
 ## Extension API
 
