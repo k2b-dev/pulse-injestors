@@ -21,10 +21,10 @@ Purpose: run as a one-shot binary from cron/systemd timers on Debian, servers, a
 
 Next useful work:
 
-- Add package update collectors for `apt`, `dnf`, and `pacman`.
-- Add service states for selected systemd units.
-- Add disk health collectors for `smartctl` and NVMe.
-- Add network interface counters from `/proc/net/dev`.
+- Harden package update collectors for more distributions and edge cases.
+- Add more service presets for common host profiles.
+- Extend disk health details from `smartctl` attributes where permissions allow it.
+- Add TCP/UDP socket summary metrics from `/proc/net`.
 
 ## Priority 2: platform-specific devices
 

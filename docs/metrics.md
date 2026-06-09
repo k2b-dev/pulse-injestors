@@ -45,6 +45,73 @@ Cost classes:
 | `system.filesystem.inodes.usage` | gauge | `percent` | `mount`, `source`, `fstype` | Linux `statfs` | cheap |
 | `system.filesystem.readonly` | state bool | `mount`, `source`, `fstype` | Linux mountinfo | cheap |
 
+## Linux network module
+
+| Name | Type | Unit | Dimensions | Source | Cost |
+|---|---|---:|---|---|---|
+| `system.network.available` | state bool | | Linux `/proc/net/dev` | cheap |
+| `system.network.rx` | counter | `bytes` | `interface` | Linux `/proc/net/dev` | cheap |
+| `system.network.rx_packets` | counter | `count` | `interface` | Linux `/proc/net/dev` | cheap |
+| `system.network.rx_errors` | counter | `count` | `interface` | Linux `/proc/net/dev` | cheap |
+| `system.network.rx_dropped` | counter | `count` | `interface` | Linux `/proc/net/dev` | cheap |
+| `system.network.tx` | counter | `bytes` | `interface` | Linux `/proc/net/dev` | cheap |
+| `system.network.tx_packets` | counter | `count` | `interface` | Linux `/proc/net/dev` | cheap |
+| `system.network.tx_errors` | counter | `count` | `interface` | Linux `/proc/net/dev` | cheap |
+| `system.network.tx_dropped` | counter | `count` | `interface` | Linux `/proc/net/dev` | cheap |
+
+## Linux package module
+
+| Name | Type | Unit | Dimensions | Source | Cost |
+|---|---|---:|---|---|---|
+| `system.packages.available` | state bool | | package manager detection | optional |
+| `system.packages.manager.available` | state bool | `manager` | `apt`, `dnf`, `pacman` lookup | optional |
+| `system.packages.manager.updates_available` | state bool | `manager` | package manager command | optional |
+| `system.packages.manager.updates` | gauge | `count` | `manager` | package manager cache | optional |
+| `system.packages.updates.total` | gauge | `count` | | derived | optional |
+| `system.packages.manager.failed` | event | `manager` | package manager command | optional |
+
+## Linux systemd module
+
+| Name | Type | Unit | Dimensions | Source | Cost |
+|---|---|---:|---|---|---|
+| `system.systemd.units.configured` | state bool | | config | cheap |
+| `system.systemd.available` | state bool | | `systemctl` lookup | optional |
+| `system.service.available` | state bool | `service` | `systemctl show` | optional |
+| `system.service.loaded` | state bool | `service` | `systemctl show` | optional |
+| `system.service.active` | state bool | `service` | `systemctl show` | optional |
+| `system.service.load_state` | state string | `service` | `systemctl show` | optional |
+| `system.service.active_state` | state string | `service` | `systemctl show` | optional |
+| `system.service.sub_state` | state string | `service` | `systemctl show` | optional |
+| `system.service.unit_file_state` | state string | `service` | `systemctl show` | optional |
+| `system.service.description` | state string | `service` | `systemctl show` | optional |
+| `system.service.collect.failed` | event | `service` | `systemctl show` | optional |
+| `system.service.failed` | event | `service` | `systemctl show` | optional |
+
+## Linux disk health module
+
+| Name | Type | Unit | Dimensions | Source | Cost |
+|---|---|---:|---|---|---|
+| `system.disk.smart.available` | state bool | | `smartctl` lookup | optional |
+| `system.disk.smart.devices` | gauge | `count` | | `smartctl --scan-open` | optional |
+| `system.disk.smart.health_available` | state bool | `device` | `smartctl -H` | optional |
+| `system.disk.smart.status` | state string | `device` | `smartctl -H` | optional |
+| `system.disk.smart.healthy` | state bool | `device` | `smartctl -H` | optional |
+| `system.disk.smart.scan.failed` | event | | `smartctl --scan-open` | optional |
+| `system.disk.smart.health.failed` | event | `device` | `smartctl -H` | optional |
+| `system.disk.nvme.available` | state bool | | `nvme` lookup | optional |
+| `system.disk.nvme.devices` | gauge | `count` | | `nvme list -o json` | optional |
+| `system.disk.nvme.present` | state bool | `device`, `model`, `serial` | `nvme list -o json` | optional |
+| `system.disk.nvme.smart_available` | state bool | `device`, `model`, `serial` | `nvme smart-log` | optional |
+| `system.disk.nvme.healthy` | state bool | `device`, `model`, `serial` | `nvme smart-log` | optional |
+| `system.disk.nvme.critical_warning` | gauge | `count` | `device`, `model`, `serial` | `nvme smart-log` | optional |
+| `system.disk.nvme.temperature` | gauge | `kelvin` | `device`, `model`, `serial` | `nvme smart-log` | optional |
+| `system.disk.nvme.percentage_used` | gauge | `percent` | `device`, `model`, `serial` | `nvme smart-log` | optional |
+| `system.disk.nvme.available_spare` | gauge | `percent` | `device`, `model`, `serial` | `nvme smart-log` | optional |
+| `system.disk.nvme.media_errors` | gauge | `count` | `device`, `model`, `serial` | `nvme smart-log` | optional |
+| `system.disk.nvme.error_log_entries` | gauge | `count` | `device`, `model`, `serial` | `nvme smart-log` | optional |
+| `system.disk.nvme.list.failed` | event | | `nvme list -o json` | optional |
+| `system.disk.nvme.smart.failed` | event | `device`, `model`, `serial` | `nvme smart-log` | optional |
+
 ## Docker module
 
 | Name | Type | Unit | Dimensions | Source | Cost |

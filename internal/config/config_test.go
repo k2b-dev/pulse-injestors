@@ -11,14 +11,18 @@ func TestResolveOverlayBeatsFile(t *testing.T) {
 		Entity: EntityConfig{ID: "file-node", Type: "host"},
 		HTTP:   HTTPConfig{TimeoutSeconds: 5, MaxRetries: 1, InitialBackoffMS: 100},
 		Runner: RunnerConfig{IntervalSeconds: 30, CollectorTimeoutSeconds: 45},
+		Linux:  LinuxConfig{SystemdUnits: []string{"ssh.service"}, PackageTimeoutSeconds: 11, DiskHealthTimeoutSeconds: 12},
 	}, Overlay{
-		IngestURL:               "https://env.example/ingest",
-		IngestToken:             "env-token",
-		EntityID:                "env-node",
-		EntityType:              "container",
-		TimeoutSeconds:          9,
-		IntervalSeconds:         60,
-		CollectorTimeoutSeconds: 90,
+		IngestURL:                     "https://env.example/ingest",
+		IngestToken:                   "env-token",
+		EntityID:                      "env-node",
+		EntityType:                    "container",
+		TimeoutSeconds:                9,
+		IntervalSeconds:               60,
+		CollectorTimeoutSeconds:       90,
+		LinuxSystemdUnits:             []string{"docker.service"},
+		LinuxPackageTimeoutSeconds:    21,
+		LinuxDiskHealthTimeoutSeconds: 22,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -37,6 +41,12 @@ func TestResolveOverlayBeatsFile(t *testing.T) {
 	}
 	if cfg.Runner.IntervalSeconds != 60 || cfg.Runner.CollectorTimeoutSeconds != 90 {
 		t.Fatalf("runner = %#v", cfg.Runner)
+	}
+	if len(cfg.Linux.SystemdUnits) != 1 || cfg.Linux.SystemdUnits[0] != "docker.service" {
+		t.Fatalf("linux units = %#v", cfg.Linux.SystemdUnits)
+	}
+	if cfg.Linux.PackageTimeoutSeconds != 21 || cfg.Linux.DiskHealthTimeoutSeconds != 22 {
+		t.Fatalf("linux = %#v", cfg.Linux)
 	}
 }
 

@@ -19,6 +19,7 @@ type Config struct {
 	Runner  RunnerConfig   `toml:"runner"`
 	Host    HostConfig     `toml:"host"`
 	Docker  DockerConfig   `toml:"docker"`
+	Linux   LinuxConfig    `toml:"linux"`
 	MacOS   MacOSConfig    `toml:"macos"`
 	Scripts []ScriptConfig `toml:"script"`
 }
@@ -60,6 +61,12 @@ type DockerConfig struct {
 	ContainerTimeoutSeconds int    `toml:"container_timeout_seconds"`
 }
 
+type LinuxConfig struct {
+	SystemdUnits             []string `toml:"systemd_units"`
+	PackageTimeoutSeconds    int      `toml:"package_timeout_seconds"`
+	DiskHealthTimeoutSeconds int      `toml:"disk_health_timeout_seconds"`
+}
+
 type MacOSConfig struct {
 	EnableHomebrew               *bool `toml:"enable_homebrew"`
 	HomebrewTimeoutSeconds       int   `toml:"homebrew_timeout_seconds"`
@@ -94,6 +101,9 @@ type Overlay struct {
 	DockerHostRoot                string
 	DockerConcurrency             int
 	DockerContainerTimeoutSeconds int
+	LinuxSystemdUnits             []string
+	LinuxPackageTimeoutSeconds    int
+	LinuxDiskHealthTimeoutSeconds int
 	HomebrewTimeoutSeconds        int
 	SoftwareUpdateTimeoutSeconds  int
 	AllowMissingPulse             bool
@@ -170,6 +180,12 @@ func Resolve(file Config, overlay Overlay) (Config, error) {
 	}
 	if cfg.Docker.ContainerTimeoutSeconds <= 0 {
 		return cfg, errors.New("docker container_timeout_seconds must be positive")
+	}
+	if cfg.Linux.PackageTimeoutSeconds <= 0 {
+		return cfg, errors.New("linux package_timeout_seconds must be positive")
+	}
+	if cfg.Linux.DiskHealthTimeoutSeconds <= 0 {
+		return cfg, errors.New("linux disk_health_timeout_seconds must be positive")
 	}
 	for _, script := range cfg.Scripts {
 		if script.Name == "" {
@@ -252,6 +268,10 @@ func defaults() Config {
 			Concurrency:             4,
 			ContainerTimeoutSeconds: 10,
 		},
+		Linux: LinuxConfig{
+			PackageTimeoutSeconds:    20,
+			DiskHealthTimeoutSeconds: 20,
+		},
 		MacOS: MacOSConfig{
 			HomebrewTimeoutSeconds:       20,
 			SoftwareUpdateTimeoutSeconds: 60,
@@ -316,6 +336,15 @@ func merge(dst *Config, src Config) {
 	}
 	if src.Docker.ContainerTimeoutSeconds != 0 {
 		dst.Docker.ContainerTimeoutSeconds = src.Docker.ContainerTimeoutSeconds
+	}
+	if len(src.Linux.SystemdUnits) > 0 {
+		dst.Linux.SystemdUnits = src.Linux.SystemdUnits
+	}
+	if src.Linux.PackageTimeoutSeconds != 0 {
+		dst.Linux.PackageTimeoutSeconds = src.Linux.PackageTimeoutSeconds
+	}
+	if src.Linux.DiskHealthTimeoutSeconds != 0 {
+		dst.Linux.DiskHealthTimeoutSeconds = src.Linux.DiskHealthTimeoutSeconds
 	}
 	if src.MacOS.EnableHomebrew != nil {
 		dst.MacOS.EnableHomebrew = src.MacOS.EnableHomebrew
@@ -385,6 +414,15 @@ func applyOverlay(dst *Config, o Overlay) {
 	}
 	if o.DockerContainerTimeoutSeconds != 0 {
 		dst.Docker.ContainerTimeoutSeconds = o.DockerContainerTimeoutSeconds
+	}
+	if len(o.LinuxSystemdUnits) > 0 {
+		dst.Linux.SystemdUnits = o.LinuxSystemdUnits
+	}
+	if o.LinuxPackageTimeoutSeconds != 0 {
+		dst.Linux.PackageTimeoutSeconds = o.LinuxPackageTimeoutSeconds
+	}
+	if o.LinuxDiskHealthTimeoutSeconds != 0 {
+		dst.Linux.DiskHealthTimeoutSeconds = o.LinuxDiskHealthTimeoutSeconds
 	}
 	if o.HomebrewTimeoutSeconds != 0 {
 		dst.MacOS.HomebrewTimeoutSeconds = o.HomebrewTimeoutSeconds

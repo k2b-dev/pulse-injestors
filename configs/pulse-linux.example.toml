@@ -22,3 +22,8 @@ root = "/"
 cpu_sample_ms = 250
 enable_thermal = true
 enable_btrfs = true
+
+[linux]
+systemd_units = ["ssh.service", "docker.service"]
+package_timeout_seconds = 20
+disk_health_timeout_seconds = 20

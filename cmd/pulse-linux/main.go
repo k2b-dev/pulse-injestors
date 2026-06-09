@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -14,9 +15,13 @@ import (
 
 	"github.com/valentinkolb/pulse-injestors/internal/config"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/btrfs"
+	"github.com/valentinkolb/pulse-injestors/internal/modules/diskhealth"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/filesystem"
+	"github.com/valentinkolb/pulse-injestors/internal/modules/network"
+	"github.com/valentinkolb/pulse-injestors/internal/modules/packages"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/script"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/system"
+	"github.com/valentinkolb/pulse-injestors/internal/modules/systemd"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/thermal"
 	"github.com/valentinkolb/pulse-injestors/internal/monitoring"
 	"github.com/valentinkolb/pulse-injestors/internal/pulse"
@@ -42,6 +47,10 @@ type cli struct {
 	SysRoot     string `name:"sys-root" help:"sysfs root to read." env:"PULSE_HOST_SYS_ROOT"`
 	HostRoot    string `name:"host-root" help:"Host root filesystem." env:"PULSE_HOST_ROOT"`
 	CPUSampleMS int    `name:"cpu-sample-ms" help:"CPU usage sample window in milliseconds." env:"PULSE_HOST_CPU_SAMPLE_MS"`
+
+	SystemdUnits             string `name:"systemd-units" help:"Comma-separated systemd units to monitor." env:"PULSE_LINUX_SYSTEMD_UNITS"`
+	PackageTimeoutSeconds    int    `name:"package-timeout-seconds" help:"Linux package update timeout in seconds." env:"PULSE_LINUX_PACKAGE_TIMEOUT_SECONDS"`
+	DiskHealthTimeoutSeconds int    `name:"disk-health-timeout-seconds" help:"SMART/NVMe disk health timeout in seconds." env:"PULSE_LINUX_DISK_HEALTH_TIMEOUT_SECONDS"`
 
 	Local   bool `name:"local" help:"Write collected Pulse batch JSON to stdout instead of sending it." env:"PULSE_LOCAL"`
 	Pretty  bool `name:"pretty" help:"With --local, print a human-readable report instead of JSON." env:"PULSE_LOCAL_PRETTY"`
@@ -129,21 +138,24 @@ func loadConfig(c cli) (config.Config, error) {
 		fileCfg.Host.Root = "/"
 	}
 	return config.Resolve(fileCfg, config.Overlay{
-		ConfigPath:              cfgPath,
-		IngestURL:               c.IngestURL,
-		IngestToken:             c.IngestToken,
-		EntityID:                c.EntityID,
-		EntityType:              c.EntityType,
-		TimeoutSeconds:          c.TimeoutSeconds,
-		MaxRetries:              c.MaxRetries,
-		InitialBackoffMS:        c.InitialBackoffMS,
-		IntervalSeconds:         c.IntervalSeconds,
-		CollectorTimeoutSeconds: c.CollectorTimeoutSeconds,
-		ProcRoot:                c.ProcRoot,
-		SysRoot:                 c.SysRoot,
-		HostRoot:                c.HostRoot,
-		CPUSampleMS:             c.CPUSampleMS,
-		AllowMissingPulse:       c.Local,
+		ConfigPath:                    cfgPath,
+		IngestURL:                     c.IngestURL,
+		IngestToken:                   c.IngestToken,
+		EntityID:                      c.EntityID,
+		EntityType:                    c.EntityType,
+		TimeoutSeconds:                c.TimeoutSeconds,
+		MaxRetries:                    c.MaxRetries,
+		InitialBackoffMS:              c.InitialBackoffMS,
+		IntervalSeconds:               c.IntervalSeconds,
+		CollectorTimeoutSeconds:       c.CollectorTimeoutSeconds,
+		ProcRoot:                      c.ProcRoot,
+		SysRoot:                       c.SysRoot,
+		HostRoot:                      c.HostRoot,
+		CPUSampleMS:                   c.CPUSampleMS,
+		LinuxSystemdUnits:             splitCSV(c.SystemdUnits),
+		LinuxPackageTimeoutSeconds:    c.PackageTimeoutSeconds,
+		LinuxDiskHealthTimeoutSeconds: c.DiskHealthTimeoutSeconds,
+		AllowMissingPulse:             c.Local,
 	})
 }
 
@@ -165,6 +177,10 @@ func collectors(cfg config.Config) []monitoring.Collector {
 	out := []monitoring.Collector{
 		system.Collector{ProcRoot: cfg.Host.ProcRoot, CPUSampleTime: cfg.CPUSampleWindow()},
 		filesystem.Collector{ProcRoot: cfg.Host.ProcRoot, HostRoot: cfg.Host.Root},
+		network.Collector{ProcRoot: cfg.Host.ProcRoot},
+		packages.Collector{Timeout: time.Duration(cfg.Linux.PackageTimeoutSeconds) * time.Second},
+		systemd.Collector{Units: cfg.Linux.SystemdUnits, Timeout: 5 * time.Second},
+		diskhealth.Collector{Timeout: time.Duration(cfg.Linux.DiskHealthTimeoutSeconds) * time.Second},
 	}
 	if cfg.ThermalEnabled() {
 		out = append(out, thermal.Collector{SysRoot: cfg.Host.SysRoot})
@@ -184,6 +200,21 @@ func collectors(cfg config.Config) []monitoring.Collector {
 			})
 		}
 		out = append(out, script.Collector{Scripts: scripts})
+	}
+	return out
+}
+
+func splitCSV(value string) []string {
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
 	}
 	return out
 }
