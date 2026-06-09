@@ -65,7 +65,11 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 		}
 		emitUsage(b, mount, out)
 	}
+	batch := b.Batch()
 	b.State("system.btrfs.available", count > 0, nil)
+	if count == 0 || len(batch.Metrics) > 0 {
+		return b.Batch(), nil
+	}
 	return b.Batch(), errors.Join(errs...)
 }
 

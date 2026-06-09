@@ -1,0 +1,23 @@
+[pulse]
+ingest_url = "https://pulse.example.com/ingest/source"
+ingest_token = "replace-me"
+
+[entity]
+id = "linux-host-1"
+type = "linux-host"
+
+[runner]
+interval_seconds = 60
+
+[http]
+timeout_seconds = 10
+max_retries = 3
+initial_backoff_ms = 500
+
+[host]
+proc_root = "/proc"
+sys_root = "/sys"
+root = "/"
+cpu_sample_ms = 250
+enable_thermal = true
+enable_btrfs = true

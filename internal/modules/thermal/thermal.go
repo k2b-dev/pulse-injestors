@@ -70,6 +70,9 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 		}
 	}
 	b.State("system.temperature.available", count > 0, nil)
+	if count > 0 || len(errs) == 0 {
+		return b.Batch(), nil
+	}
 	return b.Batch(), errors.Join(errs...)
 }
 

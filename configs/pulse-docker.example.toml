@@ -25,6 +25,8 @@ enable_btrfs = true
 [docker]
 socket_path = "/var/run/docker.sock"
 host_root = "/host/root"
+concurrency = 4
+container_timeout_seconds = 10
 
 [[script]]
 name = "site-labels"

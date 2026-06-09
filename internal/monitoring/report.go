@@ -107,7 +107,7 @@ func sectionName(name string) string {
 func groupName(name string, dims map[string]string) string {
 	parts := strings.Split(name, ".")
 	if len(parts) < 3 {
-		if suffix := compactDims(dims); suffix != "" {
+		if suffix := compactMetricDims(dims); suffix != "" {
 			return suffix
 		}
 		return "general"
@@ -137,16 +137,34 @@ func preferredDimensionSuffix(dims map[string]string) string {
 		}
 	}
 	if len(parts) == 0 {
-		return compactDims(dims)
+		return compactMetricDims(dims)
 	}
 	return "[" + strings.Join(parts, " ") + "]"
 }
 
 func dimensionSuffix(dims map[string]string) string {
-	return preferredDimensionSuffix(dims)
+	keys := []string{"collector", "container", "mount", "display", "gpu", "interface", "volume", "script", "submodule"}
+	var parts []string
+	for _, key := range keys {
+		if value := dims[key]; value != "" {
+			parts = append(parts, key+"="+value)
+		}
+	}
+	for _, key := range sortedKeys(dims) {
+		if key == "host" || containsPrefixKey(keys, key) {
+			continue
+		}
+		if dims[key] != "" {
+			parts = append(parts, key+"="+dims[key])
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "[" + strings.Join(parts, " ") + "]"
 }
 
-func compactDims(dims map[string]string) string {
+func compactMetricDims(dims map[string]string) string {
 	var parts []string
 	for _, key := range sortedKeys(dims) {
 		if key == "collector" || key == "host" {
@@ -160,6 +178,15 @@ func compactDims(dims map[string]string) string {
 		return ""
 	}
 	return "[" + strings.Join(parts, " ") + "]"
+}
+
+func containsPrefixKey(keys []string, key string) bool {
+	for _, candidate := range keys {
+		if candidate == key {
+			return true
+		}
+	}
+	return false
 }
 
 func formatValue(value float64, unit string) string {

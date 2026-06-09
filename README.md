@@ -2,6 +2,15 @@
 
 Initial Go ingestors for Pulse.
 
+Current binaries:
+
+- `pulse-docker`: Docker host/container monitoring.
+- `pulse-linux`: Linux host monitoring without Docker.
+- `pulse-macos`: macOS device monitoring.
+- `pulse-mock-server`: local ingest target for smoke tests.
+
+Metric names, units, dimensions, sources, and cost classes are listed in [docs/metrics.md](docs/metrics.md).
+
 ```sh
 docker run -d \
   --name pulse-docker \
@@ -24,6 +33,7 @@ Inspect locally without sending:
 ```sh
 go run ./cmd/pulse-macos --local once
 go run ./cmd/pulse-macos --local --pretty once
+go run ./cmd/pulse-linux --local --pretty once
 docker run --rm \
   -v /var/run/docker.sock:/var/run/docker.sock:ro \
   -v /proc:/host/proc:ro \

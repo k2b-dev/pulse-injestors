@@ -53,8 +53,10 @@ type HostConfig struct {
 }
 
 type DockerConfig struct {
-	SocketPath string `toml:"socket_path"`
-	HostRoot   string `toml:"host_root"`
+	SocketPath              string `toml:"socket_path"`
+	HostRoot                string `toml:"host_root"`
+	Concurrency             int    `toml:"concurrency"`
+	ContainerTimeoutSeconds int    `toml:"container_timeout_seconds"`
 }
 
 type MacOSConfig struct {
@@ -73,24 +75,26 @@ type ScriptConfig struct {
 }
 
 type Overlay struct {
-	ConfigPath                   string
-	IngestURL                    string
-	IngestToken                  string
-	EntityID                     string
-	EntityType                   string
-	TimeoutSeconds               int
-	MaxRetries                   int
-	InitialBackoffMS             int
-	IntervalSeconds              int
-	ProcRoot                     string
-	SysRoot                      string
-	HostRoot                     string
-	CPUSampleMS                  int
-	DockerSocketPath             string
-	DockerHostRoot               string
-	HomebrewTimeoutSeconds       int
-	SoftwareUpdateTimeoutSeconds int
-	AllowMissingPulse            bool
+	ConfigPath                    string
+	IngestURL                     string
+	IngestToken                   string
+	EntityID                      string
+	EntityType                    string
+	TimeoutSeconds                int
+	MaxRetries                    int
+	InitialBackoffMS              int
+	IntervalSeconds               int
+	ProcRoot                      string
+	SysRoot                       string
+	HostRoot                      string
+	CPUSampleMS                   int
+	DockerSocketPath              string
+	DockerHostRoot                string
+	DockerConcurrency             int
+	DockerContainerTimeoutSeconds int
+	HomebrewTimeoutSeconds        int
+	SoftwareUpdateTimeoutSeconds  int
+	AllowMissingPulse             bool
 }
 
 func LoadFile(path string, explicit bool) (Config, error) {
@@ -155,6 +159,12 @@ func Resolve(file Config, overlay Overlay) (Config, error) {
 	}
 	if cfg.MacOS.SoftwareUpdateTimeoutSeconds <= 0 {
 		return cfg, errors.New("macos software_update_timeout_seconds must be positive")
+	}
+	if cfg.Docker.Concurrency <= 0 {
+		return cfg, errors.New("docker concurrency must be positive")
+	}
+	if cfg.Docker.ContainerTimeoutSeconds <= 0 {
+		return cfg, errors.New("docker container_timeout_seconds must be positive")
 	}
 	for _, script := range cfg.Scripts {
 		if script.Name == "" {
@@ -227,8 +237,10 @@ func defaults() Config {
 			CPUSampleMS: 250,
 		},
 		Docker: DockerConfig{
-			SocketPath: "/var/run/docker.sock",
-			HostRoot:   "/host/root",
+			SocketPath:              "/var/run/docker.sock",
+			HostRoot:                "/host/root",
+			Concurrency:             4,
+			ContainerTimeoutSeconds: 10,
 		},
 		MacOS: MacOSConfig{
 			HomebrewTimeoutSeconds:       20,
@@ -285,6 +297,12 @@ func merge(dst *Config, src Config) {
 	}
 	if src.Docker.HostRoot != "" {
 		dst.Docker.HostRoot = src.Docker.HostRoot
+	}
+	if src.Docker.Concurrency != 0 {
+		dst.Docker.Concurrency = src.Docker.Concurrency
+	}
+	if src.Docker.ContainerTimeoutSeconds != 0 {
+		dst.Docker.ContainerTimeoutSeconds = src.Docker.ContainerTimeoutSeconds
 	}
 	if src.MacOS.EnableHomebrew != nil {
 		dst.MacOS.EnableHomebrew = src.MacOS.EnableHomebrew
@@ -345,6 +363,12 @@ func applyOverlay(dst *Config, o Overlay) {
 	}
 	if o.DockerHostRoot != "" {
 		dst.Docker.HostRoot = o.DockerHostRoot
+	}
+	if o.DockerConcurrency != 0 {
+		dst.Docker.Concurrency = o.DockerConcurrency
+	}
+	if o.DockerContainerTimeoutSeconds != 0 {
+		dst.Docker.ContainerTimeoutSeconds = o.DockerContainerTimeoutSeconds
 	}
 	if o.HomebrewTimeoutSeconds != 0 {
 		dst.MacOS.HomebrewTimeoutSeconds = o.HomebrewTimeoutSeconds

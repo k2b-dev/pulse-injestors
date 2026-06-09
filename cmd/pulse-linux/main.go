@@ -14,7 +14,6 @@ import (
 
 	"github.com/valentinkolb/pulse-injestors/internal/config"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/btrfs"
-	dockermodule "github.com/valentinkolb/pulse-injestors/internal/modules/docker"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/filesystem"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/script"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/system"
@@ -34,18 +33,14 @@ type cli struct {
 	EntityType  string `name:"entity-type" help:"Monitored entity type." env:"PULSE_ENTITY_TYPE"`
 
 	IntervalSeconds  int `name:"interval-seconds" help:"Collection interval for run mode." env:"PULSE_INTERVAL_SECONDS"`
-	TimeoutSeconds   int `name:"timeout-seconds" help:"HTTP request and collector timeout in seconds." env:"PULSE_HTTP_TIMEOUT_SECONDS"`
+	TimeoutSeconds   int `name:"timeout-seconds" help:"HTTP request timeout in seconds." env:"PULSE_HTTP_TIMEOUT_SECONDS"`
 	MaxRetries       int `name:"max-retries" help:"HTTP retry count for network, 408, 429 and 5xx failures." env:"PULSE_HTTP_MAX_RETRIES"`
 	InitialBackoffMS int `name:"initial-backoff-ms" help:"Initial retry backoff in milliseconds." env:"PULSE_HTTP_INITIAL_BACKOFF_MS"`
 
-	ProcRoot                      string `name:"proc-root" help:"Host procfs root to read." env:"PULSE_HOST_PROC_ROOT"`
-	SysRoot                       string `name:"sys-root" help:"Host sysfs root to read." env:"PULSE_HOST_SYS_ROOT"`
-	HostRoot                      string `name:"host-root" help:"Host root filesystem mount." env:"PULSE_HOST_ROOT"`
-	CPUSampleMS                   int    `name:"cpu-sample-ms" help:"CPU usage sample window in milliseconds." env:"PULSE_HOST_CPU_SAMPLE_MS"`
-	DockerSocketPath              string `name:"docker-socket" help:"Docker Engine unix socket." env:"PULSE_DOCKER_SOCKET"`
-	DockerHostRoot                string `name:"docker-host-root" help:"Host root used to stat Docker mount sources." env:"PULSE_DOCKER_HOST_ROOT"`
-	DockerConcurrency             int    `name:"docker-concurrency" help:"Max concurrent Docker container stats requests." env:"PULSE_DOCKER_CONCURRENCY"`
-	DockerContainerTimeoutSeconds int    `name:"docker-container-timeout-seconds" help:"Per-container Docker stats/inspect timeout." env:"PULSE_DOCKER_CONTAINER_TIMEOUT_SECONDS"`
+	ProcRoot    string `name:"proc-root" help:"procfs root to read." env:"PULSE_HOST_PROC_ROOT"`
+	SysRoot     string `name:"sys-root" help:"sysfs root to read." env:"PULSE_HOST_SYS_ROOT"`
+	HostRoot    string `name:"host-root" help:"Host root filesystem." env:"PULSE_HOST_ROOT"`
+	CPUSampleMS int    `name:"cpu-sample-ms" help:"CPU usage sample window in milliseconds." env:"PULSE_HOST_CPU_SAMPLE_MS"`
 
 	Local   bool `name:"local" help:"Write collected Pulse batch JSON to stdout instead of sending it." env:"PULSE_LOCAL"`
 	Pretty  bool `name:"pretty" help:"With --local, print a human-readable report instead of JSON." env:"PULSE_LOCAL_PRETTY"`
@@ -62,13 +57,13 @@ type runCmd struct{}
 func main() {
 	var c cli
 	kctx := kong.Parse(&c,
-		kong.Name("pulse-docker"),
-		kong.Description("Pulse Docker-host monitoring ingestor."),
+		kong.Name("pulse-linux"),
+		kong.Description("Pulse Linux host monitoring ingestor."),
 		kong.UsageOnError(),
 		kong.Vars{"version": version},
 	)
 	if c.Version {
-		fmt.Printf("pulse-docker %s\n", version)
+		fmt.Printf("pulse-linux %s\n", version)
 		return
 	}
 
@@ -123,25 +118,30 @@ func loadConfig(c cli) (config.Config, error) {
 	if err != nil {
 		return config.Config{}, fmt.Errorf("load %s: %w", cfgPath, err)
 	}
+	if fileCfg.Host.ProcRoot == "" {
+		fileCfg.Host.ProcRoot = "/proc"
+	}
+	if fileCfg.Host.SysRoot == "" {
+		fileCfg.Host.SysRoot = "/sys"
+	}
+	if fileCfg.Host.Root == "" {
+		fileCfg.Host.Root = "/"
+	}
 	return config.Resolve(fileCfg, config.Overlay{
-		ConfigPath:                    cfgPath,
-		IngestURL:                     c.IngestURL,
-		IngestToken:                   c.IngestToken,
-		EntityID:                      c.EntityID,
-		EntityType:                    c.EntityType,
-		TimeoutSeconds:                c.TimeoutSeconds,
-		MaxRetries:                    c.MaxRetries,
-		InitialBackoffMS:              c.InitialBackoffMS,
-		IntervalSeconds:               c.IntervalSeconds,
-		ProcRoot:                      c.ProcRoot,
-		SysRoot:                       c.SysRoot,
-		HostRoot:                      c.HostRoot,
-		CPUSampleMS:                   c.CPUSampleMS,
-		DockerSocketPath:              c.DockerSocketPath,
-		DockerHostRoot:                c.DockerHostRoot,
-		DockerConcurrency:             c.DockerConcurrency,
-		DockerContainerTimeoutSeconds: c.DockerContainerTimeoutSeconds,
-		AllowMissingPulse:             c.Local,
+		ConfigPath:        cfgPath,
+		IngestURL:         c.IngestURL,
+		IngestToken:       c.IngestToken,
+		EntityID:          c.EntityID,
+		EntityType:        c.EntityType,
+		TimeoutSeconds:    c.TimeoutSeconds,
+		MaxRetries:        c.MaxRetries,
+		InitialBackoffMS:  c.InitialBackoffMS,
+		IntervalSeconds:   c.IntervalSeconds,
+		ProcRoot:          c.ProcRoot,
+		SysRoot:           c.SysRoot,
+		HostRoot:          c.HostRoot,
+		CPUSampleMS:       c.CPUSampleMS,
+		AllowMissingPulse: c.Local,
 	})
 }
 
@@ -163,13 +163,6 @@ func collectors(cfg config.Config) []monitoring.Collector {
 	out := []monitoring.Collector{
 		system.Collector{ProcRoot: cfg.Host.ProcRoot, CPUSampleTime: cfg.CPUSampleWindow()},
 		filesystem.Collector{ProcRoot: cfg.Host.ProcRoot, HostRoot: cfg.Host.Root},
-		dockermodule.Collector{
-			SocketPath:       cfg.Docker.SocketPath,
-			HostRoot:         cfg.Docker.HostRoot,
-			Timeout:          cfg.HTTPTimeout(),
-			ContainerTimeout: time.Duration(cfg.Docker.ContainerTimeoutSeconds) * time.Second,
-			Concurrency:      cfg.Docker.Concurrency,
-		},
 	}
 	if cfg.ThermalEnabled() {
 		out = append(out, thermal.Collector{SysRoot: cfg.Host.SysRoot})

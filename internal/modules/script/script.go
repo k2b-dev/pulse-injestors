@@ -50,6 +50,9 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 		b.State("script.ok", true, map[string]string{"script": script.Name})
 	}
 	monitoring.Merge(&merged, b.Batch())
+	if len(merged.Metrics) > 0 || len(merged.Events) > 0 || len(merged.States) > 0 {
+		return merged, nil
+	}
 	return merged, errors.Join(errs...)
 }
 

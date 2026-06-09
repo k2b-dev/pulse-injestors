@@ -3,13 +3,13 @@ package docker
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -18,9 +18,11 @@ import (
 )
 
 type Collector struct {
-	SocketPath string
-	HostRoot   string
-	Timeout    time.Duration
+	SocketPath       string
+	HostRoot         string
+	Timeout          time.Duration
+	ContainerTimeout time.Duration
+	Concurrency      int
 }
 
 func (c Collector) Name() string { return "docker" }
@@ -38,6 +40,14 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
+	containerTimeout := c.ContainerTimeout
+	if containerTimeout <= 0 {
+		containerTimeout = timeout
+	}
+	concurrency := c.Concurrency
+	if concurrency <= 0 {
+		concurrency = 4
+	}
 	client := newClient(socket, timeout)
 	api := apiClient{client: client}
 	b := monitoring.NewBuilder(scope)
@@ -45,7 +55,8 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 	version, err := api.version(ctx)
 	if err != nil {
 		b.State("docker.available", false, nil)
-		return b.Batch(), err
+		b.Event("docker.unavailable", nil, map[string]any{"error": err.Error()})
+		return b.Batch(), nil
 	}
 	b.State("docker.available", true, nil)
 	b.State("docker.version", version.Version, nil)
@@ -54,7 +65,8 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 
 	containers, err := api.containers(ctx)
 	if err != nil {
-		return b.Batch(), err
+		b.Event("docker.collect.failed", nil, map[string]any{"error": err.Error(), "step": "containers"})
+		return b.Batch(), nil
 	}
 	running := 0
 	for _, container := range containers {
@@ -65,7 +77,7 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 	b.Metric("docker.containers.total", "gauge", float64(len(containers)), "count", nil)
 	b.Metric("docker.containers.running", "gauge", float64(running), "count", nil)
 
-	var errs []error
+	var jobs []containerSummary
 	for _, container := range containers {
 		dims := containerDims(container)
 		b.State("docker.container.running", container.State == "running", dims)
@@ -74,20 +86,76 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 		if container.State != "running" {
 			continue
 		}
-		stats, err := api.stats(ctx, container.ID)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s stats: %w", shortID(container.ID), err))
-			continue
-		}
-		emitStats(b, dims, stats)
-		inspect, err := api.inspect(ctx, container.ID)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s inspect: %w", shortID(container.ID), err))
-			continue
-		}
-		emitInspect(b, dims, hostRoot, inspect)
+		jobs = append(jobs, container)
 	}
-	return b.Batch(), errors.Join(errs...)
+	results := collectContainers(ctx, api, scope, hostRoot, jobs, concurrency, containerTimeout)
+	final := b.Batch()
+	for _, result := range results {
+		monitoring.Merge(&final, result.batch)
+	}
+	return final, nil
+}
+
+type containerResult struct {
+	batch pulse.Batch
+}
+
+func collectContainers(ctx context.Context, api apiClient, scope monitoring.Scope, hostRoot string, containers []containerSummary, concurrency int, timeout time.Duration) []containerResult {
+	if len(containers) == 0 {
+		return nil
+	}
+	jobs := make(chan containerSummary)
+	results := make(chan containerResult, len(containers))
+	workers := concurrency
+	if workers > len(containers) {
+		workers = len(containers)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for container := range jobs {
+				results <- collectContainer(ctx, api, scope, hostRoot, container, timeout)
+			}
+		}()
+	}
+	for _, container := range containers {
+		jobs <- container
+	}
+	close(jobs)
+	wg.Wait()
+	close(results)
+
+	out := make([]containerResult, 0, len(containers))
+	for result := range results {
+		out = append(out, result)
+	}
+	return out
+}
+
+func collectContainer(ctx context.Context, api apiClient, scope monitoring.Scope, hostRoot string, container containerSummary, timeout time.Duration) containerResult {
+	b := monitoring.NewBuilder(scope)
+	dims := containerDims(container)
+	containerCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	stats, err := api.stats(containerCtx, container.ID)
+	if err != nil {
+		b.State("docker.container.stats.available", false, dims)
+		b.Event("docker.container.collect.failed", dims, map[string]any{"error": err.Error(), "step": "stats"})
+		return containerResult{batch: b.Batch()}
+	}
+	b.State("docker.container.stats.available", true, dims)
+	emitStats(b, dims, stats)
+	inspect, err := api.inspect(containerCtx, container.ID)
+	if err != nil {
+		b.State("docker.container.inspect.available", false, dims)
+		b.Event("docker.container.collect.failed", dims, map[string]any{"error": err.Error(), "step": "inspect"})
+		return containerResult{batch: b.Batch()}
+	}
+	b.State("docker.container.inspect.available", true, dims)
+	emitInspect(b, dims, hostRoot, inspect)
+	return containerResult{batch: b.Batch()}
 }
 
 func newClient(socket string, timeout time.Duration) *http.Client {

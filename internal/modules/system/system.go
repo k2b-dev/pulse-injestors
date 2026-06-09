@@ -67,7 +67,11 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 	} else {
 		b.Metric("system.cpu.usage", "gauge", usage, "percent", nil)
 	}
-	return b.Batch(), errors.Join(errs...)
+	batch := b.Batch()
+	if len(batch.Metrics) > 0 || len(batch.States) > 0 {
+		return batch, nil
+	}
+	return batch, errors.Join(errs...)
 }
 
 func readLoadAvg(procRoot string) ([3]float64, error) {
