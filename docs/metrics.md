@@ -252,6 +252,39 @@ Registry freshness checks are opt-in with `docker.enable_registry_checks` / `PUL
 | `system.btrfs.mounts.failed` | event | | mountinfo read | optional |
 | `system.btrfs.usage.failed` | event | `mount`, `source` | `btrfs filesystem usage -b` | optional |
 
+## ZFS module
+
+| Name | Type | Unit | Dimensions | Source | Cost |
+|---|---|---:|---|---|---|
+| `system.zfs.available` | state bool | | `zpool`/`zfs` lookup | optional |
+| `system.zfs.zpool.available` | state bool | | `zpool` lookup | optional |
+| `system.zfs.zfs.available` | state bool | | `zfs` lookup | optional |
+| `system.zfs.pools` | gauge | `count` | | `zpool list` | optional |
+| `system.zfs.pool.present` | state bool | `pool` | `zpool list` | optional |
+| `system.zfs.pool.health` | state string | `pool` | `zpool list` | optional |
+| `system.zfs.pool.healthy` | state bool | `pool` | derived from pool health | optional |
+| `system.zfs.pool.size` | gauge | `bytes` | `pool` | `zpool list` | optional |
+| `system.zfs.pool.allocated` | gauge | `bytes` | `pool` | `zpool list` | optional |
+| `system.zfs.pool.free` | gauge | `bytes` | `pool` | `zpool list` | optional |
+| `system.zfs.pool.capacity` | gauge | `percent` | `pool` | `zpool list` | optional |
+| `system.zfs.pool.fragmentation` | gauge | `percent` | `pool` | `zpool list` | optional |
+| `system.zfs.pool.scan.status` | state string | `pool` | `zpool status` | optional |
+| `system.zfs.pool.scan.completed_at` | state string | `pool` | `zpool status` | optional |
+| `system.zfs.pool.scan.errors` | gauge | `count` | `pool` | `zpool status` | optional |
+| `system.zfs.datasets` | gauge | `count` | | `zfs list` | optional |
+| `system.zfs.dataset.present` | state bool | `dataset`, `type` | `zfs list` | optional |
+| `system.zfs.dataset.mountpoint` | state string | `dataset`, `type` | `zfs list` | optional |
+| `system.zfs.dataset.used` | gauge | `bytes` | `dataset`, `type` | `zfs list` | optional |
+| `system.zfs.dataset.available` | gauge | `bytes` | `dataset`, `type` | `zfs list` | optional |
+| `system.zfs.dataset.referenced` | gauge | `bytes` | `dataset`, `type` | `zfs list` | optional |
+| `system.zfs.dataset.compressratio` | gauge | `ratio` | `dataset`, `type` | `zfs list` | optional |
+| `system.zfs.dataset.snapshots` | gauge | `count` | `dataset` | `zfs list -t snapshot` | optional |
+| `system.zfs.snapshots` | gauge | `count` | | `zfs list -t snapshot` | optional |
+| `system.zfs.pools.failed` | event | | `zpool list` | optional |
+| `system.zfs.pool.status.failed` | event | | `zpool status` | optional |
+| `system.zfs.datasets.failed` | event | | `zfs list` | optional |
+| `system.zfs.snapshots.failed` | event | | `zfs list -t snapshot` | optional |
+
 ## macOS module
 
 | Name | Type | Unit | Dimensions | Source | Cost |

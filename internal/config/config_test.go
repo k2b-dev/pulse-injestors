@@ -76,3 +76,20 @@ func TestResolveAllowsMissingPulseForLocalMode(t *testing.T) {
 		t.Fatalf("entity id = %q", cfg.Entity.ID)
 	}
 }
+
+func TestResolveMergesHostZfsFlag(t *testing.T) {
+	enabled := false
+	cfg, err := Resolve(Config{
+		Pulse: PulseConfig{IngestURL: "https://example.com/ingest", IngestToken: "token"},
+		Entity: EntityConfig{
+			ID: "node",
+		},
+		Host: HostConfig{EnableZfs: &enabled},
+	}, Overlay{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ZfsEnabled() {
+		t.Fatal("expected zfs disabled")
+	}
+}

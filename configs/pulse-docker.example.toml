@@ -22,6 +22,7 @@ root = "/host/root"
 cpu_sample_ms = 250
 enable_thermal = true
 enable_btrfs = true
+enable_zfs = true
 
 [docker]
 socket_path = "/var/run/docker.sock"

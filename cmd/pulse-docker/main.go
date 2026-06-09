@@ -19,6 +19,7 @@ import (
 	"github.com/valentinkolb/pulse-injestors/internal/modules/script"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/system"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/thermal"
+	"github.com/valentinkolb/pulse-injestors/internal/modules/zfs"
 	"github.com/valentinkolb/pulse-injestors/internal/monitoring"
 	"github.com/valentinkolb/pulse-injestors/internal/pulse"
 )
@@ -184,6 +185,9 @@ func collectors(cfg config.Config) []monitoring.Collector {
 	}
 	if cfg.BtrfsEnabled() {
 		out = append(out, btrfs.Collector{ProcRoot: cfg.Host.ProcRoot, HostRoot: cfg.Host.Root, Timeout: 5 * time.Second})
+	}
+	if cfg.ZfsEnabled() {
+		out = append(out, zfs.Collector{Timeout: 5 * time.Second})
 	}
 	if len(cfg.Scripts) > 0 {
 		scripts := make([]script.Script, 0, len(cfg.Scripts))

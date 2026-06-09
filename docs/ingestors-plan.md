@@ -69,7 +69,7 @@ Initial modules:
 Shared optional modules should stay reusable from `pulse-docker` and `pulse-linux`.
 
 - `btrfs`: expand device/error/scrub status.
-- `zfs`: pool health, dataset usage, scrub status, snapshot counts.
+- `zfs`: expand first-pass collector with deeper scrub history and error counters.
 - `ceph`: cluster health, OSD states, pool usage, PG health.
 
 ## Extension API

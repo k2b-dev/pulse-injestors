@@ -52,6 +52,7 @@ type HostConfig struct {
 	CPUSampleMS   int    `toml:"cpu_sample_ms"`
 	EnableThermal *bool  `toml:"enable_thermal"`
 	EnableBtrfs   *bool  `toml:"enable_btrfs"`
+	EnableZfs     *bool  `toml:"enable_zfs"`
 }
 
 type DockerConfig struct {
@@ -235,6 +236,10 @@ func (c Config) BtrfsEnabled() bool {
 	return c.Host.EnableBtrfs == nil || *c.Host.EnableBtrfs
 }
 
+func (c Config) ZfsEnabled() bool {
+	return c.Host.EnableZfs == nil || *c.Host.EnableZfs
+}
+
 func (c Config) HomebrewEnabled() bool {
 	return c.MacOS.EnableHomebrew == nil || *c.MacOS.EnableHomebrew
 }
@@ -334,6 +339,9 @@ func merge(dst *Config, src Config) {
 	}
 	if src.Host.EnableBtrfs != nil {
 		dst.Host.EnableBtrfs = src.Host.EnableBtrfs
+	}
+	if src.Host.EnableZfs != nil {
+		dst.Host.EnableZfs = src.Host.EnableZfs
 	}
 	if src.Docker.SocketPath != "" {
 		dst.Docker.SocketPath = src.Docker.SocketPath
