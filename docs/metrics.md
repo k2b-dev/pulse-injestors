@@ -200,8 +200,15 @@ Cost classes:
 | `docker.image.virtual_size` | gauge | `bytes` | `image_id` | Docker image inspect | moderate |
 | `docker.image.arch` | state string | `image_id` | Docker image inspect | moderate |
 | `docker.image.os` | state string | `image_id` | Docker image inspect | moderate |
+| `docker.image.registry.checkable` | state bool | `image_id` | config + image reference | optional |
+| `docker.image.registry.checked` | state bool | `image_id`, `image_ref`, `registry`, `repository`, `tag` | Docker Registry HTTP API v2 | optional |
+| `docker.image.registry.remote_digest` | state string | `image_id`, `image_ref`, `registry`, `repository`, `tag` | registry manifest digest | optional |
+| `docker.image.registry.local_digest_available` | state bool | `image_id`, `image_ref`, `registry`, `repository`, `tag` | local RepoDigests | optional |
+| `docker.image.registry.local_digest` | state string | `image_id`, `image_ref`, `registry`, `repository`, `tag` | local RepoDigests | optional |
+| `docker.image.update_available` | state bool | `image_id`, `image_ref`, `registry`, `repository`, `tag` | derived digest comparison | optional |
+| `docker.image.registry.check.failed` | event | `image_id`, `image_ref`, `registry`, `repository`, `tag` | Docker Registry HTTP API v2 | optional |
 
-The Docker ingestor does not call registries to decide whether an image update is available. It reports local image age, tags, digests, and IDs; freshness checks against registries should be a separate opt-in collector because they need network access, credentials, and rate-limit handling.
+Registry freshness checks are opt-in with `docker.enable_registry_checks` / `PULSE_DOCKER_ENABLE_REGISTRY_CHECKS`. They use anonymous registry manifest requests and may fail for private images or rate-limited registries without failing the Docker collector.
 
 ## Thermal module
 

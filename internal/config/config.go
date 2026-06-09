@@ -59,6 +59,8 @@ type DockerConfig struct {
 	HostRoot                string `toml:"host_root"`
 	Concurrency             int    `toml:"concurrency"`
 	ContainerTimeoutSeconds int    `toml:"container_timeout_seconds"`
+	EnableRegistryChecks    bool   `toml:"enable_registry_checks"`
+	RegistryTimeoutSeconds  int    `toml:"registry_timeout_seconds"`
 }
 
 type LinuxConfig struct {
@@ -101,6 +103,8 @@ type Overlay struct {
 	DockerHostRoot                string
 	DockerConcurrency             int
 	DockerContainerTimeoutSeconds int
+	DockerEnableRegistryChecks    bool
+	DockerRegistryTimeoutSeconds  int
 	LinuxSystemdUnits             []string
 	LinuxPackageTimeoutSeconds    int
 	LinuxDiskHealthTimeoutSeconds int
@@ -180,6 +184,9 @@ func Resolve(file Config, overlay Overlay) (Config, error) {
 	}
 	if cfg.Docker.ContainerTimeoutSeconds <= 0 {
 		return cfg, errors.New("docker container_timeout_seconds must be positive")
+	}
+	if cfg.Docker.RegistryTimeoutSeconds <= 0 {
+		return cfg, errors.New("docker registry_timeout_seconds must be positive")
 	}
 	if cfg.Linux.PackageTimeoutSeconds <= 0 {
 		return cfg, errors.New("linux package_timeout_seconds must be positive")
@@ -267,6 +274,7 @@ func defaults() Config {
 			HostRoot:                "/host/root",
 			Concurrency:             4,
 			ContainerTimeoutSeconds: 10,
+			RegistryTimeoutSeconds:  10,
 		},
 		Linux: LinuxConfig{
 			PackageTimeoutSeconds:    20,
@@ -336,6 +344,12 @@ func merge(dst *Config, src Config) {
 	}
 	if src.Docker.ContainerTimeoutSeconds != 0 {
 		dst.Docker.ContainerTimeoutSeconds = src.Docker.ContainerTimeoutSeconds
+	}
+	if src.Docker.EnableRegistryChecks {
+		dst.Docker.EnableRegistryChecks = true
+	}
+	if src.Docker.RegistryTimeoutSeconds != 0 {
+		dst.Docker.RegistryTimeoutSeconds = src.Docker.RegistryTimeoutSeconds
 	}
 	if len(src.Linux.SystemdUnits) > 0 {
 		dst.Linux.SystemdUnits = src.Linux.SystemdUnits
@@ -414,6 +428,12 @@ func applyOverlay(dst *Config, o Overlay) {
 	}
 	if o.DockerContainerTimeoutSeconds != 0 {
 		dst.Docker.ContainerTimeoutSeconds = o.DockerContainerTimeoutSeconds
+	}
+	if o.DockerEnableRegistryChecks {
+		dst.Docker.EnableRegistryChecks = true
+	}
+	if o.DockerRegistryTimeoutSeconds != 0 {
+		dst.Docker.RegistryTimeoutSeconds = o.DockerRegistryTimeoutSeconds
 	}
 	if len(o.LinuxSystemdUnits) > 0 {
 		dst.Linux.SystemdUnits = o.LinuxSystemdUnits

@@ -25,6 +25,8 @@ type Collector struct {
 	Timeout          time.Duration
 	ContainerTimeout time.Duration
 	Concurrency      int
+	RegistryChecks   bool
+	RegistryTimeout  time.Duration
 }
 
 func (c Collector) Name() string { return "docker" }
@@ -49,6 +51,10 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 	concurrency := c.Concurrency
 	if concurrency <= 0 {
 		concurrency = 4
+	}
+	registryTimeout := c.RegistryTimeout
+	if registryTimeout <= 0 {
+		registryTimeout = 10 * time.Second
 	}
 	client := newClient(socket, timeout)
 	api := apiClient{client: client}
@@ -96,7 +102,7 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 	for _, result := range results {
 		monitoring.Merge(&final, result.batch)
 	}
-	imageResults := collectImages(ctx, api, scope, containers, concurrency, containerTimeout)
+	imageResults := collectImages(ctx, api, scope, containers, concurrency, containerTimeout, c.RegistryChecks, registryTimeout)
 	for _, result := range imageResults {
 		monitoring.Merge(&final, result.batch)
 	}
@@ -165,53 +171,62 @@ func collectContainer(ctx context.Context, api apiClient, scope monitoring.Scope
 	return containerResult{batch: b.Batch()}
 }
 
-func collectImages(ctx context.Context, api apiClient, scope monitoring.Scope, containers []containerSummary, concurrency int, timeout time.Duration) []containerResult {
-	imageIDs := uniqueImageIDs(containers)
-	if len(imageIDs) == 0 {
+type imageJob struct {
+	ID         string
+	References []string
+}
+
+func collectImages(ctx context.Context, api apiClient, scope monitoring.Scope, containers []containerSummary, concurrency int, timeout time.Duration, registryChecks bool, registryTimeout time.Duration) []containerResult {
+	images := uniqueImageJobs(containers)
+	if len(images) == 0 {
 		return nil
 	}
-	jobs := make(chan string)
-	results := make(chan containerResult, len(imageIDs))
+	jobs := make(chan imageJob)
+	results := make(chan containerResult, len(images))
 	workers := concurrency
-	if workers > len(imageIDs) {
-		workers = len(imageIDs)
+	if workers > len(images) {
+		workers = len(images)
 	}
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for imageID := range jobs {
-				results <- collectImage(ctx, api, scope, imageID, timeout)
+			for image := range jobs {
+				results <- collectImage(ctx, api, scope, image, timeout, registryChecks, registryTimeout)
 			}
 		}()
 	}
-	for _, imageID := range imageIDs {
-		jobs <- imageID
+	for _, image := range images {
+		jobs <- image
 	}
 	close(jobs)
 	wg.Wait()
 	close(results)
 
-	out := make([]containerResult, 0, len(imageIDs))
+	out := make([]containerResult, 0, len(images))
 	for result := range results {
 		out = append(out, result)
 	}
 	return out
 }
 
-func collectImage(ctx context.Context, api apiClient, scope monitoring.Scope, imageID string, timeout time.Duration) containerResult {
+func collectImage(ctx context.Context, api apiClient, scope monitoring.Scope, image imageJob, timeout time.Duration, registryChecks bool, registryTimeout time.Duration) containerResult {
 	b := monitoring.NewBuilder(scope)
-	dims := imageDims(imageID)
+	dims := imageDims(image.ID)
 	imageCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	inspect, err := api.imageInspect(imageCtx, imageID)
+	inspect, err := api.imageInspect(imageCtx, image.ID)
 	if err != nil {
 		b.State("docker.image.inspect.available", false, dims)
 		b.Event("docker.image.collect.failed", dims, map[string]any{"error": err.Error(), "step": "inspect"})
 		return containerResult{batch: b.Batch()}
 	}
 	emitImageInspect(b, dims, inspect)
+	if registryChecks {
+		refs := imageReferences(image.References, inspect.RepoTags, inspect.RepoDigests)
+		emitRegistryChecks(ctx, b, dims, refs, inspect.RepoDigests, registryTimeout)
+	}
 	return containerResult{batch: b.Batch()}
 }
 
@@ -707,20 +722,34 @@ func emitImageInspect(b *monitoring.Builder, dims map[string]string, inspect ima
 	}
 }
 
-func uniqueImageIDs(containers []containerSummary) []string {
-	seen := map[string]bool{}
+func uniqueImageJobs(containers []containerSummary) []imageJob {
+	seen := map[string]map[string]bool{}
 	for _, container := range containers {
 		id := container.ImageID
 		if id == "" {
 			continue
 		}
-		seen[id] = true
+		if seen[id] == nil {
+			seen[id] = map[string]bool{}
+		}
+		if container.Image != "" {
+			seen[id][container.Image] = true
+		}
 	}
-	out := make([]string, 0, len(seen))
+	ids := make([]string, 0, len(seen))
 	for id := range seen {
-		out = append(out, id)
+		ids = append(ids, id)
 	}
-	sort.Strings(out)
+	sort.Strings(ids)
+	out := make([]imageJob, 0, len(ids))
+	for _, id := range ids {
+		refs := make([]string, 0, len(seen[id]))
+		for ref := range seen[id] {
+			refs = append(refs, ref)
+		}
+		sort.Strings(refs)
+		out = append(out, imageJob{ID: id, References: refs})
+	}
 	return out
 }
 
@@ -743,6 +772,302 @@ func parseDockerTime(value string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return t, true
+}
+
+type imageReference struct {
+	Original   string
+	Registry   string
+	Repository string
+	Tag        string
+}
+
+func imageReferences(values ...[]string) []imageReference {
+	seen := map[string]bool{}
+	var out []imageReference
+	for _, list := range values {
+		for _, value := range list {
+			ref, ok := parseImageReference(value)
+			if !ok {
+				continue
+			}
+			key := ref.Registry + "/" + ref.Repository + ":" + ref.Tag
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, ref)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Original < out[j].Original
+	})
+	return out
+}
+
+func parseImageReference(value string) (imageReference, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.Contains(value, "@") || strings.HasPrefix(value, "sha256:") || strings.HasPrefix(value, "<none>") {
+		return imageReference{}, false
+	}
+	lastSlash := strings.LastIndex(value, "/")
+	lastColon := strings.LastIndex(value, ":")
+	if lastColon <= lastSlash || lastColon == len(value)-1 {
+		return imageReference{}, false
+	}
+	name := value[:lastColon]
+	tag := value[lastColon+1:]
+	parts := strings.Split(name, "/")
+	registry := "registry-1.docker.io"
+	repository := name
+	if len(parts) > 1 && (strings.Contains(parts[0], ".") || strings.Contains(parts[0], ":") || parts[0] == "localhost") {
+		registry = parts[0]
+		repository = strings.Join(parts[1:], "/")
+	} else if len(parts) == 1 {
+		repository = "library/" + name
+	}
+	if registry == "docker.io" {
+		registry = "registry-1.docker.io"
+	}
+	if repository == "" {
+		return imageReference{}, false
+	}
+	return imageReference{Original: value, Registry: registry, Repository: repository, Tag: tag}, true
+}
+
+func emitRegistryChecks(ctx context.Context, b *monitoring.Builder, baseDims map[string]string, refs []imageReference, localDigests []string, timeout time.Duration) {
+	refs = registryCheckableRefs(refs, localDigests)
+	if len(refs) == 0 {
+		b.State("docker.image.registry.checkable", false, baseDims)
+		return
+	}
+	client := registryClient{client: &http.Client{Timeout: timeout}}
+	for _, ref := range refs {
+		dims := copyDims(baseDims)
+		dims["image_ref"] = ref.Original
+		dims["registry"] = ref.Registry
+		dims["repository"] = ref.Repository
+		dims["tag"] = ref.Tag
+		b.State("docker.image.registry.checkable", true, dims)
+		runCtx, cancel := context.WithTimeout(ctx, timeout)
+		remoteDigest, err := client.manifestDigest(runCtx, ref)
+		cancel()
+		if err != nil {
+			b.State("docker.image.registry.checked", false, dims)
+			b.Event("docker.image.registry.check.failed", dims, map[string]any{"error": err.Error()})
+			continue
+		}
+		localDigest := matchingLocalDigest(ref, localDigests)
+		b.State("docker.image.registry.checked", true, dims)
+		b.State("docker.image.registry.remote_digest", remoteDigest, dims)
+		b.State("docker.image.registry.local_digest_available", localDigest != "", dims)
+		if localDigest != "" {
+			b.State("docker.image.registry.local_digest", localDigest, dims)
+			b.State("docker.image.update_available", localDigest != remoteDigest, dims)
+		}
+	}
+}
+
+func registryCheckableRefs(refs []imageReference, localDigests []string) []imageReference {
+	out := make([]imageReference, 0, len(refs))
+	for _, ref := range refs {
+		if isImplicitDockerHubReference(ref) {
+			continue
+		}
+		if hasExplicitRegistry(ref.Original) || matchingLocalDigest(ref, localDigests) != "" {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
+func isImplicitDockerHubReference(ref imageReference) bool {
+	return ref.Registry == "registry-1.docker.io" && !strings.Contains(ref.Original, "/")
+}
+
+func hasExplicitRegistry(value string) bool {
+	name := value
+	if i := strings.LastIndex(value, ":"); i > strings.LastIndex(value, "/") {
+		name = value[:i]
+	}
+	first, _, ok := strings.Cut(name, "/")
+	return ok && (strings.Contains(first, ".") || strings.Contains(first, ":") || first == "localhost")
+}
+
+func matchingLocalDigest(ref imageReference, localDigests []string) string {
+	for _, value := range localDigests {
+		repo, digest, ok := strings.Cut(value, "@")
+		if !ok || digest == "" {
+			continue
+		}
+		if sameRepository(ref, repo) {
+			return digest
+		}
+	}
+	return ""
+}
+
+func sameRepository(ref imageReference, repo string) bool {
+	repo = strings.TrimPrefix(repo, "https://")
+	repo = strings.TrimPrefix(repo, "http://")
+	if strings.HasPrefix(repo, "docker.io/") {
+		repo = strings.TrimPrefix(repo, "docker.io/")
+	}
+	if strings.HasPrefix(repo, "registry-1.docker.io/") {
+		repo = strings.TrimPrefix(repo, "registry-1.docker.io/")
+	}
+	if ref.Registry == "registry-1.docker.io" {
+		if repo == ref.Repository {
+			return true
+		}
+		return repo == strings.TrimPrefix(ref.Repository, "library/")
+	}
+	return repo == ref.Registry+"/"+ref.Repository || repo == ref.Repository
+}
+
+type registryClient struct {
+	client *http.Client
+}
+
+func (c registryClient) manifestDigest(ctx context.Context, ref imageReference) (string, error) {
+	req, err := registryRequest(ctx, ref, "")
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		token, err := c.bearerToken(ctx, resp.Header.Get("WWW-Authenticate"))
+		if err != nil {
+			return "", err
+		}
+		req, err := registryRequest(ctx, ref, token)
+		if err != nil {
+			return "", err
+		}
+		resp, err = c.client.Do(req)
+		if err != nil {
+			return "", err
+		}
+		defer resp.Body.Close()
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return "", fmt.Errorf("registry manifest returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	if digest := resp.Header.Get("Docker-Content-Digest"); digest != "" {
+		return digest, nil
+	}
+	return "", fmt.Errorf("registry manifest missing Docker-Content-Digest")
+}
+
+func registryRequest(ctx context.Context, ref imageReference, token string) (*http.Request, error) {
+	u := url.URL{
+		Scheme: "https",
+		Host:   ref.Registry,
+		Path:   "/v2/" + ref.Repository + "/manifests/" + ref.Tag,
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", strings.Join([]string{
+		"application/vnd.oci.image.index.v1+json",
+		"application/vnd.docker.distribution.manifest.list.v2+json",
+		"application/vnd.oci.image.manifest.v1+json",
+		"application/vnd.docker.distribution.manifest.v2+json",
+	}, ", "))
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	return req, nil
+}
+
+func (c registryClient) bearerToken(ctx context.Context, challenge string) (string, error) {
+	params, ok := parseBearerChallenge(challenge)
+	if !ok {
+		return "", fmt.Errorf("registry auth challenge is not bearer")
+	}
+	realm := params["realm"]
+	if realm == "" {
+		return "", fmt.Errorf("registry auth challenge missing realm")
+	}
+	u, err := url.Parse(realm)
+	if err != nil {
+		return "", err
+	}
+	q := u.Query()
+	for _, key := range []string{"service", "scope"} {
+		if params[key] != "" {
+			q.Set(key, params[key])
+		}
+	}
+	u.RawQuery = q.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return "", fmt.Errorf("registry token returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	var parsed struct {
+		Token       string `json:"token"`
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return "", err
+	}
+	if parsed.Token != "" {
+		return parsed.Token, nil
+	}
+	if parsed.AccessToken != "" {
+		return parsed.AccessToken, nil
+	}
+	return "", fmt.Errorf("registry token response missing token")
+}
+
+func parseBearerChallenge(challenge string) (map[string]string, bool) {
+	challenge = strings.TrimSpace(challenge)
+	if !strings.HasPrefix(strings.ToLower(challenge), "bearer ") {
+		return nil, false
+	}
+	rest := strings.TrimSpace(challenge[len("Bearer "):])
+	out := map[string]string{}
+	for _, part := range splitAuthParts(rest) {
+		key, value, ok := strings.Cut(part, "=")
+		if !ok {
+			continue
+		}
+		out[strings.TrimSpace(key)] = strings.Trim(strings.TrimSpace(value), `"`)
+	}
+	return out, true
+}
+
+func splitAuthParts(value string) []string {
+	var parts []string
+	start := 0
+	inQuote := false
+	for i, r := range value {
+		switch r {
+		case '"':
+			inQuote = !inQuote
+		case ',':
+			if !inQuote {
+				parts = append(parts, value[start:i])
+				start = i + 1
+			}
+		}
+	}
+	parts = append(parts, value[start:])
+	return parts
 }
 
 func shortID(id string) string {

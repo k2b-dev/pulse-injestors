@@ -10,7 +10,7 @@ Purpose: run as a container on Docker Desktop or Linux Docker hosts.
 
 Next useful work:
 
-- Add optional registry freshness checks behind explicit config.
+- Add optional authenticated registry freshness checks for private registries.
 - Add Docker daemon event ingestion for restart/start/stop history.
 - Add Docker volume inventory through `/volumes`.
 - Add compose-stack health summary states.

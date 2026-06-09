@@ -47,6 +47,8 @@ type cli struct {
 	DockerHostRoot                string `name:"docker-host-root" help:"Host root used to stat Docker mount sources." env:"PULSE_DOCKER_HOST_ROOT"`
 	DockerConcurrency             int    `name:"docker-concurrency" help:"Max concurrent Docker container stats requests." env:"PULSE_DOCKER_CONCURRENCY"`
 	DockerContainerTimeoutSeconds int    `name:"docker-container-timeout-seconds" help:"Per-container Docker stats/inspect timeout." env:"PULSE_DOCKER_CONTAINER_TIMEOUT_SECONDS"`
+	DockerEnableRegistryChecks    bool   `name:"docker-enable-registry-checks" help:"Check remote registry digests for tagged images." env:"PULSE_DOCKER_ENABLE_REGISTRY_CHECKS"`
+	DockerRegistryTimeoutSeconds  int    `name:"docker-registry-timeout-seconds" help:"Per-image registry manifest check timeout." env:"PULSE_DOCKER_REGISTRY_TIMEOUT_SECONDS"`
 
 	Local   bool `name:"local" help:"Write collected Pulse batch JSON to stdout instead of sending it." env:"PULSE_LOCAL"`
 	Pretty  bool `name:"pretty" help:"With --local, print a human-readable report instead of JSON." env:"PULSE_LOCAL_PRETTY"`
@@ -143,6 +145,8 @@ func loadConfig(c cli) (config.Config, error) {
 		DockerHostRoot:                c.DockerHostRoot,
 		DockerConcurrency:             c.DockerConcurrency,
 		DockerContainerTimeoutSeconds: c.DockerContainerTimeoutSeconds,
+		DockerEnableRegistryChecks:    c.DockerEnableRegistryChecks,
+		DockerRegistryTimeoutSeconds:  c.DockerRegistryTimeoutSeconds,
 		AllowMissingPulse:             c.Local,
 	})
 }
@@ -171,6 +175,8 @@ func collectors(cfg config.Config) []monitoring.Collector {
 			Timeout:          cfg.HTTPTimeout(),
 			ContainerTimeout: time.Duration(cfg.Docker.ContainerTimeoutSeconds) * time.Second,
 			Concurrency:      cfg.Docker.Concurrency,
+			RegistryChecks:   cfg.Docker.EnableRegistryChecks,
+			RegistryTimeout:  time.Duration(cfg.Docker.RegistryTimeoutSeconds) * time.Second,
 		},
 	}
 	if cfg.ThermalEnabled() {
