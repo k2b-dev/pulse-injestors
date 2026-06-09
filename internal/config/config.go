@@ -64,6 +64,7 @@ type DockerConfig struct {
 }
 
 type LinuxConfig struct {
+	Profile                  string   `toml:"profile"`
 	SystemdUnits             []string `toml:"systemd_units"`
 	PackageTimeoutSeconds    int      `toml:"package_timeout_seconds"`
 	DiskHealthTimeoutSeconds int      `toml:"disk_health_timeout_seconds"`
@@ -105,6 +106,7 @@ type Overlay struct {
 	DockerContainerTimeoutSeconds int
 	DockerEnableRegistryChecks    bool
 	DockerRegistryTimeoutSeconds  int
+	LinuxProfile                  string
 	LinuxSystemdUnits             []string
 	LinuxPackageTimeoutSeconds    int
 	LinuxDiskHealthTimeoutSeconds int
@@ -354,6 +356,9 @@ func merge(dst *Config, src Config) {
 	if len(src.Linux.SystemdUnits) > 0 {
 		dst.Linux.SystemdUnits = src.Linux.SystemdUnits
 	}
+	if src.Linux.Profile != "" {
+		dst.Linux.Profile = src.Linux.Profile
+	}
 	if src.Linux.PackageTimeoutSeconds != 0 {
 		dst.Linux.PackageTimeoutSeconds = src.Linux.PackageTimeoutSeconds
 	}
@@ -437,6 +442,9 @@ func applyOverlay(dst *Config, o Overlay) {
 	}
 	if len(o.LinuxSystemdUnits) > 0 {
 		dst.Linux.SystemdUnits = o.LinuxSystemdUnits
+	}
+	if o.LinuxProfile != "" {
+		dst.Linux.Profile = o.LinuxProfile
 	}
 	if o.LinuxPackageTimeoutSeconds != 0 {
 		dst.Linux.PackageTimeoutSeconds = o.LinuxPackageTimeoutSeconds

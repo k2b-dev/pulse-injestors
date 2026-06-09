@@ -59,6 +59,23 @@ Cost classes:
 | `system.network.tx_errors` | counter | `count` | `interface` | Linux `/proc/net/dev` | cheap |
 | `system.network.tx_dropped` | counter | `count` | `interface` | Linux `/proc/net/dev` | cheap |
 
+## Linux runtime module
+
+| Name | Type | Unit | Dimensions | Source | Cost |
+|---|---|---:|---|---|---|
+| `system.pressure.available` | state bool | | Linux `/proc/pressure` | optional |
+| `system.pressure.resource.available` | state bool | `resource` | Linux `/proc/pressure/{cpu,memory,io}` | optional |
+| `system.pressure.avg10` | gauge | `percent` | `resource`, `scope` | Linux PSI | cheap |
+| `system.pressure.avg60` | gauge | `percent` | `resource`, `scope` | Linux PSI | cheap |
+| `system.pressure.avg300` | gauge | `percent` | `resource`, `scope` | Linux PSI | cheap |
+| `system.pressure.total` | counter | `microseconds` | `resource`, `scope` | Linux PSI | cheap |
+| `system.processes.available` | state bool | | Linux `/proc/<pid>/stat` | optional |
+| `system.processes.total` | gauge | `count` | | Linux `/proc` | cheap |
+| `system.processes.by_state` | gauge | `count` | `state` | Linux `/proc/<pid>/stat` | cheap |
+| `system.network.sockets.available` | state bool | | Linux `/proc/net/{tcp,tcp6,udp,udp6}` | optional |
+| `system.network.sockets.file.available` | state bool | `file` | Linux `/proc/net/{tcp,tcp6,udp,udp6}` | optional |
+| `system.network.sockets` | gauge | `count` | `protocol`, `family`, `state` | Linux `/proc/net/{tcp,tcp6,udp,udp6}` | cheap |
+
 ## Linux package module
 
 | Name | Type | Unit | Dimensions | Source | Cost |

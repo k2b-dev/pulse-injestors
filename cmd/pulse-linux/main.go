@@ -17,6 +17,7 @@ import (
 	"github.com/valentinkolb/pulse-injestors/internal/modules/btrfs"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/diskhealth"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/filesystem"
+	"github.com/valentinkolb/pulse-injestors/internal/modules/linuxruntime"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/network"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/packages"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/script"
@@ -48,6 +49,7 @@ type cli struct {
 	HostRoot    string `name:"host-root" help:"Host root filesystem." env:"PULSE_HOST_ROOT"`
 	CPUSampleMS int    `name:"cpu-sample-ms" help:"CPU usage sample window in milliseconds." env:"PULSE_HOST_CPU_SAMPLE_MS"`
 
+	LinuxProfile             string `name:"linux-profile" help:"Linux monitoring profile: server, desktop, docker-host." env:"PULSE_LINUX_PROFILE"`
 	SystemdUnits             string `name:"systemd-units" help:"Comma-separated systemd units to monitor." env:"PULSE_LINUX_SYSTEMD_UNITS"`
 	PackageTimeoutSeconds    int    `name:"package-timeout-seconds" help:"Linux package update timeout in seconds." env:"PULSE_LINUX_PACKAGE_TIMEOUT_SECONDS"`
 	DiskHealthTimeoutSeconds int    `name:"disk-health-timeout-seconds" help:"SMART/NVMe disk health timeout in seconds." env:"PULSE_LINUX_DISK_HEALTH_TIMEOUT_SECONDS"`
@@ -152,6 +154,7 @@ func loadConfig(c cli) (config.Config, error) {
 		SysRoot:                       c.SysRoot,
 		HostRoot:                      c.HostRoot,
 		CPUSampleMS:                   c.CPUSampleMS,
+		LinuxProfile:                  c.LinuxProfile,
 		LinuxSystemdUnits:             splitCSV(c.SystemdUnits),
 		LinuxPackageTimeoutSeconds:    c.PackageTimeoutSeconds,
 		LinuxDiskHealthTimeoutSeconds: c.DiskHealthTimeoutSeconds,
@@ -178,8 +181,9 @@ func collectors(cfg config.Config) []monitoring.Collector {
 		system.Collector{ProcRoot: cfg.Host.ProcRoot, CPUSampleTime: cfg.CPUSampleWindow()},
 		filesystem.Collector{ProcRoot: cfg.Host.ProcRoot, HostRoot: cfg.Host.Root},
 		network.Collector{ProcRoot: cfg.Host.ProcRoot},
+		linuxruntime.Collector{ProcRoot: cfg.Host.ProcRoot},
 		packages.Collector{Timeout: time.Duration(cfg.Linux.PackageTimeoutSeconds) * time.Second},
-		systemd.Collector{Units: cfg.Linux.SystemdUnits, Timeout: 5 * time.Second},
+		systemd.Collector{Units: linuxSystemdUnits(cfg), Timeout: 5 * time.Second},
 		diskhealth.Collector{Timeout: time.Duration(cfg.Linux.DiskHealthTimeoutSeconds) * time.Second},
 	}
 	if cfg.ThermalEnabled() {
@@ -200,6 +204,41 @@ func collectors(cfg config.Config) []monitoring.Collector {
 			})
 		}
 		out = append(out, script.Collector{Scripts: scripts})
+	}
+	return out
+}
+
+func linuxSystemdUnits(cfg config.Config) []string {
+	return mergeStringLists(profileSystemdUnits(cfg.Linux.Profile), cfg.Linux.SystemdUnits)
+}
+
+func profileSystemdUnits(profile string) []string {
+	switch strings.TrimSpace(strings.ToLower(profile)) {
+	case "", "none":
+		return nil
+	case "server":
+		return []string{"ssh.service", "sshd.service"}
+	case "desktop":
+		return []string{"ssh.service", "sshd.service", "display-manager.service"}
+	case "docker-host":
+		return []string{"docker.service", "containerd.service", "ssh.service", "sshd.service"}
+	default:
+		return nil
+	}
+}
+
+func mergeStringLists(values ...[]string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, list := range values {
+		for _, value := range list {
+			value = strings.TrimSpace(value)
+			if value == "" || seen[value] {
+				continue
+			}
+			seen[value] = true
+			out = append(out, value)
+		}
 	}
 	return out
 }

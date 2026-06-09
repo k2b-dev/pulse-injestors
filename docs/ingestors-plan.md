@@ -10,10 +10,10 @@ Purpose: run as a container on Docker Desktop or Linux Docker hosts.
 
 Next useful work:
 
-- Add optional authenticated registry freshness checks for private registries.
 - Add Docker daemon event ingestion for restart/start/stop history.
 - Add Docker volume inventory through `/volumes`.
 - Add compose-stack health summary states.
+- Add optional authenticated registry freshness checks for private registries.
 
 ### `pulse-linux`
 
@@ -24,7 +24,7 @@ Next useful work:
 - Harden package update collectors for more distributions and edge cases.
 - Add more service presets for common host profiles.
 - Extend disk health details from `smartctl` attributes where permissions allow it.
-- Add TCP/UDP socket summary metrics from `/proc/net`.
+- Add optional top-N process summaries with strict cost limits.
 
 ## Priority 2: platform-specific devices
 
@@ -62,6 +62,7 @@ Initial modules:
 - VM/LXC running state and resource usage.
 - Backup freshness and failed task events.
 - Cluster quorum and node online states.
+- Ceph cluster health, OSD states, pool usage, and PG health when Ceph is enabled.
 
 ## Priority 4: storage modules
 

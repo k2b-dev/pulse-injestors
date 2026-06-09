@@ -12,7 +12,7 @@ func TestResolveOverlayBeatsFile(t *testing.T) {
 		HTTP:   HTTPConfig{TimeoutSeconds: 5, MaxRetries: 1, InitialBackoffMS: 100},
 		Runner: RunnerConfig{IntervalSeconds: 30, CollectorTimeoutSeconds: 45},
 		Docker: DockerConfig{RegistryTimeoutSeconds: 12},
-		Linux:  LinuxConfig{SystemdUnits: []string{"ssh.service"}, PackageTimeoutSeconds: 11, DiskHealthTimeoutSeconds: 12},
+		Linux:  LinuxConfig{Profile: "server", SystemdUnits: []string{"ssh.service"}, PackageTimeoutSeconds: 11, DiskHealthTimeoutSeconds: 12},
 	}, Overlay{
 		IngestURL:                     "https://env.example/ingest",
 		IngestToken:                   "env-token",
@@ -23,6 +23,7 @@ func TestResolveOverlayBeatsFile(t *testing.T) {
 		CollectorTimeoutSeconds:       90,
 		DockerEnableRegistryChecks:    true,
 		DockerRegistryTimeoutSeconds:  13,
+		LinuxProfile:                  "docker-host",
 		LinuxSystemdUnits:             []string{"docker.service"},
 		LinuxPackageTimeoutSeconds:    21,
 		LinuxDiskHealthTimeoutSeconds: 22,
@@ -50,6 +51,9 @@ func TestResolveOverlayBeatsFile(t *testing.T) {
 	}
 	if len(cfg.Linux.SystemdUnits) != 1 || cfg.Linux.SystemdUnits[0] != "docker.service" {
 		t.Fatalf("linux units = %#v", cfg.Linux.SystemdUnits)
+	}
+	if cfg.Linux.Profile != "docker-host" {
+		t.Fatalf("linux profile = %q", cfg.Linux.Profile)
 	}
 	if cfg.Linux.PackageTimeoutSeconds != 21 || cfg.Linux.DiskHealthTimeoutSeconds != 22 {
 		t.Fatalf("linux = %#v", cfg.Linux)
