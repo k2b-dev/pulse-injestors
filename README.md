@@ -7,6 +7,7 @@ Current binaries:
 - `pulse-docker`: Docker host/container monitoring.
 - `pulse-linux`: Linux host monitoring without Docker.
 - `pulse-macos`: macOS device monitoring.
+- `pulse-proxmox`: Proxmox VE cluster monitoring.
 - `pulse-mock-server`: local ingest target for smoke tests.
 
 Metric names, units, dimensions, sources, and cost classes are listed in [docs/metrics.md](docs/metrics.md).

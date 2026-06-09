@@ -21,6 +21,7 @@ type Config struct {
 	Docker  DockerConfig   `toml:"docker"`
 	Linux   LinuxConfig    `toml:"linux"`
 	MacOS   MacOSConfig    `toml:"macos"`
+	Proxmox ProxmoxConfig  `toml:"proxmox"`
 	Scripts []ScriptConfig `toml:"script"`
 }
 
@@ -81,6 +82,14 @@ type MacOSConfig struct {
 	SystemProfilerTimeoutSeconds int   `toml:"system_profiler_timeout_seconds"`
 }
 
+type ProxmoxConfig struct {
+	APIURL             string `toml:"api_url"`
+	APIToken           string `toml:"api_token"`
+	TimeoutSeconds     int    `toml:"timeout_seconds"`
+	InsecureSkipVerify bool   `toml:"insecure_skip_verify"`
+	EnableLocalCeph    bool   `toml:"enable_local_ceph"`
+}
+
 type ScriptConfig struct {
 	Name           string            `toml:"name"`
 	Command        []string          `toml:"command"`
@@ -118,6 +127,11 @@ type Overlay struct {
 	SoftwareUpdateTimeoutSeconds  int
 	DisableSystemProfiler         bool
 	SystemProfilerTimeoutSeconds  int
+	ProxmoxAPIURL                 string
+	ProxmoxAPIToken               string
+	ProxmoxTimeoutSeconds         int
+	ProxmoxInsecureSkipVerify     bool
+	ProxmoxEnableLocalCeph        bool
 	AllowMissingPulse             bool
 }
 
@@ -199,6 +213,9 @@ func Resolve(file Config, overlay Overlay) (Config, error) {
 	if cfg.Docker.RegistryTimeoutSeconds <= 0 {
 		return cfg, errors.New("docker registry_timeout_seconds must be positive")
 	}
+	if cfg.Proxmox.TimeoutSeconds <= 0 {
+		return cfg, errors.New("proxmox timeout_seconds must be positive")
+	}
 	if cfg.Linux.PackageTimeoutSeconds <= 0 {
 		return cfg, errors.New("linux package_timeout_seconds must be positive")
 	}
@@ -276,6 +293,10 @@ func (c Config) SystemProfilerTimeout() time.Duration {
 	return time.Duration(c.MacOS.SystemProfilerTimeoutSeconds) * time.Second
 }
 
+func (c Config) ProxmoxTimeout() time.Duration {
+	return time.Duration(c.Proxmox.TimeoutSeconds) * time.Second
+}
+
 func defaults() Config {
 	return Config{
 		Entity: EntityConfig{
@@ -311,6 +332,9 @@ func defaults() Config {
 			HomebrewTimeoutSeconds:       20,
 			SoftwareUpdateTimeoutSeconds: 60,
 			SystemProfilerTimeoutSeconds: 10,
+		},
+		Proxmox: ProxmoxConfig{
+			TimeoutSeconds: 10,
 		},
 	}
 }
@@ -415,6 +439,21 @@ func merge(dst *Config, src Config) {
 	if src.MacOS.SystemProfilerTimeoutSeconds != 0 {
 		dst.MacOS.SystemProfilerTimeoutSeconds = src.MacOS.SystemProfilerTimeoutSeconds
 	}
+	if src.Proxmox.APIURL != "" {
+		dst.Proxmox.APIURL = src.Proxmox.APIURL
+	}
+	if src.Proxmox.APIToken != "" {
+		dst.Proxmox.APIToken = src.Proxmox.APIToken
+	}
+	if src.Proxmox.TimeoutSeconds != 0 {
+		dst.Proxmox.TimeoutSeconds = src.Proxmox.TimeoutSeconds
+	}
+	if src.Proxmox.InsecureSkipVerify {
+		dst.Proxmox.InsecureSkipVerify = true
+	}
+	if src.Proxmox.EnableLocalCeph {
+		dst.Proxmox.EnableLocalCeph = true
+	}
 	if len(src.Scripts) > 0 {
 		dst.Scripts = src.Scripts
 	}
@@ -502,6 +541,21 @@ func applyOverlay(dst *Config, o Overlay) {
 	}
 	if o.SystemProfilerTimeoutSeconds != 0 {
 		dst.MacOS.SystemProfilerTimeoutSeconds = o.SystemProfilerTimeoutSeconds
+	}
+	if o.ProxmoxAPIURL != "" {
+		dst.Proxmox.APIURL = o.ProxmoxAPIURL
+	}
+	if o.ProxmoxAPIToken != "" {
+		dst.Proxmox.APIToken = o.ProxmoxAPIToken
+	}
+	if o.ProxmoxTimeoutSeconds != 0 {
+		dst.Proxmox.TimeoutSeconds = o.ProxmoxTimeoutSeconds
+	}
+	if o.ProxmoxInsecureSkipVerify {
+		dst.Proxmox.InsecureSkipVerify = true
+	}
+	if o.ProxmoxEnableLocalCeph {
+		dst.Proxmox.EnableLocalCeph = true
 	}
 }
 

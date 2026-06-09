@@ -111,6 +111,29 @@ func TestResolveMacOSSystemProfilerCanBeDisabled(t *testing.T) {
 	}
 }
 
+func TestResolveProxmoxOverlay(t *testing.T) {
+	cfg, err := Resolve(Config{
+		Pulse:   PulseConfig{IngestURL: "https://example.com/ingest", IngestToken: "token"},
+		Entity:  EntityConfig{ID: "node"},
+		Proxmox: ProxmoxConfig{APIURL: "https://file.example:8006", APIToken: "file", TimeoutSeconds: 11},
+	}, Overlay{
+		ProxmoxAPIURL:             "https://env.example:8006",
+		ProxmoxAPIToken:           "env",
+		ProxmoxTimeoutSeconds:     12,
+		ProxmoxInsecureSkipVerify: true,
+		ProxmoxEnableLocalCeph:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Proxmox.APIURL != "https://env.example:8006" || cfg.Proxmox.APIToken != "env" {
+		t.Fatalf("proxmox = %#v", cfg.Proxmox)
+	}
+	if cfg.Proxmox.TimeoutSeconds != 12 || !cfg.Proxmox.InsecureSkipVerify || !cfg.Proxmox.EnableLocalCeph {
+		t.Fatalf("proxmox = %#v", cfg.Proxmox)
+	}
+}
+
 func TestResolveMergesHostZfsFlag(t *testing.T) {
 	enabled := false
 	cfg, err := Resolve(Config{

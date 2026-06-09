@@ -320,6 +320,39 @@ Registry freshness checks are opt-in with `docker.enable_registry_checks` / `PUL
 | `system.ceph.status.failed` | event | | `ceph status --format json` | optional |
 | `system.ceph.df.failed` | event | | `ceph df --format json` | optional |
 
+## Proxmox module
+
+| Name | Type | Unit | Dimensions | Source | Cost |
+|---|---|---:|---|---|---|
+| `proxmox.available` | state bool | | Proxmox API `/version` | optional |
+| `proxmox.version` | state string | | Proxmox API `/version` | optional |
+| `proxmox.release` | state string | | Proxmox API `/version` | optional |
+| `proxmox.repoid` | state string | | Proxmox API `/version` | optional |
+| `proxmox.cluster.name` | state string | | Proxmox API `/cluster/status` | optional |
+| `proxmox.cluster.quorate` | state bool | | Proxmox API `/cluster/status` | optional |
+| `proxmox.node.online` | state bool | `node` | Proxmox API `/cluster/status` | optional |
+| `proxmox.node.ip` | state string | `node` | Proxmox API `/cluster/status` | optional |
+| `proxmox.nodes.total` | gauge | `count` | | derived from `/cluster/status` | optional |
+| `proxmox.nodes.online` | gauge | `count` | | derived from `/cluster/status` | optional |
+| `proxmox.resources.by_type` | gauge | `count` | `type` | Proxmox API `/cluster/resources` | optional |
+| `proxmox.resources.by_status` | gauge | `count` | `type`, `status` | Proxmox API `/cluster/resources` | optional |
+| `proxmox.resource.present` | state bool | `type`, `resource`, `node` | Proxmox API `/cluster/resources` | optional |
+| `proxmox.resource.status` | state string | `type`, `resource`, `node` | Proxmox API `/cluster/resources` | optional |
+| `proxmox.resource.name` | state string | `type`, `resource`, `node` | Proxmox API `/cluster/resources` | optional |
+| `proxmox.resource.cpu.usage` | gauge | `percent` | `type`, `resource`, `node` | Proxmox API `/cluster/resources` | optional |
+| `proxmox.resource.cpu.cores` | gauge | `count` | `type`, `resource`, `node` | Proxmox API `/cluster/resources` | optional |
+| `proxmox.resource.memory.used` | gauge | `bytes` | `type`, `resource`, `node` | Proxmox API `/cluster/resources` | optional |
+| `proxmox.resource.memory.total` | gauge | `bytes` | `type`, `resource`, `node` | Proxmox API `/cluster/resources` | optional |
+| `proxmox.resource.memory.usage` | gauge | `percent` | `type`, `resource`, `node` | derived | optional |
+| `proxmox.resource.disk.used` | gauge | `bytes` | `type`, `resource`, `node` | Proxmox API `/cluster/resources` | optional |
+| `proxmox.resource.disk.total` | gauge | `bytes` | `type`, `resource`, `node` | Proxmox API `/cluster/resources` | optional |
+| `proxmox.resource.disk.usage` | gauge | `percent` | `type`, `resource`, `node` | derived | optional |
+| `proxmox.resource.uptime` | gauge | `seconds` | `type`, `resource`, `node` | Proxmox API `/cluster/resources` | optional |
+| `proxmox.config.failed` | event | | config validation | optional |
+| `proxmox.version.failed` | event | | Proxmox API `/version` | optional |
+| `proxmox.cluster.status.failed` | event | | Proxmox API `/cluster/status` | optional |
+| `proxmox.cluster.resources.failed` | event | | Proxmox API `/cluster/resources` | optional |
+
 ## macOS module
 
 | Name | Type | Unit | Dimensions | Source | Cost |
