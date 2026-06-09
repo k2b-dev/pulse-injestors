@@ -1,0 +1,21 @@
+[pulse]
+ingest_url = "https://pulse.example.com/ingest/source"
+ingest_token = "replace-me"
+
+[entity]
+id = "macbook-1"
+type = "macos-device"
+
+[runner]
+interval_seconds = 300
+
+[http]
+timeout_seconds = 10
+max_retries = 3
+initial_backoff_ms = 500
+
+[macos]
+enable_homebrew = true
+homebrew_timeout_seconds = 20
+enable_software_update = false
+software_update_timeout_seconds = 60

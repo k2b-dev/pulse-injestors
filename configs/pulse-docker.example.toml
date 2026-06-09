@@ -1,0 +1,36 @@
+[pulse]
+ingest_url = "https://pulse.example.com/ingest/source"
+ingest_token = "replace-me"
+
+[entity]
+id = "docker-host-1"
+type = "docker-host"
+
+[runner]
+interval_seconds = 60
+
+[http]
+timeout_seconds = 10
+max_retries = 3
+initial_backoff_ms = 500
+
+[host]
+proc_root = "/host/proc"
+sys_root = "/host/sys"
+root = "/host/root"
+cpu_sample_ms = 250
+enable_thermal = true
+enable_btrfs = true
+
+[docker]
+socket_path = "/var/run/docker.sock"
+host_root = "/host/root"
+
+[[script]]
+name = "site-labels"
+command = ["/etc/pulse/scripts/site-labels.sh"]
+timeout_seconds = 5
+max_output_bytes = 1048576
+
+[script.dimensions]
+source = "local-script"
