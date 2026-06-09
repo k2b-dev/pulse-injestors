@@ -30,3 +30,54 @@ func TestDockerBlockIOAggregatesByOperation(t *testing.T) {
 		t.Fatalf("read=%d write=%d", read, write)
 	}
 }
+
+func TestContainerDimsIncludesComposeLabels(t *testing.T) {
+	dims := containerDims(containerSummary{
+		ID:    "1234567890abcdef",
+		Names: []string{"/api-1"},
+		Image: "example/api:latest",
+		Labels: map[string]string{
+			"com.docker.compose.project": "pulse",
+			"com.docker.compose.service": "api",
+		},
+	})
+	if dims["container"] != "api-1" {
+		t.Fatalf("container dim = %q", dims["container"])
+	}
+	if dims["compose_project"] != "pulse" || dims["compose_service"] != "api" {
+		t.Fatalf("compose dims = %v", dims)
+	}
+}
+
+func TestUniqueImageIDsDeduplicatesAndSorts(t *testing.T) {
+	got := uniqueImageIDs([]containerSummary{
+		{ImageID: "sha256:bbb"},
+		{ImageID: ""},
+		{ImageID: "sha256:aaa"},
+		{ImageID: "sha256:bbb"},
+	})
+	want := []string{"sha256:aaa", "sha256:bbb"}
+	if len(got) != len(want) {
+		t.Fatalf("len=%d got=%v", len(got), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got=%v want=%v", got, want)
+		}
+	}
+}
+
+func TestParseDockerTimeRejectsEmptyZeroAndInvalid(t *testing.T) {
+	if _, ok := parseDockerTime(""); ok {
+		t.Fatal("empty time parsed")
+	}
+	if _, ok := parseDockerTime("0001-01-01T00:00:00Z"); ok {
+		t.Fatal("zero time parsed")
+	}
+	if _, ok := parseDockerTime("nope"); ok {
+		t.Fatal("invalid time parsed")
+	}
+	if _, ok := parseDockerTime("2026-06-09T00:00:00.000000000Z"); !ok {
+		t.Fatal("valid time did not parse")
+	}
+}

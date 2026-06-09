@@ -55,9 +55,13 @@ Cost classes:
 | `docker.arch` | state string | | Docker Engine `/version` | optional |
 | `docker.containers.total` | gauge | `count` | | Docker Engine `/containers/json` | moderate |
 | `docker.containers.running` | gauge | `count` | | Docker Engine `/containers/json` | moderate |
+| `docker.compose.project.containers` | gauge | `count` | `compose_project` | Docker labels | moderate |
+| `docker.compose.service.containers` | gauge | `count` | `compose_project`, `compose_service` | Docker labels | moderate |
 | `docker.container.running` | state bool | `container`, `container_id`, `image` | Docker Engine | moderate |
 | `docker.container.status` | state string | `container`, `container_id`, `image` | Docker Engine | moderate |
 | `docker.container.image` | state string | `container`, `container_id`, `image` | Docker Engine | moderate |
+| `docker.container.stats.available` | state bool | `container`, `container_id`, `image` | Docker stats | moderate |
+| `docker.container.inspect.available` | state bool | `container`, `container_id`, `image` | Docker inspect | moderate |
 | `docker.container.cpu.usage` | gauge | `percent` | `container`, `container_id`, `image` | Docker stats | moderate |
 | `docker.container.memory.used` | gauge | `bytes` | `container`, `container_id`, `image` | Docker stats | moderate |
 | `docker.container.memory.limit` | gauge | `bytes` | `container`, `container_id`, `image` | Docker stats | moderate |
@@ -70,11 +74,67 @@ Cost classes:
 | `docker.container.blockio.read` | counter | `bytes` | `container` | Docker stats | moderate |
 | `docker.container.blockio.write` | counter | `bytes` | `container` | Docker stats | moderate |
 | `docker.container.restart_count` | gauge | `count` | `container` | Docker inspect | moderate |
+| `docker.container.exit_code` | gauge | `code` | `container` | Docker inspect | moderate |
+| `docker.container.uptime` | gauge | `seconds` | `container` | Docker inspect | moderate |
+| `docker.container.lifecycle.status` | state string | `container` | Docker inspect | moderate |
+| `docker.container.paused` | state bool | `container` | Docker inspect | moderate |
+| `docker.container.restarting` | state bool | `container` | Docker inspect | moderate |
+| `docker.container.oom_killed` | state bool | `container` | Docker inspect | moderate |
+| `docker.container.dead` | state bool | `container` | Docker inspect | moderate |
+| `docker.container.autoremove` | state bool | `container` | Docker inspect | moderate |
+| `docker.container.privileged` | state bool | `container` | Docker inspect | moderate |
+| `docker.container.created_at` | state string | `container` | Docker inspect | moderate |
+| `docker.container.started_at` | state string | `container` | Docker inspect | moderate |
+| `docker.container.finished_at` | state string | `container` | Docker inspect | moderate |
+| `docker.container.hostname` | state string | `container` | Docker inspect | moderate |
+| `docker.container.runtime` | state string | `container` | Docker inspect | moderate |
+| `docker.container.restart_policy` | state string | `container` | Docker inspect | moderate |
+| `docker.container.restart_policy.maximum_retry_count` | gauge | `count` | `container` | Docker inspect | moderate |
+| `docker.container.image.id` | state string | `container` | Docker inspect | moderate |
+| `docker.container.image.reference` | state string | `container` | Docker inspect | moderate |
+| `docker.container.health.available` | state bool | `container` | Docker inspect | moderate |
+| `docker.container.health.status` | state string | `container` | Docker inspect | moderate |
+| `docker.container.health.healthy` | state bool | `container` | Docker inspect | moderate |
+| `docker.container.health.failing_streak` | gauge | `count` | `container` | Docker inspect | moderate |
+| `docker.container.compose.available` | state bool | `container`, `compose_project`, `compose_service` | Docker labels | moderate |
+| `docker.container.compose.project` | state string | `container`, `compose_project` | Docker labels | moderate |
+| `docker.container.compose.service` | state string | `container`, `compose_service` | Docker labels | moderate |
+| `docker.container.compose.container_number` | state string | `container` | Docker labels | moderate |
+| `docker.container.compose.version` | state string | `container` | Docker labels | moderate |
+| `docker.container.compose.config_hash` | state string | `container` | Docker labels | moderate |
+| `docker.container.compose.working_dir` | state string | `container` | Docker labels | moderate |
+| `docker.container.compose.config_files` | state string | `container` | Docker labels | moderate |
+| `docker.container.network.connected` | state bool | `container`, `network` | Docker inspect | moderate |
+| `docker.container.network.id` | state string | `container`, `network` | Docker inspect | moderate |
+| `docker.container.network.endpoint_id` | state string | `container`, `network` | Docker inspect | moderate |
+| `docker.container.network.gateway` | state string | `container`, `network` | Docker inspect | moderate |
+| `docker.container.network.ip_address` | state string | `container`, `network` | Docker inspect | moderate |
+| `docker.container.network.ip_prefix_len` | gauge | `bits` | `container`, `network` | Docker inspect | moderate |
+| `docker.container.network.mac_address` | state string | `container`, `network` | Docker inspect | moderate |
+| `docker.container.network.aliases` | state array | `container`, `network` | Docker inspect | moderate |
+| `docker.container.mounts.total` | gauge | `count` | `container` | Docker inspect | moderate |
+| `docker.container.mounts.by_type` | gauge | `count` | `container`, `mount_type` | Docker inspect | moderate |
 | `docker.container.mount.rw` | state bool | `container`, `mount_type`, `mount_destination`, `volume` | Docker inspect | moderate |
+| `docker.container.mount.source` | state string | `container`, `mount_destination` | Docker inspect | moderate |
+| `docker.container.mount.driver` | state string | `container`, `mount_destination`, `volume` | Docker inspect | moderate |
+| `docker.container.mount.mode` | state string | `container`, `mount_destination` | Docker inspect | moderate |
+| `docker.container.mount.propagation` | state string | `container`, `mount_destination` | Docker inspect | moderate |
 | `docker.container.mount.filesystem.total` | gauge | `bytes` | `container`, `mount_destination`, `mount_source` | host `statfs` | moderate |
 | `docker.container.mount.filesystem.available` | gauge | `bytes` | `container`, `mount_destination`, `mount_source` | host `statfs` | moderate |
 | `docker.container.mount.filesystem.used` | gauge | `bytes` | `container`, `mount_destination`, `mount_source` | derived | moderate |
 | `docker.container.mount.filesystem.usage` | gauge | `percent` | `container`, `mount_destination`, `mount_source` | derived | moderate |
+| `docker.image.inspect.available` | state bool | `image_id` | Docker image inspect | moderate |
+| `docker.image.id` | state string | `image_id` | Docker image inspect | moderate |
+| `docker.image.created_at` | state string | `image_id` | Docker image inspect | moderate |
+| `docker.image.age` | gauge | `seconds` | `image_id` | Docker image inspect | moderate |
+| `docker.image.repo_tags` | state array | `image_id` | Docker image inspect | moderate |
+| `docker.image.repo_digests` | state array | `image_id` | Docker image inspect | moderate |
+| `docker.image.size` | gauge | `bytes` | `image_id` | Docker image inspect | moderate |
+| `docker.image.virtual_size` | gauge | `bytes` | `image_id` | Docker image inspect | moderate |
+| `docker.image.arch` | state string | `image_id` | Docker image inspect | moderate |
+| `docker.image.os` | state string | `image_id` | Docker image inspect | moderate |
+
+The Docker ingestor does not call registries to decide whether an image update is available. It reports local image age, tags, digests, and IDs; freshness checks against registries should be a separate opt-in collector because they need network access, credentials, and rate-limit handling.
 
 ## Thermal module
 
