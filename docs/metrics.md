@@ -122,6 +122,7 @@ Cost classes:
 | `system.disk.nvme.healthy` | state bool | `device`, `model`, `serial` | `nvme smart-log` | optional |
 | `system.disk.nvme.critical_warning` | gauge | `count` | `device`, `model`, `serial` | `nvme smart-log` | optional |
 | `system.disk.nvme.temperature` | gauge | `kelvin` | `device`, `model`, `serial` | `nvme smart-log` | optional |
+| `system.disk.nvme.temperature.celsius` | gauge | `celsius` | `device`, `model`, `serial` | derived from `nvme smart-log` | optional |
 | `system.disk.nvme.percentage_used` | gauge | `percent` | `device`, `model`, `serial` | `nvme smart-log` | optional |
 | `system.disk.nvme.available_spare` | gauge | `percent` | `device`, `model`, `serial` | `nvme smart-log` | optional |
 | `system.disk.nvme.media_errors` | gauge | `count` | `device`, `model`, `serial` | `nvme smart-log` | optional |
@@ -239,11 +240,17 @@ Registry freshness checks are opt-in with `docker.enable_registry_checks` / `PUL
 | Name | Type | Unit | Dimensions | Source | Cost |
 |---|---|---:|---|---|---|
 | `system.btrfs.available` | state bool | | mountinfo + `btrfs` | optional |
+| `system.btrfs.mount.present` | state bool | `mount`, `source` | Linux mountinfo | optional |
+| `system.btrfs.usage.available` | state bool | `mount`, `source` | `btrfs filesystem usage -b` | optional |
+| `system.btrfs.filesystems` | gauge | `count` | | Linux mountinfo | optional |
+| `system.btrfs.filesystems.collected` | gauge | `count` | | `btrfs filesystem usage -b` | optional |
 | `system.btrfs.device.size` | gauge | `bytes` | `mount`, `source` | `btrfs filesystem usage -b` | optional |
 | `system.btrfs.device.allocated` | gauge | `bytes` | `mount`, `source` | `btrfs filesystem usage -b` | optional |
 | `system.btrfs.device.unallocated` | gauge | `bytes` | `mount`, `source` | `btrfs filesystem usage -b` | optional |
 | `system.btrfs.used` | gauge | `bytes` | `mount`, `source` | `btrfs filesystem usage -b` | optional |
 | `system.btrfs.free` | gauge | `bytes` | `mount`, `source` | `btrfs filesystem usage -b` | optional |
+| `system.btrfs.mounts.failed` | event | | mountinfo read | optional |
+| `system.btrfs.usage.failed` | event | `mount`, `source` | `btrfs filesystem usage -b` | optional |
 
 ## macOS module
 

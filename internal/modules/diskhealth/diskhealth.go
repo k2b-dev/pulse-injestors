@@ -179,11 +179,20 @@ func emitNVMeSmart(b *monitoring.Builder, dims map[string]string, out []byte) {
 		b.Metric("system.disk.nvme.critical_warning", "gauge", v, "count", dims)
 		b.State("system.disk.nvme.healthy", v == 0, dims)
 	}
-	emitNumber(b, raw, "temperature", "system.disk.nvme.temperature", "kelvin", dims)
+	emitNVMeTemperature(b, raw, dims)
 	emitNumber(b, raw, "percentage_used", "system.disk.nvme.percentage_used", "percent", dims)
 	emitNumber(b, raw, "available_spare", "system.disk.nvme.available_spare", "percent", dims)
 	emitNumber(b, raw, "media_errors", "system.disk.nvme.media_errors", "count", dims)
 	emitNumber(b, raw, "num_err_log_entries", "system.disk.nvme.error_log_entries", "count", dims)
+}
+
+func emitNVMeTemperature(b *monitoring.Builder, raw map[string]any, dims map[string]string) {
+	v, ok := jsonNumber(raw["temperature"])
+	if !ok {
+		return
+	}
+	b.Metric("system.disk.nvme.temperature", "gauge", v, "kelvin", dims)
+	b.Metric("system.disk.nvme.temperature.celsius", "gauge", v-273.15, "celsius", dims)
 }
 
 func emitNumber(b *monitoring.Builder, raw map[string]any, source, name, unit string, dims map[string]string) {

@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -42,35 +41,42 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 	}
 	mounts, err := filesystem.ReadMounts(filepath.Join(proc, "self", "mountinfo"))
 	if err != nil {
-		return b.Batch(), err
+		b.State("system.btrfs.available", false, nil)
+		b.Event("system.btrfs.mounts.failed", nil, map[string]any{"error": err.Error()})
+		return b.Batch(), nil
 	}
 	timeout := c.Timeout
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
 	count := 0
-	var errs []error
+	collected := 0
 	for _, mount := range mounts {
 		if mount.FSType != "btrfs" {
 			continue
 		}
 		count++
+		dims := map[string]string{"mount": mount.Point, "source": mount.Source}
+		b.State("system.btrfs.mount.present", true, dims)
 		path := filepath.Join(hostRoot, strings.TrimPrefix(mount.Point, "/"))
 		collectCtx, cancel := context.WithTimeout(ctx, timeout)
 		out, err := exec.CommandContext(collectCtx, "btrfs", "filesystem", "usage", "-b", path).Output()
 		cancel()
 		if err != nil {
-			errs = append(errs, fmt.Errorf("btrfs filesystem usage %s: %w", mount.Point, err))
+			b.State("system.btrfs.usage.available", false, dims)
+			b.Event("system.btrfs.usage.failed", dims, map[string]any{"error": fmt.Sprintf("btrfs filesystem usage %s: %v", mount.Point, err)})
 			continue
 		}
+		b.State("system.btrfs.usage.available", true, dims)
 		emitUsage(b, mount, out)
+		collected++
 	}
-	batch := b.Batch()
 	b.State("system.btrfs.available", count > 0, nil)
-	if count == 0 || len(batch.Metrics) > 0 {
-		return b.Batch(), nil
+	if count > 0 {
+		b.Metric("system.btrfs.filesystems", "gauge", float64(count), "count", nil)
+		b.Metric("system.btrfs.filesystems.collected", "gauge", float64(collected), "count", nil)
 	}
-	return b.Batch(), errors.Join(errs...)
+	return b.Batch(), nil
 }
 
 var bytesLine = regexp.MustCompile(`^([A-Za-z ]+):\s+([0-9]+)`)
