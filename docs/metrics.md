@@ -111,10 +111,20 @@ Cost classes:
 | `system.disk.smart.available` | state bool | | `smartctl` lookup | optional |
 | `system.disk.smart.devices` | gauge | `count` | | `smartctl --scan-open` | optional |
 | `system.disk.smart.health_available` | state bool | `device` | `smartctl -H` | optional |
+| `system.disk.smart.attributes_available` | state bool | `device` | `smartctl -A` | optional |
 | `system.disk.smart.status` | state string | `device` | `smartctl -H` | optional |
 | `system.disk.smart.healthy` | state bool | `device` | `smartctl -H` | optional |
+| `system.disk.smart.attribute.raw` | gauge | `count` | `device`, `attribute` | `smartctl -A` | optional |
+| `system.disk.smart.reallocated_sectors` | gauge | `count` | `device` | `smartctl -A` | optional |
+| `system.disk.smart.pending_sectors` | gauge | `count` | `device` | `smartctl -A` | optional |
+| `system.disk.smart.uncorrectable_sectors` | gauge | `count` | `device` | `smartctl -A` | optional |
+| `system.disk.smart.udma_crc_errors` | gauge | `count` | `device` | `smartctl -A` | optional |
+| `system.disk.smart.power_on_hours` | gauge | `hours` | `device` | `smartctl -A` | optional |
+| `system.disk.smart.power_cycles` | gauge | `count` | `device` | `smartctl -A` | optional |
+| `system.disk.smart.temperature` | gauge | `celsius` | `device` | `smartctl -A` | optional |
 | `system.disk.smart.scan.failed` | event | | `smartctl --scan-open` | optional |
 | `system.disk.smart.health.failed` | event | `device` | `smartctl -H` | optional |
+| `system.disk.smart.attributes.failed` | event | `device` | `smartctl -A` | optional |
 | `system.disk.nvme.available` | state bool | | `nvme` lookup | optional |
 | `system.disk.nvme.devices` | gauge | `count` | | `nvme list -o json` | optional |
 | `system.disk.nvme.present` | state bool | `device`, `model`, `serial` | `nvme list -o json` | optional |

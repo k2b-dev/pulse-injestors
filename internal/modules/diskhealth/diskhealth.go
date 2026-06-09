@@ -63,6 +63,16 @@ func collectSmart(ctx context.Context, b *monitoring.Builder, timeout time.Durat
 			b.State("system.disk.smart.status", status, dims)
 		}
 		b.State("system.disk.smart.healthy", healthy, dims)
+		attrCtx, cancel := context.WithTimeout(ctx, timeout)
+		attributes, err := exec.CommandContext(attrCtx, path, "-A", device).Output()
+		cancel()
+		if err != nil {
+			b.State("system.disk.smart.attributes_available", false, dims)
+			b.Event("system.disk.smart.attributes.failed", dims, map[string]any{"error": err.Error()})
+			continue
+		}
+		b.State("system.disk.smart.attributes_available", true, dims)
+		emitSmartAttributes(b, dims, attributes)
 	}
 }
 
@@ -140,6 +150,90 @@ func parseSmartHealth(out []byte) (string, bool) {
 	return "", false
 }
 
+type smartAttribute struct {
+	Name  string
+	Value float64
+}
+
+func parseSmartAttributes(out []byte) []smartAttribute {
+	var attrs []smartAttribute
+	sc := bufio.NewScanner(bytes.NewReader(out))
+	for sc.Scan() {
+		fields := strings.Fields(sc.Text())
+		if len(fields) < 10 || !isNumber(fields[0]) {
+			continue
+		}
+		name := normalizeSmartAttribute(fields[1])
+		if !wantedSmartAttribute(name) {
+			continue
+		}
+		value, ok := firstNumber(strings.Join(fields[9:], " "))
+		if !ok {
+			continue
+		}
+		attrs = append(attrs, smartAttribute{Name: name, Value: value})
+	}
+	return attrs
+}
+
+func emitSmartAttributes(b *monitoring.Builder, dims map[string]string, out []byte) {
+	for _, attr := range parseSmartAttributes(out) {
+		attrDims := copyDims(dims)
+		attrDims["attribute"] = attr.Name
+		b.Metric("system.disk.smart.attribute.raw", "gauge", attr.Value, "count", attrDims)
+		switch attr.Name {
+		case "reallocated_sector_ct":
+			b.Metric("system.disk.smart.reallocated_sectors", "gauge", attr.Value, "count", dims)
+		case "current_pending_sector":
+			b.Metric("system.disk.smart.pending_sectors", "gauge", attr.Value, "count", dims)
+		case "offline_uncorrectable":
+			b.Metric("system.disk.smart.uncorrectable_sectors", "gauge", attr.Value, "count", dims)
+		case "udma_crc_error_count":
+			b.Metric("system.disk.smart.udma_crc_errors", "gauge", attr.Value, "count", dims)
+		case "power_on_hours":
+			b.Metric("system.disk.smart.power_on_hours", "gauge", attr.Value, "hours", dims)
+		case "power_cycle_count":
+			b.Metric("system.disk.smart.power_cycles", "gauge", attr.Value, "count", dims)
+		case "temperature_celsius", "airflow_temperature_cel":
+			b.Metric("system.disk.smart.temperature", "gauge", attr.Value, "celsius", dims)
+		}
+	}
+}
+
+func wantedSmartAttribute(name string) bool {
+	switch name {
+	case "reallocated_sector_ct",
+		"current_pending_sector",
+		"offline_uncorrectable",
+		"udma_crc_error_count",
+		"power_on_hours",
+		"power_cycle_count",
+		"temperature_celsius",
+		"airflow_temperature_cel",
+		"wear_leveling_count",
+		"media_wearout_indicator",
+		"percent_lifetime_remain":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeSmartAttribute(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func firstNumber(value string) (float64, bool) {
+	for _, field := range strings.Fields(value) {
+		field = strings.Trim(field, "(),")
+		parsed, err := strconv.ParseFloat(field, 64)
+		if err == nil {
+			return parsed, true
+		}
+	}
+	return 0, false
+}
+
 type nvmeDevice struct {
 	Path   string
 	Model  string
@@ -211,4 +305,24 @@ func jsonNumber(v any) (float64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func copyDims(dims map[string]string) map[string]string {
+	out := make(map[string]string, len(dims)+1)
+	for k, v := range dims {
+		out[k] = v
+	}
+	return out
+}
+
+func isNumber(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
