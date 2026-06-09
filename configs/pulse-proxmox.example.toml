@@ -20,4 +20,5 @@ api_url = "https://pve.example.com:8006"
 api_token = "root@pam!pulse=replace-me"
 timeout_seconds = 10
 insecure_skip_verify = false
+enable_ceph_api = false
 enable_local_ceph = false

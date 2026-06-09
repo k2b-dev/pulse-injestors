@@ -348,10 +348,29 @@ Registry freshness checks are opt-in with `docker.enable_registry_checks` / `PUL
 | `proxmox.resource.disk.total` | gauge | `bytes` | `type`, `resource`, `node` | Proxmox API `/cluster/resources` | optional |
 | `proxmox.resource.disk.usage` | gauge | `percent` | `type`, `resource`, `node` | derived | optional |
 | `proxmox.resource.uptime` | gauge | `seconds` | `type`, `resource`, `node` | Proxmox API `/cluster/resources` | optional |
+| `proxmox.ceph.api.enabled` | state bool | | config | optional |
+| `proxmox.ceph.available` | state bool | | Proxmox API `/cluster/ceph/status` | optional |
+| `proxmox.ceph.health.status` | state string | | Proxmox API `/cluster/ceph/status` | optional |
+| `proxmox.ceph.health.healthy` | state bool | | derived from Ceph health | optional |
+| `proxmox.ceph.osds.total` | gauge | `count` | | Proxmox API `/cluster/ceph/status` | optional |
+| `proxmox.ceph.osds.up` | gauge | `count` | | Proxmox API `/cluster/ceph/status` | optional |
+| `proxmox.ceph.osds.in` | gauge | `count` | | Proxmox API `/cluster/ceph/status` | optional |
+| `proxmox.ceph.pgs.total` | gauge | `count` | | Proxmox API `/cluster/ceph/status` | optional |
+| `proxmox.ceph.pgs.by_state` | gauge | `count` | `state` | Proxmox API `/cluster/ceph/status` | optional |
+| `proxmox.ceph.bytes.used` | gauge | `bytes` | | Proxmox API `/cluster/ceph/status` | optional |
+| `proxmox.ceph.bytes.total` | gauge | `bytes` | | Proxmox API `/cluster/ceph/status` | optional |
+| `proxmox.ceph.bytes.available` | gauge | `bytes` | | Proxmox API `/cluster/ceph/status` | optional |
+| `proxmox.ceph.pools` | gauge | `count` | | Proxmox API `/nodes/{node}/ceph/pools` | optional |
+| `proxmox.ceph.pool.present` | state bool | `pool`, `node` | Proxmox API `/nodes/{node}/ceph/pools` | optional |
+| `proxmox.ceph.pool.bytes.used` | gauge | `bytes` | `pool`, `node` | Proxmox API `/nodes/{node}/ceph/pools` | optional |
+| `proxmox.ceph.pool.bytes.available` | gauge | `bytes` | `pool`, `node` | Proxmox API `/nodes/{node}/ceph/pools` | optional |
+| `proxmox.ceph.pool.objects` | gauge | `count` | `pool`, `node` | Proxmox API `/nodes/{node}/ceph/pools` | optional |
 | `proxmox.config.failed` | event | | config validation | optional |
 | `proxmox.version.failed` | event | | Proxmox API `/version` | optional |
 | `proxmox.cluster.status.failed` | event | | Proxmox API `/cluster/status` | optional |
 | `proxmox.cluster.resources.failed` | event | | Proxmox API `/cluster/resources` | optional |
+| `proxmox.ceph.status.failed` | event | | Proxmox API `/cluster/ceph/status` | optional |
+| `proxmox.ceph.pools.failed` | event | | Proxmox API `/nodes/{node}/ceph/pools` | optional |
 
 ## macOS module
 

@@ -87,6 +87,7 @@ type ProxmoxConfig struct {
 	APIToken           string `toml:"api_token"`
 	TimeoutSeconds     int    `toml:"timeout_seconds"`
 	InsecureSkipVerify bool   `toml:"insecure_skip_verify"`
+	EnableCephAPI      bool   `toml:"enable_ceph_api"`
 	EnableLocalCeph    bool   `toml:"enable_local_ceph"`
 }
 
@@ -131,6 +132,7 @@ type Overlay struct {
 	ProxmoxAPIToken               string
 	ProxmoxTimeoutSeconds         int
 	ProxmoxInsecureSkipVerify     bool
+	ProxmoxEnableCephAPI          bool
 	ProxmoxEnableLocalCeph        bool
 	AllowMissingPulse             bool
 }
@@ -451,6 +453,9 @@ func merge(dst *Config, src Config) {
 	if src.Proxmox.InsecureSkipVerify {
 		dst.Proxmox.InsecureSkipVerify = true
 	}
+	if src.Proxmox.EnableCephAPI {
+		dst.Proxmox.EnableCephAPI = true
+	}
 	if src.Proxmox.EnableLocalCeph {
 		dst.Proxmox.EnableLocalCeph = true
 	}
@@ -553,6 +558,9 @@ func applyOverlay(dst *Config, o Overlay) {
 	}
 	if o.ProxmoxInsecureSkipVerify {
 		dst.Proxmox.InsecureSkipVerify = true
+	}
+	if o.ProxmoxEnableCephAPI {
+		dst.Proxmox.EnableCephAPI = true
 	}
 	if o.ProxmoxEnableLocalCeph {
 		dst.Proxmox.EnableLocalCeph = true

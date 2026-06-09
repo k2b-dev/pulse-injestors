@@ -121,6 +121,7 @@ func TestResolveProxmoxOverlay(t *testing.T) {
 		ProxmoxAPIToken:           "env",
 		ProxmoxTimeoutSeconds:     12,
 		ProxmoxInsecureSkipVerify: true,
+		ProxmoxEnableCephAPI:      true,
 		ProxmoxEnableLocalCeph:    true,
 	})
 	if err != nil {
@@ -129,7 +130,7 @@ func TestResolveProxmoxOverlay(t *testing.T) {
 	if cfg.Proxmox.APIURL != "https://env.example:8006" || cfg.Proxmox.APIToken != "env" {
 		t.Fatalf("proxmox = %#v", cfg.Proxmox)
 	}
-	if cfg.Proxmox.TimeoutSeconds != 12 || !cfg.Proxmox.InsecureSkipVerify || !cfg.Proxmox.EnableLocalCeph {
+	if cfg.Proxmox.TimeoutSeconds != 12 || !cfg.Proxmox.InsecureSkipVerify || !cfg.Proxmox.EnableCephAPI || !cfg.Proxmox.EnableLocalCeph {
 		t.Fatalf("proxmox = %#v", cfg.Proxmox)
 	}
 }

@@ -19,6 +19,7 @@ type Collector struct {
 	APIToken           string
 	Timeout            time.Duration
 	InsecureSkipVerify bool
+	EnableCephAPI      bool
 	HTTPClient         *http.Client
 }
 
@@ -38,11 +39,17 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 		return b.Batch(), nil
 	}
 	b.State("proxmox.available", true, nil)
-	if err := collectClusterStatus(ctx, b, client); err != nil {
+	nodes, err := collectClusterStatus(ctx, b, client)
+	if err != nil {
 		b.Event("proxmox.cluster.status.failed", nil, map[string]any{"error": err.Error()})
 	}
 	if err := collectResources(ctx, b, client); err != nil {
 		b.Event("proxmox.cluster.resources.failed", nil, map[string]any{"error": err.Error()})
+	}
+	if c.EnableCephAPI {
+		collectCephAPI(ctx, b, client, nodes)
+	} else {
+		b.State("proxmox.ceph.api.enabled", false, nil)
 	}
 	return b.Batch(), nil
 }
@@ -126,13 +133,14 @@ func collectVersion(ctx context.Context, b *monitoring.Builder, client Client) e
 	return nil
 }
 
-func collectClusterStatus(ctx context.Context, b *monitoring.Builder, client Client) error {
+func collectClusterStatus(ctx context.Context, b *monitoring.Builder, client Client) ([]string, error) {
 	var rows []ClusterStatus
 	if err := client.get(ctx, "/cluster/status", &rows); err != nil {
-		return err
+		return nil, err
 	}
 	nodes := 0
 	online := 0
+	nodeNames := []string{}
 	for _, row := range rows {
 		switch row.Type {
 		case "cluster":
@@ -147,6 +155,7 @@ func collectClusterStatus(ctx context.Context, b *monitoring.Builder, client Cli
 			nodes++
 			if row.Online == 1 {
 				online++
+				nodeNames = append(nodeNames, row.Name)
 			}
 			dims := map[string]string{"node": row.Name}
 			b.State("proxmox.node.online", row.Online == 1, dims)
@@ -157,7 +166,7 @@ func collectClusterStatus(ctx context.Context, b *monitoring.Builder, client Cli
 	}
 	b.Metric("proxmox.nodes.total", "gauge", float64(nodes), "count", nil)
 	b.Metric("proxmox.nodes.online", "gauge", float64(online), "count", nil)
-	return nil
+	return nodeNames, nil
 }
 
 func collectResources(ctx context.Context, b *monitoring.Builder, client Client) error {
@@ -218,6 +227,181 @@ func emitUsage(b *monitoring.Builder, prefix string, used, max float64, dims map
 			b.Metric(prefix+".usage", "gauge", (used/max)*100, "percent", dims)
 		}
 	}
+}
+
+func collectCephAPI(ctx context.Context, b *monitoring.Builder, client Client, nodes []string) {
+	b.State("proxmox.ceph.api.enabled", true, nil)
+	status, err := getCephStatus(ctx, client)
+	if err != nil {
+		b.State("proxmox.ceph.available", false, nil)
+		b.Event("proxmox.ceph.status.failed", nil, map[string]any{"error": err.Error()})
+		return
+	}
+	summary := status.summary()
+	b.State("proxmox.ceph.available", true, nil)
+	if summary.Health != "" {
+		b.State("proxmox.ceph.health.status", summary.Health, nil)
+		b.State("proxmox.ceph.health.healthy", summary.Health == "HEALTH_OK", nil)
+	}
+	b.Metric("proxmox.ceph.osds.total", "gauge", float64(summary.OSDsTotal), "count", nil)
+	b.Metric("proxmox.ceph.osds.up", "gauge", float64(summary.OSDsUp), "count", nil)
+	b.Metric("proxmox.ceph.osds.in", "gauge", float64(summary.OSDsIn), "count", nil)
+	b.Metric("proxmox.ceph.pgs.total", "gauge", float64(summary.PGsTotal), "count", nil)
+	b.Metric("proxmox.ceph.bytes.used", "gauge", summary.BytesUsed, "bytes", nil)
+	b.Metric("proxmox.ceph.bytes.total", "gauge", summary.BytesTotal, "bytes", nil)
+	b.Metric("proxmox.ceph.bytes.available", "gauge", summary.BytesAvailable, "bytes", nil)
+	for state, count := range summary.PGsByState {
+		b.Metric("proxmox.ceph.pgs.by_state", "gauge", float64(count), "count", map[string]string{"state": state})
+	}
+	if len(nodes) > 0 {
+		collectCephPools(ctx, b, client, nodes)
+	}
+}
+
+func getCephStatus(ctx context.Context, client Client) (CephStatus, error) {
+	var status CephStatus
+	if err := client.get(ctx, "/cluster/ceph/status", &status); err != nil {
+		return CephStatus{}, err
+	}
+	return status, nil
+}
+
+func collectCephPools(ctx context.Context, b *monitoring.Builder, client Client, nodes []string) {
+	var lastErr error
+	for _, node := range nodes {
+		var rows []map[string]any
+		err := client.get(ctx, "/nodes/"+url.PathEscape(node)+"/ceph/pools", &rows)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		pools := parseCephPools(rows)
+		b.Metric("proxmox.ceph.pools", "gauge", float64(len(pools)), "count", nil)
+		for _, pool := range pools {
+			dims := map[string]string{"pool": pool.Name, "node": node}
+			b.State("proxmox.ceph.pool.present", true, dims)
+			b.Metric("proxmox.ceph.pool.bytes.used", "gauge", pool.BytesUsed, "bytes", dims)
+			b.Metric("proxmox.ceph.pool.bytes.available", "gauge", pool.BytesAvailable, "bytes", dims)
+			b.Metric("proxmox.ceph.pool.objects", "gauge", pool.Objects, "count", dims)
+		}
+		return
+	}
+	if lastErr != nil {
+		b.Event("proxmox.ceph.pools.failed", nil, map[string]any{"error": lastErr.Error()})
+	}
+}
+
+type CephStatus struct {
+	Health struct {
+		Status string `json:"status"`
+	} `json:"health"`
+	OSDMap struct {
+		OSDMap struct {
+			NumOSDs   int `json:"num_osds"`
+			NumUpOSDs int `json:"num_up_osds"`
+			NumInOSDs int `json:"num_in_osds"`
+		} `json:"osdmap"`
+	} `json:"osdmap"`
+	PGMap struct {
+		NumPGs     int     `json:"num_pgs"`
+		BytesUsed  float64 `json:"bytes_used"`
+		BytesTotal float64 `json:"bytes_total"`
+		BytesAvail float64 `json:"bytes_avail"`
+		PGsByState []struct {
+			StateName string `json:"state_name"`
+			Count     int    `json:"count"`
+		} `json:"pgs_by_state"`
+	} `json:"pgmap"`
+}
+
+type CephSummary struct {
+	Health         string
+	OSDsTotal      int
+	OSDsUp         int
+	OSDsIn         int
+	PGsTotal       int
+	PGsByState     map[string]int
+	BytesUsed      float64
+	BytesTotal     float64
+	BytesAvailable float64
+}
+
+func (s CephStatus) summary() CephSummary {
+	out := CephSummary{
+		Health:         s.Health.Status,
+		OSDsTotal:      s.OSDMap.OSDMap.NumOSDs,
+		OSDsUp:         s.OSDMap.OSDMap.NumUpOSDs,
+		OSDsIn:         s.OSDMap.OSDMap.NumInOSDs,
+		PGsTotal:       s.PGMap.NumPGs,
+		PGsByState:     map[string]int{},
+		BytesUsed:      s.PGMap.BytesUsed,
+		BytesTotal:     s.PGMap.BytesTotal,
+		BytesAvailable: s.PGMap.BytesAvail,
+	}
+	for _, row := range s.PGMap.PGsByState {
+		if row.StateName != "" {
+			out.PGsByState[row.StateName] += row.Count
+		}
+	}
+	return out
+}
+
+type CephPool struct {
+	Name           string
+	BytesUsed      float64
+	BytesAvailable float64
+	Objects        float64
+}
+
+func parseCephPools(rows []map[string]any) []CephPool {
+	pools := make([]CephPool, 0, len(rows))
+	for _, row := range rows {
+		name := firstString(row, "pool_name", "name")
+		if name == "" {
+			continue
+		}
+		pools = append(pools, CephPool{
+			Name:           name,
+			BytesUsed:      firstFloat(row, "bytes_used", "stored", "used"),
+			BytesAvailable: firstFloat(row, "max_avail", "bytes_avail", "available"),
+			Objects:        firstFloat(row, "objects"),
+		})
+	}
+	return pools
+}
+
+func firstString(row map[string]any, keys ...string) string {
+	for _, key := range keys {
+		value, ok := row[key]
+		if !ok {
+			continue
+		}
+		if text, ok := value.(string); ok && text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func firstFloat(row map[string]any, keys ...string) float64 {
+	for _, key := range keys {
+		value, ok := row[key]
+		if !ok {
+			continue
+		}
+		switch v := value.(type) {
+		case float64:
+			return v
+		case int:
+			return float64(v)
+		case json.Number:
+			parsed, err := v.Float64()
+			if err == nil {
+				return parsed
+			}
+		}
+	}
+	return 0
 }
 
 type ClusterStatus struct {

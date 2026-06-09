@@ -40,6 +40,7 @@ type cli struct {
 	ProxmoxAPIToken           string `name:"proxmox-api-token" help:"Proxmox VE API token value." env:"PULSE_PROXMOX_API_TOKEN"`
 	ProxmoxTimeoutSeconds     int    `name:"proxmox-timeout-seconds" help:"Proxmox API timeout in seconds." env:"PULSE_PROXMOX_TIMEOUT_SECONDS"`
 	ProxmoxInsecureSkipVerify bool   `name:"proxmox-insecure-skip-verify" help:"Skip Proxmox API TLS verification." env:"PULSE_PROXMOX_INSECURE_SKIP_VERIFY"`
+	ProxmoxEnableCephAPI      bool   `name:"proxmox-enable-ceph-api" help:"Collect Ceph data through the Proxmox API." env:"PULSE_PROXMOX_ENABLE_CEPH_API"`
 	ProxmoxEnableLocalCeph    bool   `name:"proxmox-enable-local-ceph" help:"Also collect local Ceph CLI metrics on this node." env:"PULSE_PROXMOX_ENABLE_LOCAL_CEPH"`
 
 	Local   bool `name:"local" help:"Write collected Pulse batch JSON to stdout instead of sending it." env:"PULSE_LOCAL"`
@@ -133,6 +134,7 @@ func loadConfig(c cli) (config.Config, error) {
 		ProxmoxAPIToken:           c.ProxmoxAPIToken,
 		ProxmoxTimeoutSeconds:     c.ProxmoxTimeoutSeconds,
 		ProxmoxInsecureSkipVerify: c.ProxmoxInsecureSkipVerify,
+		ProxmoxEnableCephAPI:      c.ProxmoxEnableCephAPI,
 		ProxmoxEnableLocalCeph:    c.ProxmoxEnableLocalCeph,
 		AllowMissingPulse:         c.Local,
 	})
@@ -169,6 +171,7 @@ func collectors(cfg config.Config) []monitoring.Collector {
 			APIToken:           cfg.Proxmox.APIToken,
 			Timeout:            cfg.ProxmoxTimeout(),
 			InsecureSkipVerify: cfg.Proxmox.InsecureSkipVerify,
+			EnableCephAPI:      cfg.Proxmox.EnableCephAPI,
 		},
 	}
 	if cfg.Proxmox.EnableLocalCeph {
