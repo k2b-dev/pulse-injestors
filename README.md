@@ -10,6 +10,7 @@ Current binaries:
 - `pulse-mock-server`: local ingest target for smoke tests.
 
 Metric names, units, dimensions, sources, and cost classes are listed in [docs/metrics.md](docs/metrics.md).
+Planned next ingestors and module priorities are listed in [docs/ingestors-plan.md](docs/ingestors-plan.md).
 
 ```sh
 docker run -d \
@@ -18,6 +19,7 @@ docker run -d \
   -e PULSE_INGEST_URL="https://pulse.example.com/ingest/source" \
   -e PULSE_INGEST_TOKEN="..." \
   -e PULSE_INTERVAL_SECONDS=60 \
+  -e PULSE_COLLECTOR_TIMEOUT_SECONDS=60 \
   -e PULSE_ENTITY_ID="$(hostname)" \
   -v /var/run/docker.sock:/var/run/docker.sock:ro \
   -v /proc:/host/proc:ro \
@@ -26,7 +28,7 @@ docker run -d \
   ghcr.io/valentinkolb/pulse-docker:latest
 ```
 
-The container runs continuously by default. Use `once` as the final argument to collect, push, and exit.
+The container runs a small scheduling wrapper by default. The wrapper calls the one-shot binary every `PULSE_INTERVAL_SECONDS`; use `once` as the final argument to collect, push, and exit. For local smoke tests, `PULSE_CONTAINER_MAX_RUNS=1` exits after one scheduled run.
 
 Inspect locally without sending:
 

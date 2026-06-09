@@ -40,7 +40,8 @@ type HTTPConfig struct {
 }
 
 type RunnerConfig struct {
-	IntervalSeconds int `toml:"interval_seconds"`
+	IntervalSeconds         int `toml:"interval_seconds"`
+	CollectorTimeoutSeconds int `toml:"collector_timeout_seconds"`
 }
 
 type HostConfig struct {
@@ -84,6 +85,7 @@ type Overlay struct {
 	MaxRetries                    int
 	InitialBackoffMS              int
 	IntervalSeconds               int
+	CollectorTimeoutSeconds       int
 	ProcRoot                      string
 	SysRoot                       string
 	HostRoot                      string
@@ -151,6 +153,9 @@ func Resolve(file Config, overlay Overlay) (Config, error) {
 	if cfg.Runner.IntervalSeconds <= 0 {
 		return cfg, errors.New("runner interval_seconds must be positive")
 	}
+	if cfg.Runner.CollectorTimeoutSeconds <= 0 {
+		return cfg, errors.New("runner collector_timeout_seconds must be positive")
+	}
 	if cfg.Host.CPUSampleMS <= 0 {
 		return cfg, errors.New("host cpu_sample_ms must be positive")
 	}
@@ -193,6 +198,10 @@ func (c Config) RunnerInterval() time.Duration {
 	return time.Duration(c.Runner.IntervalSeconds) * time.Second
 }
 
+func (c Config) CollectorTimeout() time.Duration {
+	return time.Duration(c.Runner.CollectorTimeoutSeconds) * time.Second
+}
+
 func (c Config) ThermalEnabled() bool {
 	return c.Host.EnableThermal == nil || *c.Host.EnableThermal
 }
@@ -228,7 +237,8 @@ func defaults() Config {
 			InitialBackoffMS: 500,
 		},
 		Runner: RunnerConfig{
-			IntervalSeconds: 60,
+			IntervalSeconds:         60,
+			CollectorTimeoutSeconds: 60,
 		},
 		Host: HostConfig{
 			ProcRoot:    "/host/proc",
@@ -273,6 +283,9 @@ func merge(dst *Config, src Config) {
 	}
 	if src.Runner.IntervalSeconds != 0 {
 		dst.Runner.IntervalSeconds = src.Runner.IntervalSeconds
+	}
+	if src.Runner.CollectorTimeoutSeconds != 0 {
+		dst.Runner.CollectorTimeoutSeconds = src.Runner.CollectorTimeoutSeconds
 	}
 	if src.Host.ProcRoot != "" {
 		dst.Host.ProcRoot = src.Host.ProcRoot
@@ -345,6 +358,9 @@ func applyOverlay(dst *Config, o Overlay) {
 	}
 	if o.IntervalSeconds != 0 {
 		dst.Runner.IntervalSeconds = o.IntervalSeconds
+	}
+	if o.CollectorTimeoutSeconds != 0 {
+		dst.Runner.CollectorTimeoutSeconds = o.CollectorTimeoutSeconds
 	}
 	if o.ProcRoot != "" {
 		dst.Host.ProcRoot = o.ProcRoot

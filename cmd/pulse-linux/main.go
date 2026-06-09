@@ -32,10 +32,11 @@ type cli struct {
 	EntityID    string `name:"entity-id" help:"Stable monitored entity id. Defaults to hostname." env:"PULSE_ENTITY_ID"`
 	EntityType  string `name:"entity-type" help:"Monitored entity type." env:"PULSE_ENTITY_TYPE"`
 
-	IntervalSeconds  int `name:"interval-seconds" help:"Collection interval for run mode." env:"PULSE_INTERVAL_SECONDS"`
-	TimeoutSeconds   int `name:"timeout-seconds" help:"HTTP request timeout in seconds." env:"PULSE_HTTP_TIMEOUT_SECONDS"`
-	MaxRetries       int `name:"max-retries" help:"HTTP retry count for network, 408, 429 and 5xx failures." env:"PULSE_HTTP_MAX_RETRIES"`
-	InitialBackoffMS int `name:"initial-backoff-ms" help:"Initial retry backoff in milliseconds." env:"PULSE_HTTP_INITIAL_BACKOFF_MS"`
+	IntervalSeconds         int `name:"interval-seconds" help:"Collection interval for run mode." env:"PULSE_INTERVAL_SECONDS"`
+	CollectorTimeoutSeconds int `name:"collector-timeout-seconds" help:"Overall timeout per collector in seconds." env:"PULSE_COLLECTOR_TIMEOUT_SECONDS"`
+	TimeoutSeconds          int `name:"timeout-seconds" help:"HTTP request timeout in seconds." env:"PULSE_HTTP_TIMEOUT_SECONDS"`
+	MaxRetries              int `name:"max-retries" help:"HTTP retry count for network, 408, 429 and 5xx failures." env:"PULSE_HTTP_MAX_RETRIES"`
+	InitialBackoffMS        int `name:"initial-backoff-ms" help:"Initial retry backoff in milliseconds." env:"PULSE_HTTP_INITIAL_BACKOFF_MS"`
 
 	ProcRoot    string `name:"proc-root" help:"procfs root to read." env:"PULSE_HOST_PROC_ROOT"`
 	SysRoot     string `name:"sys-root" help:"sysfs root to read." env:"PULSE_HOST_SYS_ROOT"`
@@ -89,7 +90,7 @@ func main() {
 		},
 		Collectors: collectors(cfg),
 		Sender:     sender(c, cfg, log),
-		Timeout:    cfg.RunnerInterval(),
+		Timeout:    cfg.CollectorTimeout(),
 		Interval:   cfg.RunnerInterval(),
 		Logger:     log,
 	}
@@ -128,20 +129,21 @@ func loadConfig(c cli) (config.Config, error) {
 		fileCfg.Host.Root = "/"
 	}
 	return config.Resolve(fileCfg, config.Overlay{
-		ConfigPath:        cfgPath,
-		IngestURL:         c.IngestURL,
-		IngestToken:       c.IngestToken,
-		EntityID:          c.EntityID,
-		EntityType:        c.EntityType,
-		TimeoutSeconds:    c.TimeoutSeconds,
-		MaxRetries:        c.MaxRetries,
-		InitialBackoffMS:  c.InitialBackoffMS,
-		IntervalSeconds:   c.IntervalSeconds,
-		ProcRoot:          c.ProcRoot,
-		SysRoot:           c.SysRoot,
-		HostRoot:          c.HostRoot,
-		CPUSampleMS:       c.CPUSampleMS,
-		AllowMissingPulse: c.Local,
+		ConfigPath:              cfgPath,
+		IngestURL:               c.IngestURL,
+		IngestToken:             c.IngestToken,
+		EntityID:                c.EntityID,
+		EntityType:              c.EntityType,
+		TimeoutSeconds:          c.TimeoutSeconds,
+		MaxRetries:              c.MaxRetries,
+		InitialBackoffMS:        c.InitialBackoffMS,
+		IntervalSeconds:         c.IntervalSeconds,
+		CollectorTimeoutSeconds: c.CollectorTimeoutSeconds,
+		ProcRoot:                c.ProcRoot,
+		SysRoot:                 c.SysRoot,
+		HostRoot:                c.HostRoot,
+		CPUSampleMS:             c.CPUSampleMS,
+		AllowMissingPulse:       c.Local,
 	})
 }
 

@@ -8,6 +8,7 @@ type = "docker-host"
 
 [runner]
 interval_seconds = 60
+collector_timeout_seconds = 60
 
 [http]
 timeout_seconds = 10
