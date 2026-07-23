@@ -2,53 +2,64 @@ package proxmox
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/valentinkolb/pulse-injestors/internal/entity"
 	"github.com/valentinkolb/pulse-injestors/internal/monitoring"
 	"github.com/valentinkolb/pulse-injestors/internal/pulse"
 )
 
+var ErrCommandNotFound = errors.New("proxmox command not found")
+
 type Collector struct {
-	BaseURL            string
-	APIToken           string
-	Timeout            time.Duration
-	InsecureSkipVerify bool
-	EnableCephAPI      bool
-	HTTPClient         *http.Client
+	PveshPath     string
+	Timeout       time.Duration
+	EnableCephAPI bool
+	Runner        CommandRunner
 }
 
 func (c Collector) Name() string { return "proxmox" }
 
 func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.Batch, error) {
-	b := monitoring.NewBuilder(scope)
 	client, err := c.client()
 	if err != nil {
+		b := monitoring.NewBuilder(scope)
 		b.State("proxmox.available", false, nil)
-		b.Event("proxmox.config.failed", nil, map[string]any{"error": err.Error()})
+		if !errors.Is(err, ErrCommandNotFound) {
+			emitError(b, "proxmox.config.failed", "configure", nil, err)
+		}
 		return b.Batch(), nil
 	}
+	clusterRows, clusterErr := getClusterStatus(ctx, client)
+	clusterID := clusterIDFromStatus(clusterRows)
+	localNode := stableHostFromScope(scope)
+	b := monitoring.NewBuilder(nodeScope(scope, localNode, clusterID))
 	if err := collectVersion(ctx, b, client); err != nil {
 		b.State("proxmox.available", false, nil)
-		b.Event("proxmox.version.failed", nil, map[string]any{"error": err.Error()})
+		emitError(b, "proxmox.version.failed", "version", nil, err)
 		return b.Batch(), nil
 	}
 	b.State("proxmox.available", true, nil)
-	nodes, err := collectClusterStatus(ctx, b, client)
-	if err != nil {
-		b.Event("proxmox.cluster.status.failed", nil, map[string]any{"error": err.Error()})
+	var nodes []string
+	if clusterErr != nil {
+		emitError(b, "proxmox.cluster.status.failed", "cluster_status", nil, clusterErr)
+		nodes = collectLocalNodeStatus(ctx, b, client, scope, "")
+	} else {
+		nodes = emitClusterStatus(b, scope, clusterRows, clusterID)
 	}
-	if err := collectResources(ctx, b, client); err != nil {
-		b.Event("proxmox.cluster.resources.failed", nil, map[string]any{"error": err.Error()})
+	if err := collectResources(ctx, b, client, scope, clusterID); err != nil {
+		emitError(b, "proxmox.cluster.resources.failed", "cluster_resources", nil, err)
 	}
-	collectTasksAndBackups(ctx, b, client)
+	collectTasksAndBackups(ctx, b, client, scope, clusterID)
 	if c.EnableCephAPI {
-		collectCephAPI(ctx, b, client, nodes)
+		collectCephAPI(ctx, b, client, scope, clusterID, nodes)
 	} else {
 		b.State("proxmox.ceph.api.enabled", false, nil)
 	}
@@ -56,61 +67,111 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 }
 
 func (c Collector) client() (Client, error) {
-	if c.BaseURL == "" {
-		return Client{}, fmt.Errorf("proxmox api url is required")
+	path := strings.TrimSpace(c.PveshPath)
+	if path == "" {
+		path = "pvesh"
 	}
-	if c.APIToken == "" {
-		return Client{}, fmt.Errorf("proxmox api token is required")
-	}
-	base, err := normalizeBaseURL(c.BaseURL)
-	if err != nil {
-		return Client{}, err
-	}
-	httpClient := c.HTTPClient
-	if httpClient == nil {
-		timeout := c.Timeout
-		if timeout <= 0 {
-			timeout = 10 * time.Second
+	runner := c.Runner
+	if runner == nil {
+		if !strings.Contains(path, "/") {
+			resolved, err := exec.LookPath(path)
+			if err != nil {
+				return Client{}, fmt.Errorf("%w: %s", ErrCommandNotFound, path)
+			}
+			path = resolved
+		} else if _, err := os.Stat(path); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return Client{}, fmt.Errorf("%w: %s", ErrCommandNotFound, path)
+			}
+			return Client{}, err
 		}
-		transport := http.DefaultTransport.(*http.Transport).Clone()
-		if c.InsecureSkipVerify {
-			transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-		}
-		httpClient = &http.Client{Timeout: timeout, Transport: transport}
+		runner = execRunner{}
 	}
-	return Client{BaseURL: base, APIToken: authHeader(c.APIToken), HTTPClient: httpClient}, nil
+	timeout := c.Timeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	return Client{PveshPath: path, Timeout: timeout, Runner: runner}, nil
 }
 
 type Client struct {
-	BaseURL    string
-	APIToken   string
-	HTTPClient *http.Client
+	PveshPath string
+	Timeout   time.Duration
+	Runner    CommandRunner
+}
+
+type CommandRunner interface {
+	Run(ctx context.Context, name string, args ...string) ([]byte, error)
+}
+
+type execRunner struct{}
+
+func (execRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	if err != nil {
+		if len(out) > 0 {
+			return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+		}
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c Client) get(ctx context.Context, path string, target any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
+	args, err := pveshArgs(path)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", c.APIToken)
-	resp, err := c.HTTPClient.Do(req)
+	runCtx, cancel := context.WithTimeout(ctx, c.Timeout)
+	defer cancel()
+	out, err := c.Runner.Run(runCtx, c.PveshPath, args...)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("proxmox API HTTP %d", resp.StatusCode)
-	}
-	var envelope struct {
-		Data json.RawMessage `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
-		return err
-	}
-	if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
+	out = []byte(strings.TrimSpace(string(out)))
+	if len(out) == 0 || string(out) == "null" {
 		return nil
 	}
-	return json.Unmarshal(envelope.Data, target)
+	return json.Unmarshal(out, target)
+}
+
+func pveshArgs(path string) ([]string, error) {
+	cleanPath, query, err := splitAPIPath(path)
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"get", cleanPath}
+	args = append(args, queryCLIArgs(query)...)
+	args = append(args, "--output-format", "json")
+	return args, nil
+}
+
+func splitAPIPath(path string) (string, url.Values, error) {
+	u, err := url.Parse(path)
+	if err != nil {
+		return "", nil, err
+	}
+	cleanPath := u.EscapedPath()
+	if cleanPath == "" {
+		cleanPath = path
+	}
+	return cleanPath, u.Query(), nil
+}
+
+func queryCLIArgs(query url.Values) []string {
+	if len(query) == 0 {
+		return nil
+	}
+	args := []string{}
+	for key, values := range query {
+		for _, value := range values {
+			args = append(args, "--"+key)
+			if value != "" {
+				args = append(args, value)
+			}
+		}
+	}
+	return args
 }
 
 func collectVersion(ctx context.Context, b *monitoring.Builder, client Client) error {
@@ -134,21 +195,44 @@ func collectVersion(ctx context.Context, b *monitoring.Builder, client Client) e
 	return nil
 }
 
-func collectClusterStatus(ctx context.Context, b *monitoring.Builder, client Client) ([]string, error) {
+func getClusterStatus(ctx context.Context, client Client) ([]ClusterStatus, error) {
 	var rows []ClusterStatus
 	if err := client.get(ctx, "/cluster/status", &rows); err != nil {
 		return nil, err
 	}
+	return rows, nil
+}
+
+func clusterIDFromStatus(rows []ClusterStatus) string {
+	for _, row := range rows {
+		if row.Type == "cluster" && row.Name != "" {
+			return entity.Key(row.Name, "")
+		}
+	}
+	return ""
+}
+
+func emitClusterStatus(b *monitoring.Builder, scope monitoring.Scope, rows []ClusterStatus, clusterID string) []string {
 	nodes := 0
 	online := 0
 	nodeNames := []string{}
+	var clusterBuilder *monitoring.Builder
+	if clusterID != "" {
+		clusterBuilder = monitoring.NewBuilder(proxmoxClusterScope(scope, clusterID))
+	}
+	aggregate := b
+	if clusterBuilder != nil {
+		aggregate = clusterBuilder
+	}
 	for _, row := range rows {
 		switch row.Type {
 		case "cluster":
-			if row.Name != "" {
-				b.State("proxmox.cluster.name", row.Name, nil)
+			if clusterBuilder != nil && row.Name != "" {
+				aggregate.State("proxmox.cluster.name", row.Name, nil)
 			}
-			b.State("proxmox.cluster.quorate", row.Quorate == 1, nil)
+			if clusterBuilder != nil {
+				aggregate.State("proxmox.cluster.quorate", row.Quorate == 1, nil)
+			}
 		case "node":
 			if row.Name == "" {
 				continue
@@ -159,18 +243,82 @@ func collectClusterStatus(ctx context.Context, b *monitoring.Builder, client Cli
 				nodeNames = append(nodeNames, row.Name)
 			}
 			dims := map[string]string{"node": row.Name}
-			b.State("proxmox.node.online", row.Online == 1, dims)
+			nb := monitoring.NewBuilder(nodeScope(scope, row.Name, clusterID))
+			nb.State("proxmox.node.online", row.Online == 1, dims)
 			if row.IP != "" {
-				b.State("proxmox.node.ip", row.IP, dims)
+				nb.State("proxmox.node.ip", row.IP, dims)
 			}
+			b.Merge(nb.Batch())
 		}
 	}
-	b.Metric("proxmox.nodes.total", "gauge", float64(nodes), "count", nil)
-	b.Metric("proxmox.nodes.online", "gauge", float64(online), "count", nil)
+	aggregate.Metric("proxmox.nodes.total", "gauge", float64(nodes), "", nil)
+	aggregate.Metric("proxmox.nodes.online", "gauge", float64(online), "", nil)
+	if clusterBuilder != nil {
+		b.Merge(clusterBuilder.Batch())
+	}
+	return nodeNames
+}
+
+func collectLocalNodeStatus(ctx context.Context, b *monitoring.Builder, client Client, scope monitoring.Scope, clusterID string) []string {
+	nodes, err := collectNodes(ctx, b, client, scope, clusterID)
+	if err == nil {
+		return nodes
+	}
+	emitError(b, "proxmox.nodes.failed", "nodes", nil, err)
+	host, hostErr := os.Hostname()
+	if hostErr != nil || host == "" {
+		host = "localhost"
+	}
+	dims := map[string]string{"node": host}
+	nb := monitoring.NewBuilder(nodeScope(scope, host, clusterID))
+	nb.State("proxmox.node.online", true, dims)
+	b.Merge(nb.Batch())
+	b.Metric("proxmox.nodes.total", "gauge", 1, "", nil)
+	b.Metric("proxmox.nodes.online", "gauge", 1, "", nil)
+	return []string{host}
+}
+
+func collectNodes(ctx context.Context, b *monitoring.Builder, client Client, scope monitoring.Scope, clusterID string) ([]string, error) {
+	var rows []NodeStatus
+	if err := client.get(ctx, "/nodes", &rows); err != nil {
+		return nil, err
+	}
+	nodeNames := []string{}
+	online := 0
+	for _, row := range rows {
+		if row.Node == "" {
+			continue
+		}
+		nodeNames = append(nodeNames, row.Node)
+		isOnline := row.Status == "" || row.Status == "online"
+		if isOnline {
+			online++
+		}
+		dims := map[string]string{"node": row.Node}
+		nb := monitoring.NewBuilder(nodeScope(scope, row.Node, clusterID))
+		nb.State("proxmox.node.online", isOnline, dims)
+		if row.Status != "" {
+			nb.State("proxmox.node.status", row.Status, dims)
+		}
+		if row.CPU > 0 {
+			nb.Metric("proxmox.node.cpu.usage", "gauge", row.CPU*100, "percent", dims)
+		}
+		if row.MaxCPU > 0 {
+			nb.Metric("proxmox.node.cpu.cores", "gauge", row.MaxCPU, "", dims)
+		}
+		emitUsage(nb, "proxmox.node.memory", row.Mem, row.MaxMem, dims)
+		emitUsage(nb, "proxmox.node.disk", row.Disk, row.MaxDisk, dims)
+		if row.Uptime > 0 {
+			nb.Metric("proxmox.node.uptime", "gauge", row.Uptime, "seconds", dims)
+		}
+		b.Merge(nb.Batch())
+	}
+	b.Metric("proxmox.nodes.total", "gauge", float64(len(nodeNames)), "", nil)
+	b.Metric("proxmox.nodes.online", "gauge", float64(online), "", nil)
 	return nodeNames, nil
 }
 
-func collectResources(ctx context.Context, b *monitoring.Builder, client Client) error {
+func collectResources(ctx context.Context, b *monitoring.Builder, client Client, scope monitoring.Scope, clusterID string) error {
 	var rows []Resource
 	if err := client.get(ctx, "/cluster/resources", &rows); err != nil {
 		return err
@@ -185,37 +333,50 @@ func collectResources(ctx context.Context, b *monitoring.Builder, client Client)
 		if row.Status != "" {
 			byStatus[row.Type+":"+row.Status]++
 		}
-		dims := map[string]string{"type": row.Type, "resource": row.ID}
+		dims := map[string]string{"type": row.Type}
 		if row.Node != "" {
 			dims["node"] = row.Node
 		}
-		b.State("proxmox.resource.present", true, dims)
-		if row.Status != "" {
-			b.State("proxmox.resource.status", row.Status, dims)
+		if vmid := guestVMID(row); vmid != "" {
+			dims["vmid"] = vmid
 		}
-		if row.Name != "" {
-			b.State("proxmox.resource.name", row.Name, dims)
-		}
-		if row.CPU > 0 {
-			b.Metric("proxmox.resource.cpu.usage", "gauge", row.CPU*100, "percent", dims)
-		}
-		if row.MaxCPU > 0 {
-			b.Metric("proxmox.resource.cpu.cores", "gauge", row.MaxCPU, "count", dims)
-		}
-		emitUsage(b, "proxmox.resource.memory", row.Mem, row.MaxMem, dims)
-		emitUsage(b, "proxmox.resource.disk", row.Disk, row.MaxDisk, dims)
-		if row.Uptime > 0 {
-			b.Metric("proxmox.resource.uptime", "gauge", row.Uptime, "seconds", dims)
+		if resourceScope, ok := proxmoxResourceScope(scope, row, clusterID); ok {
+			rb := monitoring.NewBuilder(resourceScope)
+			emitResourceSignals(rb, row, dims)
+			b.Merge(rb.Batch())
+		} else {
+			emitResourceSignals(b, row, dims)
 		}
 	}
 	for typ, count := range byType {
-		b.Metric("proxmox.resources.by_type", "gauge", float64(count), "count", map[string]string{"type": typ})
+		b.Metric("proxmox.resources.by_type", "gauge", float64(count), "", map[string]string{"type": typ})
 	}
 	for key, count := range byStatus {
 		typ, status, _ := strings.Cut(key, ":")
-		b.Metric("proxmox.resources.by_status", "gauge", float64(count), "count", map[string]string{"type": typ, "status": status})
+		b.Metric("proxmox.resources.by_status", "gauge", float64(count), "", map[string]string{"type": typ, "status": status})
 	}
 	return nil
+}
+
+func emitResourceSignals(b *monitoring.Builder, row Resource, dims map[string]string) {
+	b.State("proxmox.resource.present", true, dims)
+	if row.Status != "" {
+		b.State("proxmox.resource.status", row.Status, dims)
+	}
+	if row.Name != "" {
+		b.State("proxmox.resource.name", row.Name, dims)
+	}
+	if row.CPU > 0 {
+		b.Metric("proxmox.resource.cpu.usage", "gauge", row.CPU*100, "percent", dims)
+	}
+	if row.MaxCPU > 0 {
+		b.Metric("proxmox.resource.cpu.cores", "gauge", row.MaxCPU, "", dims)
+	}
+	emitUsage(b, "proxmox.resource.memory", row.Mem, row.MaxMem, dims)
+	emitUsage(b, "proxmox.resource.disk", row.Disk, row.MaxDisk, dims)
+	if row.Uptime > 0 {
+		b.Metric("proxmox.resource.uptime", "gauge", row.Uptime, "seconds", dims)
+	}
 }
 
 func emitUsage(b *monitoring.Builder, prefix string, used, max float64, dims map[string]string) {
@@ -230,19 +391,144 @@ func emitUsage(b *monitoring.Builder, prefix string, used, max float64, dims map
 	}
 }
 
-func collectTasksAndBackups(ctx context.Context, b *monitoring.Builder, client Client) {
+func nodeScope(scope monitoring.Scope, node, clusterID string) monitoring.Scope {
+	scope.EntityType = "proxmox-node"
+	scope.EntityID = entity.ID("proxmox-node", clusterNamespace(scope, clusterID), node)
+	scope.Label = node
+	return scope
+}
+
+func proxmoxClusterScope(scope monitoring.Scope, clusterID string) monitoring.Scope {
+	scope.EntityType = "proxmox-cluster"
+	scope.EntityID = entity.ID("proxmox-cluster", clusterNamespace(scope, clusterID))
+	scope.Label = clusterID
+	return scope
+}
+
+func proxmoxResourceScope(scope monitoring.Scope, row Resource, clusterID string) (monitoring.Scope, bool) {
+	vmid := resourceVMID(row.ID)
+	if vmid == "" {
+		return monitoring.Scope{}, false
+	}
+	label := row.Name
+	if label == "" {
+		label = vmid
+	}
+	switch row.Type {
+	case "node":
+		return nodeScope(scope, vmid, clusterID), true
+	case "qemu":
+		scope.EntityType = "proxmox-vm"
+		scope.EntityID = entity.ID("proxmox-vm", clusterNamespace(scope, clusterID), vmid)
+		scope.Label = label
+		return scope, true
+	case "lxc":
+		scope.EntityType = "proxmox-container"
+		scope.EntityID = entity.ID("proxmox-container", clusterNamespace(scope, clusterID), vmid)
+		scope.Label = label
+		return scope, true
+	default:
+		return monitoring.Scope{}, false
+	}
+}
+
+func guestVMID(row Resource) string {
+	switch row.Type {
+	case "qemu", "lxc":
+		return resourceVMID(row.ID)
+	default:
+		return ""
+	}
+}
+
+func resourceVMID(id string) string {
+	if _, value, ok := strings.Cut(id, "/"); ok {
+		return value
+	}
+	return id
+}
+
+func stableHostFromScope(scope monitoring.Scope) string {
+	return entity.StableHostIDFromScope(scope.EntityID, scope.Dimensions)
+}
+
+func clusterNamespace(scope monitoring.Scope, clusterID string) string {
+	if v := entity.Key(clusterID, ""); v != "" {
+		return v
+	}
+	return stableHostFromScope(scope)
+}
+
+func backupJobScope(scope monitoring.Scope, clusterID, job string) monitoring.Scope {
+	scope.EntityType = "proxmox-backup-job"
+	scope.EntityID = entity.ID("proxmox-backup-job", clusterNamespace(scope, clusterID), entity.Key(job, "unknown"))
+	scope.Label = labelValue(job, "unknown")
+	return scope
+}
+
+func backupGuestScope(scope monitoring.Scope, clusterID, typ, vmid, guest string) monitoring.Scope {
+	vmid = entity.Key(vmid, "")
+	if vmid == "" {
+		return scope
+	}
+	label := labelValue(guest, vmid)
+	switch typ {
+	case "qemu":
+		scope.EntityType = "proxmox-vm"
+		scope.EntityID = entity.ID("proxmox-vm", clusterNamespace(scope, clusterID), vmid)
+		scope.Label = label
+	case "lxc":
+		scope.EntityType = "proxmox-container"
+		scope.EntityID = entity.ID("proxmox-container", clusterNamespace(scope, clusterID), vmid)
+		scope.Label = label
+	}
+	return scope
+}
+
+func cephClusterScope(scope monitoring.Scope, clusterID string) monitoring.Scope {
+	scope.EntityType = "ceph-cluster"
+	namespace := clusterNamespace(scope, clusterID)
+	scope.EntityID = entity.ID("ceph-cluster", namespace)
+	scope.Label = "Ceph " + namespace
+	return scope
+}
+
+func cephPoolScope(scope monitoring.Scope, clusterID, pool string) monitoring.Scope {
+	scope.EntityType = "ceph-pool"
+	scope.EntityID = entity.ID("ceph-pool", clusterNamespace(scope, clusterID), entity.Key(pool, "unknown"))
+	scope.Label = labelValue(pool, "unknown")
+	return scope
+}
+
+func labelValue(value, fallback string) string {
+	if value = strings.TrimSpace(value); value != "" {
+		return value
+	}
+	if fallback = strings.TrimSpace(fallback); fallback != "" {
+		return fallback
+	}
+	return "unknown"
+}
+
+func emitError(b *monitoring.Builder, kind, operation string, dims map[string]string, err error) {
+	b.EventDetails(kind, monitoring.MergeDimensions(dims, map[string]string{"operation": operation}), monitoring.EventDetails{
+		Attributes: map[string]any{"error": err.Error()},
+	})
+}
+
+func collectTasksAndBackups(ctx context.Context, b *monitoring.Builder, client Client, scope monitoring.Scope, clusterID string) {
 	tasks, err := getClusterTasks(ctx, client)
 	if err != nil {
-		b.Event("proxmox.cluster.tasks.failed", nil, map[string]any{"error": err.Error()})
+		emitError(b, "proxmox.cluster.tasks.failed", "cluster_tasks", nil, err)
 	} else {
 		emitTaskSignals(b, tasks)
 		emitBackupTaskSignals(b, tasks)
 	}
-	if err := collectBackupJobs(ctx, b, client); err != nil {
-		b.Event("proxmox.backup.jobs.failed", nil, map[string]any{"error": err.Error()})
+	if err := collectBackupJobs(ctx, b, client, scope, clusterID); err != nil {
+		emitError(b, "proxmox.backup.jobs.failed", "backup_jobs", nil, err)
 	}
-	if err := collectBackupCoverage(ctx, b, client); err != nil {
-		b.Event("proxmox.backup.coverage.failed", nil, map[string]any{"error": err.Error()})
+	if err := collectBackupCoverage(ctx, b, client, scope, clusterID); err != nil {
+		emitError(b, "proxmox.backup.coverage.failed", "backup_coverage", nil, err)
 	}
 }
 
@@ -258,7 +544,7 @@ func emitTaskSignals(b *monitoring.Builder, tasks []Task) {
 	byStatus := map[string]int{}
 	byTypeStatus := map[string]int{}
 	failedEvents := 0
-	b.Metric("proxmox.tasks.recent", "gauge", float64(len(tasks)), "count", nil)
+	b.Metric("proxmox.tasks.recent", "gauge", float64(len(tasks)), "", nil)
 	for _, task := range tasks {
 		status := taskStatusClass(task)
 		typ := task.Type
@@ -268,16 +554,16 @@ func emitTaskSignals(b *monitoring.Builder, tasks []Task) {
 		byStatus[status]++
 		byTypeStatus[typ+":"+status]++
 		if status == "error" && failedEvents < 10 {
-			b.Event("proxmox.task.failed", taskDims(task), taskPayload(task))
+			emitTaskEvent(b, "proxmox.task.failed", task)
 			failedEvents++
 		}
 	}
 	for status, count := range byStatus {
-		b.Metric("proxmox.tasks.by_status", "gauge", float64(count), "count", map[string]string{"status": status})
+		b.Metric("proxmox.tasks.by_status", "gauge", float64(count), "", map[string]string{"status": status})
 	}
 	for key, count := range byTypeStatus {
 		typ, status, _ := strings.Cut(key, ":")
-		b.Metric("proxmox.tasks.by_type_status", "gauge", float64(count), "count", map[string]string{"type": typ, "status": status})
+		b.Metric("proxmox.tasks.by_type_status", "gauge", float64(count), "", map[string]string{"type": typ, "status": status})
 	}
 }
 
@@ -299,12 +585,12 @@ func emitBackupTaskSignals(b *monitoring.Builder, tasks []Task) {
 			}
 		case "error":
 			failed++
-			b.Event("proxmox.backup.failed", taskDims(task), taskPayload(task))
+			emitTaskEvent(b, "proxmox.backup.failed", task)
 		}
 	}
-	b.Metric("proxmox.backup.tasks.recent", "gauge", float64(total), "count", nil)
-	b.Metric("proxmox.backup.tasks.success", "gauge", float64(success), "count", nil)
-	b.Metric("proxmox.backup.tasks.failed", "gauge", float64(failed), "count", nil)
+	b.Metric("proxmox.backup.tasks.recent", "gauge", float64(total), "", nil)
+	b.Metric("proxmox.backup.tasks.success", "gauge", float64(success), "", nil)
+	b.Metric("proxmox.backup.tasks.failed", "gauge", float64(failed), "", nil)
 	if lastSuccess > 0 {
 		ts := time.Unix(lastSuccess, 0).UTC()
 		b.State("proxmox.backup.last_success.time", ts.Format(time.RFC3339), nil)
@@ -312,7 +598,7 @@ func emitBackupTaskSignals(b *monitoring.Builder, tasks []Task) {
 	}
 }
 
-func collectBackupJobs(ctx context.Context, b *monitoring.Builder, client Client) error {
+func collectBackupJobs(ctx context.Context, b *monitoring.Builder, client Client, scope monitoring.Scope, clusterID string) error {
 	var rows []map[string]any
 	if err := client.get(ctx, "/cluster/backup", &rows); err != nil {
 		return err
@@ -322,42 +608,46 @@ func collectBackupJobs(ctx context.Context, b *monitoring.Builder, client Client
 	disabled := 0
 	for _, job := range jobs {
 		dims := map[string]string{"job": job.ID}
-		b.State("proxmox.backup.job.present", true, dims)
-		b.State("proxmox.backup.job.enabled", job.Enabled, dims)
+		jb := monitoring.NewBuilder(backupJobScope(scope, clusterID, job.ID))
+		jb.State("proxmox.backup.job.present", true, dims)
+		jb.State("proxmox.backup.job.enabled", job.Enabled, dims)
 		if job.Enabled {
 			enabled++
 		} else {
 			disabled++
 		}
 		if job.Schedule != "" {
-			b.State("proxmox.backup.job.schedule", job.Schedule, dims)
+			jb.State("proxmox.backup.job.schedule", job.Schedule, dims)
 		}
 		if job.Storage != "" {
-			b.State("proxmox.backup.job.storage", job.Storage, dims)
+			jb.State("proxmox.backup.job.storage", job.Storage, dims)
 		}
 		if job.Mode != "" {
-			b.State("proxmox.backup.job.mode", job.Mode, dims)
+			jb.State("proxmox.backup.job.mode", job.Mode, dims)
 		}
+		b.Merge(jb.Batch())
 	}
-	b.Metric("proxmox.backup.jobs.total", "gauge", float64(len(jobs)), "count", nil)
-	b.Metric("proxmox.backup.jobs.enabled", "gauge", float64(enabled), "count", nil)
-	b.Metric("proxmox.backup.jobs.disabled", "gauge", float64(disabled), "count", nil)
+	b.Metric("proxmox.backup.jobs.total", "gauge", float64(len(jobs)), "", nil)
+	b.Metric("proxmox.backup.jobs.enabled", "gauge", float64(enabled), "", nil)
+	b.Metric("proxmox.backup.jobs.disabled", "gauge", float64(disabled), "", nil)
 	return nil
 }
 
-func collectBackupCoverage(ctx context.Context, b *monitoring.Builder, client Client) error {
+func collectBackupCoverage(ctx context.Context, b *monitoring.Builder, client Client, scope monitoring.Scope, clusterID string) error {
 	var rows []map[string]any
 	if err := client.get(ctx, "/cluster/backup-info/not-backed-up", &rows); err != nil {
 		return err
 	}
-	b.Metric("proxmox.backup.guests.not_backed_up", "gauge", float64(len(rows)), "count", nil)
+	b.Metric("proxmox.backup.guests.not_backed_up", "gauge", float64(len(rows)), "", nil)
 	for _, row := range rows {
 		dims := map[string]string{}
 		addDim(dims, "vmid", firstString(row, "vmid"))
 		addDim(dims, "guest", firstString(row, "name"))
 		addDim(dims, "type", firstString(row, "type"))
 		addDim(dims, "node", firstString(row, "node"))
-		b.State("proxmox.backup.guest.covered", false, dims)
+		gb := monitoring.NewBuilder(backupGuestScope(scope, clusterID, dims["type"], dims["vmid"], dims["guest"]))
+		gb.State("proxmox.backup.guest.covered", false, dims)
+		b.Merge(gb.Batch())
 	}
 	return nil
 }
@@ -390,25 +680,46 @@ func taskDims(task Task) map[string]string {
 	dims := map[string]string{}
 	addDim(dims, "node", task.Node)
 	addDim(dims, "type", task.Type)
-	addDim(dims, "id", task.ID)
+	addDim(dims, "status", taskStatusClass(task))
 	return dims
 }
 
-func taskPayload(task Task) map[string]any {
-	payload := map[string]any{
-		"status": task.Status,
-		"upid":   task.UPID,
+func taskSubject(prefix string, task Task) string {
+	parts := []string{prefix}
+	if task.Type != "" {
+		parts = append(parts, task.Type)
 	}
-	if task.User != "" {
-		payload["user"] = task.User
+	if task.ID != "" {
+		parts = append(parts, task.ID)
+	} else if task.Node != "" {
+		parts = append(parts, task.Node)
+	}
+	return strings.Join(parts, ":")
+}
+
+func taskPayload(task Task) map[string]any {
+	attributes := map[string]any{}
+	if task.Status != "" {
+		attributes["status"] = task.Status
+	}
+	if task.ID != "" {
+		attributes["taskId"] = task.ID
 	}
 	if task.StartTime > 0 {
-		payload["startTime"] = time.Unix(task.StartTime, 0).UTC().Format(time.RFC3339)
+		attributes["startTime"] = time.Unix(task.StartTime, 0).UTC().Format(time.RFC3339)
 	}
 	if task.EndTime > 0 {
-		payload["endTime"] = time.Unix(task.EndTime, 0).UTC().Format(time.RFC3339)
+		attributes["endTime"] = time.Unix(task.EndTime, 0).UTC().Format(time.RFC3339)
 	}
-	return payload
+	return attributes
+}
+
+func emitTaskEvent(b *monitoring.Builder, kind string, task Task) {
+	b.EventDetails(kind, taskDims(task), monitoring.EventDetails{
+		Attributes:    taskPayload(task),
+		ActorID:       task.User,
+		CorrelationID: task.UPID,
+	})
 }
 
 type BackupJob struct {
@@ -437,32 +748,42 @@ func parseBackupJobs(rows []map[string]any) []BackupJob {
 	return jobs
 }
 
-func collectCephAPI(ctx context.Context, b *monitoring.Builder, client Client, nodes []string) {
+func collectCephAPI(ctx context.Context, b *monitoring.Builder, client Client, scope monitoring.Scope, clusterID string, nodes []string) {
 	b.State("proxmox.ceph.api.enabled", true, nil)
 	status, err := getCephStatus(ctx, client)
 	if err != nil {
-		b.State("proxmox.ceph.available", false, nil)
-		b.Event("proxmox.ceph.status.failed", nil, map[string]any{"error": err.Error()})
+		b.State("system.ceph.available", false, nil)
+		if isCephUnavailable(err) {
+			return
+		}
+		emitError(b, "proxmox.ceph.status.failed", "ceph_status", nil, err)
 		return
 	}
+	cephID := entity.Key(status.FSID, clusterID)
+	cb := monitoring.NewBuilder(cephClusterScope(scope, cephID))
 	summary := status.summary()
-	b.State("proxmox.ceph.available", true, nil)
+	cb.State("system.ceph.available", true, nil)
+	cb.State("system.ceph.present", true, nil)
+	if status.FSID != "" {
+		cb.State("system.ceph.fsid", status.FSID, nil)
+	}
 	if summary.Health != "" {
-		b.State("proxmox.ceph.health.status", summary.Health, nil)
-		b.State("proxmox.ceph.health.healthy", summary.Health == "HEALTH_OK", nil)
+		cb.State("system.ceph.health.status", summary.Health, nil)
+		cb.State("system.ceph.health.healthy", summary.Health == "HEALTH_OK", nil)
 	}
-	b.Metric("proxmox.ceph.osds.total", "gauge", float64(summary.OSDsTotal), "count", nil)
-	b.Metric("proxmox.ceph.osds.up", "gauge", float64(summary.OSDsUp), "count", nil)
-	b.Metric("proxmox.ceph.osds.in", "gauge", float64(summary.OSDsIn), "count", nil)
-	b.Metric("proxmox.ceph.pgs.total", "gauge", float64(summary.PGsTotal), "count", nil)
-	b.Metric("proxmox.ceph.bytes.used", "gauge", summary.BytesUsed, "bytes", nil)
-	b.Metric("proxmox.ceph.bytes.total", "gauge", summary.BytesTotal, "bytes", nil)
-	b.Metric("proxmox.ceph.bytes.available", "gauge", summary.BytesAvailable, "bytes", nil)
+	cb.Metric("system.ceph.osds.total", "gauge", float64(summary.OSDsTotal), "", nil)
+	cb.Metric("system.ceph.osds.up", "gauge", float64(summary.OSDsUp), "", nil)
+	cb.Metric("system.ceph.osds.in", "gauge", float64(summary.OSDsIn), "", nil)
+	cb.Metric("system.ceph.pgs.total", "gauge", float64(summary.PGsTotal), "", nil)
+	cb.Metric("system.ceph.bytes.used", "gauge", summary.BytesUsed, "bytes", nil)
+	cb.Metric("system.ceph.bytes.total", "gauge", summary.BytesTotal, "bytes", nil)
+	cb.Metric("system.ceph.bytes.available", "gauge", summary.BytesAvailable, "bytes", nil)
 	for state, count := range summary.PGsByState {
-		b.Metric("proxmox.ceph.pgs.by_state", "gauge", float64(count), "count", map[string]string{"state": state})
+		cb.Metric("system.ceph.pgs.by_state", "gauge", float64(count), "", map[string]string{"state": state})
 	}
+	b.Merge(cb.Batch())
 	if len(nodes) > 0 {
-		collectCephPools(ctx, b, client, nodes)
+		collectCephPools(ctx, b, client, scope, cephID, nodes)
 	}
 }
 
@@ -474,32 +795,63 @@ func getCephStatus(ctx context.Context, client Client) (CephStatus, error) {
 	return status, nil
 }
 
-func collectCephPools(ctx context.Context, b *monitoring.Builder, client Client, nodes []string) {
+func collectCephPools(ctx context.Context, b *monitoring.Builder, client Client, scope monitoring.Scope, clusterID string, nodes []string) {
 	var lastErr error
 	for _, node := range nodes {
 		var rows []map[string]any
 		err := client.get(ctx, "/nodes/"+url.PathEscape(node)+"/ceph/pools", &rows)
 		if err != nil {
+			if isCephUnavailable(err) {
+				return
+			}
 			lastErr = err
 			continue
 		}
 		pools := parseCephPools(rows)
-		b.Metric("proxmox.ceph.pools", "gauge", float64(len(pools)), "count", nil)
+		cb := monitoring.NewBuilder(cephClusterScope(scope, clusterID))
+		cb.Metric("system.ceph.pools", "gauge", float64(len(pools)), "", nil)
+		b.Merge(cb.Batch())
 		for _, pool := range pools {
-			dims := map[string]string{"pool": pool.Name, "node": node}
-			b.State("proxmox.ceph.pool.present", true, dims)
-			b.Metric("proxmox.ceph.pool.bytes.used", "gauge", pool.BytesUsed, "bytes", dims)
-			b.Metric("proxmox.ceph.pool.bytes.available", "gauge", pool.BytesAvailable, "bytes", dims)
-			b.Metric("proxmox.ceph.pool.objects", "gauge", pool.Objects, "count", dims)
+			dims := map[string]string{"pool": pool.Name}
+			pb := monitoring.NewBuilder(cephPoolScope(scope, clusterID, pool.Name))
+			pb.State("system.ceph.pool.present", true, dims)
+			pb.Metric("system.ceph.pool.bytes.used", "gauge", pool.BytesUsed, "bytes", dims)
+			pb.Metric("system.ceph.pool.bytes.available", "gauge", pool.BytesAvailable, "bytes", dims)
+			pb.Metric("system.ceph.pool.objects", "gauge", pool.Objects, "count", dims)
+			b.Merge(pb.Batch())
 		}
 		return
 	}
 	if lastErr != nil {
-		b.Event("proxmox.ceph.pools.failed", nil, map[string]any{"error": lastErr.Error()})
+		emitError(b, "proxmox.ceph.pools.failed", "ceph_pools", nil, lastErr)
 	}
 }
 
+func isCephUnavailable(err error) bool {
+	text := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"ceph is not initialized",
+		"ceph not configured",
+		"ceph is not configured",
+		"ceph.conf",
+		"cluster not found",
+		"no such file or directory",
+		"no monitors specified",
+		"not installed",
+		"not initialized",
+		"objectnotfound",
+		"rados object not found",
+		"unable to get monitor info",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 type CephStatus struct {
+	FSID   string `json:"fsid"`
 	Health struct {
 		Status string `json:"status"`
 	} `json:"health"`
@@ -640,6 +992,8 @@ func firstFloat(row map[string]any, keys ...string) float64 {
 			return v
 		case int:
 			return float64(v)
+		case int64:
+			return float64(v)
 		case json.Number:
 			parsed, err := v.Float64()
 			if err == nil {
@@ -679,28 +1033,14 @@ type Resource struct {
 	Uptime  float64 `json:"uptime"`
 }
 
-func normalizeBaseURL(raw string) (string, error) {
-	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "", err
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", fmt.Errorf("proxmox api url must use http or https")
-	}
-	if u.Host == "" {
-		return "", fmt.Errorf("proxmox api url must include a host")
-	}
-	if !strings.HasSuffix(u.Path, "/api2/json") {
-		u.Path = strings.TrimRight(u.Path, "/") + "/api2/json"
-	}
-	return strings.TrimRight(u.String(), "/"), nil
-}
-
-func authHeader(token string) string {
-	token = strings.TrimSpace(token)
-	if strings.HasPrefix(token, "PVEAPIToken=") {
-		return token
-	}
-	return "PVEAPIToken=" + token
+type NodeStatus struct {
+	Node    string  `json:"node"`
+	Status  string  `json:"status"`
+	CPU     float64 `json:"cpu"`
+	MaxCPU  float64 `json:"maxcpu"`
+	Mem     float64 `json:"mem"`
+	MaxMem  float64 `json:"maxmem"`
+	Disk    float64 `json:"disk"`
+	MaxDisk float64 `json:"maxdisk"`
+	Uptime  float64 `json:"uptime"`
 }

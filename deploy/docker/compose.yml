@@ -1,0 +1,17 @@
+services:
+  pulse-docker:
+    image: ghcr.io/valentinkolb/pulse-docker:latest
+    container_name: pulse-docker
+    restart: unless-stopped
+    command: ["schedule"]
+    environment:
+      PULSE_INTERVAL_SECONDS: ${PULSE_INTERVAL_SECONDS:-60}
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./pulse-docker.toml:/etc/pulse/ingestor.toml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro

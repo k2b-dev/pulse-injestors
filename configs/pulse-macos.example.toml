@@ -4,7 +4,11 @@ ingest_token = "replace-me"
 
 [entity]
 id = "macbook-1"
-type = "macos-device"
+label = "MacBook 1"
+type = "host"
+
+[dimensions]
+environment = "production"
 
 [runner]
 interval_seconds = 300

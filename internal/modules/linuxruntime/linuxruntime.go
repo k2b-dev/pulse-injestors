@@ -69,7 +69,7 @@ func collectPressure(b *monitoring.Builder, proc string) {
 			b.Metric("system.pressure.avg10", "gauge", sample.Avg10, "percent", dims)
 			b.Metric("system.pressure.avg60", "gauge", sample.Avg60, "percent", dims)
 			b.Metric("system.pressure.avg300", "gauge", sample.Avg300, "percent", dims)
-			b.Metric("system.pressure.total", "counter", sample.Total, "microseconds", dims)
+			b.Metric("system.pressure.total", "counter", sample.Total/1_000_000, "seconds", dims)
 		}
 	}
 }
@@ -129,9 +129,9 @@ func collectProcesses(b *monitoring.Builder, proc string) {
 		total++
 	}
 	b.State("system.processes.available", true, nil)
-	b.Metric("system.processes.total", "gauge", float64(total), "count", nil)
+	b.Metric("system.processes.total", "gauge", float64(total), "", nil)
 	for state, count := range counts {
-		b.Metric("system.processes.by_state", "gauge", float64(count), "count", map[string]string{"state": state})
+		b.Metric("system.processes.by_state", "gauge", float64(count), "", map[string]string{"state": state})
 	}
 }
 
@@ -207,7 +207,7 @@ func collectSockets(b *monitoring.Builder, proc string) {
 				"family":   sample.Family,
 				"state":    sample.State,
 			}
-			b.Metric("system.network.sockets", "gauge", float64(sample.Count), "count", dims)
+			b.Metric("system.network.sockets", "gauge", float64(sample.Count), "", dims)
 		}
 	}
 	b.State("system.network.sockets.available", hadFile, nil)

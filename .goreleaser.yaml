@@ -1,0 +1,101 @@
+version: 2
+
+project_name: pulse-injestors
+
+builds:
+  - id: pulse-linux
+    main: ./cmd/pulse-linux
+    binary: pulse-linux
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+  - id: pulse-macos
+    main: ./cmd/pulse-macos
+    binary: pulse-macos
+    env: [CGO_ENABLED=0]
+    goos: [darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+  - id: pulse-proxmox
+    main: ./cmd/pulse-proxmox
+    binary: pulse-proxmox
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+  - id: pulse-proxmox-backup-server
+    main: ./cmd/pulse-proxmox-backup-server
+    binary: pulse-proxmox-backup-server
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+  - id: pulse-uptime
+    main: ./cmd/pulse-uptime
+    binary: pulse-uptime
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: pulse-linux
+    ids: [pulse-linux]
+    name_template: pulse-linux_{{ .Os }}_{{ .Arch }}
+    formats: [tar.gz]
+
+  - id: pulse-macos
+    ids: [pulse-macos]
+    name_template: pulse-macos_{{ .Os }}_{{ .Arch }}
+    formats: [tar.gz]
+
+  - id: pulse-proxmox
+    ids: [pulse-proxmox]
+    name_template: pulse-proxmox_{{ .Os }}_{{ .Arch }}
+    formats: [tar.gz]
+
+  - id: pulse-proxmox-backup-server
+    ids: [pulse-proxmox-backup-server]
+    name_template: pulse-proxmox-backup-server_{{ .Os }}_{{ .Arch }}
+    formats: [tar.gz]
+
+  - id: pulse-uptime
+    ids: [pulse-uptime]
+    name_template: pulse-uptime_{{ .Os }}_{{ .Arch }}
+    formats: [tar.gz]
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  github:
+    owner: ValentinKolb
+    name: pulse-injestors
+  draft: false
+  prerelease: auto

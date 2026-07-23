@@ -3,8 +3,13 @@ ingest_url = "https://pulse.example.com/ingest/source"
 ingest_token = "replace-me"
 
 [entity]
+# Stable host id. PBS, datastore, job, and host-resource entity ids are derived from it.
 id = "pbs-1"
-type = "proxmox-backup-server"
+label = "pbs-1"
+type = "host"
+
+[dimensions]
+environment = "production"
 
 [runner]
 interval_seconds = 60
@@ -15,8 +20,22 @@ timeout_seconds = 10
 max_retries = 3
 initial_backoff_ms = 500
 
+[host]
+proc_root = "/proc"
+sys_root = "/sys"
+root = "/"
+cpu_sample_ms = 250
+enable_thermal = true
+enable_btrfs = true
+enable_zfs = true
+enable_ceph = true
+
+[linux]
+profile = "pbs"
+systemd_units = []
+package_timeout_seconds = 20
+disk_health_timeout_seconds = 20
+
 [pbs]
-api_url = "https://pbs.example.com:8007"
-api_token = "root@pam!pulse:replace-me"
+command_path = "proxmox-backup-debug"
 timeout_seconds = 10
-insecure_skip_verify = false

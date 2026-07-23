@@ -36,6 +36,16 @@ Next useful work:
 
 - Add more battery trend context once Pulse has history-aware views.
 
+### `pulse-uptime`
+
+Purpose: run as a one-shot internet and endpoint probe on Linux or macOS.
+
+Current scope:
+
+- Built-in ICMP, DNS, TCP, and HTTP internet checks.
+- Custom named targets with stable endpoint resources.
+- Availability, duration, HTTP status, DNS results, and TLS certificate lifetime.
+
 ## Priority 3: infrastructure targets
 
 ### `pulse-postgres`
@@ -74,5 +84,5 @@ Shared optional modules should stay reusable from `pulse-docker` and `pulse-linu
 Keep the script collector as the low-friction customization path:
 
 - Scripts emit Pulse JSON fragments.
-- Runner injects entity, timestamp, and dimensions.
+- Runner injects missing resources, timestamps, and dimensions.
 - Script failures become events/states and must not break other collectors.

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/valentinkolb/pulse-injestors/internal/entity"
 	"github.com/valentinkolb/pulse-injestors/internal/monitoring"
 	"github.com/valentinkolb/pulse-injestors/internal/pulse"
 )
@@ -63,29 +64,36 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 		avail := st.Bavail * blockSize
 		free := st.Bfree * blockSize
 		used := total - free
-		dims := map[string]string{
-			"mount":  mount.Point,
-			"fstype": mount.FSType,
-			"source": mount.Source,
-		}
-		b.Metric("system.filesystem.total", "gauge", float64(total), "bytes", dims)
-		b.Metric("system.filesystem.available", "gauge", float64(avail), "bytes", dims)
-		b.Metric("system.filesystem.used", "gauge", float64(used), "bytes", dims)
+		dims := map[string]string{"mount": mount.Point}
+		fb := monitoring.NewBuilder(filesystemScope(scope, mount))
+		fb.State("system.filesystem.type", mount.FSType, dims)
+		fb.State("system.filesystem.source", mount.Source, dims)
+		fb.Metric("system.filesystem.total", "gauge", float64(total), "bytes", dims)
+		fb.Metric("system.filesystem.available", "gauge", float64(avail), "bytes", dims)
+		fb.Metric("system.filesystem.used", "gauge", float64(used), "bytes", dims)
 		if total > 0 {
-			b.Metric("system.filesystem.usage", "gauge", (float64(used)/float64(total))*100, "percent", dims)
+			fb.Metric("system.filesystem.usage", "gauge", (float64(used)/float64(total))*100, "percent", dims)
 		}
 		if st.Files > 0 {
 			filesUsed := st.Files - st.Ffree
-			b.Metric("system.filesystem.inodes.used", "gauge", float64(filesUsed), "count", dims)
-			b.Metric("system.filesystem.inodes.usage", "gauge", (float64(filesUsed)/float64(st.Files))*100, "percent", dims)
+			fb.Metric("system.filesystem.inodes.used", "gauge", float64(filesUsed), "count", dims)
+			fb.Metric("system.filesystem.inodes.usage", "gauge", (float64(filesUsed)/float64(st.Files))*100, "percent", dims)
 		}
-		b.State("system.filesystem.readonly", strings.Contains(","+mount.Options+",", ",ro,"), dims)
+		fb.State("system.filesystem.readonly", strings.Contains(","+mount.Options+",", ",ro,"), dims)
+		b.Merge(fb.Batch())
 		collected++
 	}
 	if collected > 0 {
 		return b.Batch(), nil
 	}
 	return b.Batch(), errors.Join(errs...)
+}
+
+func filesystemScope(scope monitoring.Scope, mount Mount) monitoring.Scope {
+	scope.EntityType = "filesystem"
+	scope.EntityID = entity.ID("filesystem", entity.StableHostIDFromScope(scope.EntityID, scope.Dimensions), entity.Key(mount.Point, "root"))
+	scope.Label = mount.Point
+	return scope
 }
 
 func ReadMounts(path string) ([]Mount, error) {

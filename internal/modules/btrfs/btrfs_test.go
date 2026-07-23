@@ -26,8 +26,11 @@ Overall:
 	metrics := map[string]float64{}
 	for _, metric := range builder.Batch().Metrics {
 		metrics[metric.Name] = metric.Value
-		if metric.Dimensions["mount"] != "/data" || metric.Dimensions["source"] != "/dev/sdb" {
+		if metric.Dimensions["mount"] != "/data" {
 			t.Fatalf("dims = %#v", metric.Dimensions)
+		}
+		if _, ok := metric.Dimensions["source"]; ok {
+			t.Fatalf("runtime source must not be a dimension: %#v", metric.Dimensions)
 		}
 	}
 	if metrics["system.btrfs.device.size"] != 107374182400 {
@@ -38,5 +41,19 @@ Overall:
 	}
 	if metrics["system.btrfs.free"] != 96636764160 {
 		t.Fatalf("free = %v", metrics["system.btrfs.free"])
+	}
+}
+
+func TestBtrfsScopeUsesResourceEntity(t *testing.T) {
+	scope := btrfsScope(monitoring.Scope{
+		EntityID:   "host:server-01",
+		EntityType: "host",
+		Dimensions: map[string]string{
+			"host": "server-01",
+		},
+	}, filesystem.Mount{Point: "/data"})
+
+	if scope.EntityType != "filesystem" || scope.EntityID != "filesystem:server-01:data" {
+		t.Fatalf("scope = %#v", scope)
 	}
 }

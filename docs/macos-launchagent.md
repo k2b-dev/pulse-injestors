@@ -1,22 +1,20 @@
 # macOS LaunchAgent
 
-Use this LaunchAgent to run `pulse-macos` as a scheduled one-shot client monitor.
-
-1. Install the binary at `/usr/local/bin/pulse-macos`.
-2. Put the Pulse config at `/etc/pulse/ingestor.toml`.
-3. Copy `configs/launchd/com.valentinkolb.pulse-macos.plist` to `~/Library/LaunchAgents/`.
-4. Load it:
+The native installer creates and manages the macOS LaunchAgent automatically:
 
 ```sh
-launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.valentinkolb.pulse-macos.plist
-launchctl enable "gui/$(id -u)/com.valentinkolb.pulse-macos"
+curl -fsSL \
+  https://github.com/ValentinKolb/pulse-injestors/releases/latest/download/install.sh \
+  | sh -s -- --ingestor=macos
 ```
 
-The template runs once at load and then every 300 seconds. Keep secrets in the TOML config, not in the plist. Logs go to `/tmp/pulse-macos.out.log` and `/tmp/pulse-macos.err.log`.
+It installs:
 
-Validate locally before loading:
+- `/usr/local/bin/pulse-macos`
+- `~/Library/Application Support/Pulse/ingestor.toml`
+- `~/Library/LaunchAgents/dev.pulse.pulse-macos.plist`
+- logs under `~/Library/Logs/Pulse/`
 
-```sh
-/usr/local/bin/pulse-macos --config /etc/pulse/ingestor.toml --local --pretty once
-plutil -lint ~/Library/LaunchAgents/com.valentinkolb.pulse-macos.plist
-```
+Run the installer as the target user, not as root. It requests `sudo` only while installing the system binary.
+
+The complete user guide is [`docs/en/ingestor-macos.md`](en/ingestor-macos.md).

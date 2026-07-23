@@ -1,0 +1,39 @@
+[pulse]
+ingest_url = "https://pulse.example.com/api/pulse/ingest"
+ingest_token = "replace-me"
+
+[entity]
+id = "office-berlin"
+label = "Berlin office"
+
+[dimensions]
+environment = "production"
+site = "berlin"
+
+[runner]
+interval_seconds = 60
+collector_timeout_seconds = 30
+
+[http]
+timeout_seconds = 10
+max_retries = 3
+initial_backoff_ms = 500
+
+[uptime]
+enable_defaults = true
+concurrency = 4
+timeout_seconds = 5
+
+# [[uptime.target]]
+# id = "pulse-api"
+# label = "Pulse API"
+# kind = "http"
+# address = "https://pulse.example.com/health"
+# expected_status = 200
+# timeout_seconds = 5
+
+# [[uptime.target]]
+# id = "database"
+# label = "PostgreSQL"
+# kind = "tcp"
+# address = "database.internal:5432"

@@ -7,15 +7,27 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/alecthomas/kong"
 
 	"github.com/valentinkolb/pulse-injestors/internal/config"
+	"github.com/valentinkolb/pulse-injestors/internal/entity"
+	"github.com/valentinkolb/pulse-injestors/internal/modules/btrfs"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/ceph"
+	"github.com/valentinkolb/pulse-injestors/internal/modules/diskhealth"
+	"github.com/valentinkolb/pulse-injestors/internal/modules/filesystem"
+	"github.com/valentinkolb/pulse-injestors/internal/modules/linuxruntime"
+	"github.com/valentinkolb/pulse-injestors/internal/modules/network"
+	"github.com/valentinkolb/pulse-injestors/internal/modules/packages"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/proxmox"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/script"
+	"github.com/valentinkolb/pulse-injestors/internal/modules/system"
+	"github.com/valentinkolb/pulse-injestors/internal/modules/systemd"
+	"github.com/valentinkolb/pulse-injestors/internal/modules/thermal"
+	"github.com/valentinkolb/pulse-injestors/internal/modules/zfs"
 	"github.com/valentinkolb/pulse-injestors/internal/monitoring"
 	"github.com/valentinkolb/pulse-injestors/internal/pulse"
 )
@@ -25,10 +37,11 @@ var version = "dev"
 type cli struct {
 	Config string `name:"config" help:"TOML config path. Defaults to /etc/pulse/ingestor.toml when present." env:"PULSE_CONFIG"`
 
-	IngestURL   string `name:"ingest-url" help:"Pulse ingest endpoint URL." env:"PULSE_INGEST_URL"`
-	IngestToken string `name:"ingest-token" help:"Pulse ingest bearer token." env:"PULSE_INGEST_TOKEN"`
-	EntityID    string `name:"entity-id" help:"Stable monitored entity id. Defaults to hostname." env:"PULSE_ENTITY_ID"`
-	EntityType  string `name:"entity-type" help:"Monitored entity type." env:"PULSE_ENTITY_TYPE"`
+	IngestURL   string   `name:"ingest-url" help:"Pulse ingest endpoint URL." env:"PULSE_INGEST_URL"`
+	IngestToken string   `name:"ingest-token" help:"Pulse ingest bearer token." env:"PULSE_INGEST_TOKEN"`
+	EntityID    string   `name:"entity-id" help:"Stable monitored entity id. Defaults to hostname." env:"PULSE_ENTITY_ID"`
+	EntityLabel string   `name:"entity-label" help:"Human-readable monitored host label. Defaults to hostname." env:"PULSE_ENTITY_LABEL"`
+	Dimensions  []string `name:"dimension" help:"Bounded global dimension as key=value. Repeat for multiple values." env:"PULSE_DIMENSIONS" sep:","`
 
 	IntervalSeconds         int `name:"interval-seconds" help:"Collection interval for run mode." env:"PULSE_INTERVAL_SECONDS"`
 	CollectorTimeoutSeconds int `name:"collector-timeout-seconds" help:"Overall timeout per collector in seconds." env:"PULSE_COLLECTOR_TIMEOUT_SECONDS"`
@@ -36,12 +49,20 @@ type cli struct {
 	MaxRetries              int `name:"max-retries" help:"HTTP retry count for network, 408, 429 and 5xx failures." env:"PULSE_HTTP_MAX_RETRIES"`
 	InitialBackoffMS        int `name:"initial-backoff-ms" help:"Initial retry backoff in milliseconds." env:"PULSE_HTTP_INITIAL_BACKOFF_MS"`
 
-	ProxmoxAPIURL             string `name:"proxmox-api-url" help:"Proxmox VE API base URL." env:"PULSE_PROXMOX_API_URL"`
-	ProxmoxAPIToken           string `name:"proxmox-api-token" help:"Proxmox VE API token value." env:"PULSE_PROXMOX_API_TOKEN"`
-	ProxmoxTimeoutSeconds     int    `name:"proxmox-timeout-seconds" help:"Proxmox API timeout in seconds." env:"PULSE_PROXMOX_TIMEOUT_SECONDS"`
-	ProxmoxInsecureSkipVerify bool   `name:"proxmox-insecure-skip-verify" help:"Skip Proxmox API TLS verification." env:"PULSE_PROXMOX_INSECURE_SKIP_VERIFY"`
-	ProxmoxEnableCephAPI      bool   `name:"proxmox-enable-ceph-api" help:"Collect Ceph data through the Proxmox API." env:"PULSE_PROXMOX_ENABLE_CEPH_API"`
-	ProxmoxEnableLocalCeph    bool   `name:"proxmox-enable-local-ceph" help:"Also collect local Ceph CLI metrics on this node." env:"PULSE_PROXMOX_ENABLE_LOCAL_CEPH"`
+	ProcRoot    string `name:"proc-root" help:"procfs root to read." env:"PULSE_HOST_PROC_ROOT"`
+	SysRoot     string `name:"sys-root" help:"sysfs root to read." env:"PULSE_HOST_SYS_ROOT"`
+	HostRoot    string `name:"host-root" help:"Host root filesystem." env:"PULSE_HOST_ROOT"`
+	CPUSampleMS int    `name:"cpu-sample-ms" help:"CPU usage sample window in milliseconds." env:"PULSE_HOST_CPU_SAMPLE_MS"`
+
+	LinuxProfile             string `name:"linux-profile" help:"Linux monitoring profile: server, desktop, docker-host." env:"PULSE_LINUX_PROFILE"`
+	SystemdUnits             string `name:"systemd-units" help:"Comma-separated systemd units to monitor." env:"PULSE_LINUX_SYSTEMD_UNITS"`
+	PackageTimeoutSeconds    int    `name:"package-timeout-seconds" help:"Linux package update timeout in seconds." env:"PULSE_LINUX_PACKAGE_TIMEOUT_SECONDS"`
+	DiskHealthTimeoutSeconds int    `name:"disk-health-timeout-seconds" help:"SMART/NVMe disk health timeout in seconds." env:"PULSE_LINUX_DISK_HEALTH_TIMEOUT_SECONDS"`
+
+	ProxmoxPveshPath       string `name:"proxmox-pvesh-path" help:"Path to pvesh on the local Proxmox VE node." env:"PULSE_PROXMOX_PVESH_PATH"`
+	ProxmoxTimeoutSeconds  int    `name:"proxmox-timeout-seconds" help:"Proxmox local command timeout in seconds." env:"PULSE_PROXMOX_TIMEOUT_SECONDS"`
+	ProxmoxEnableCephAPI   *bool  `name:"proxmox-enable-ceph-api" help:"Collect Ceph data through local pvesh." env:"PULSE_PROXMOX_ENABLE_CEPH_API"`
+	ProxmoxEnableLocalCeph *bool  `name:"proxmox-enable-local-ceph" help:"Also collect local Ceph CLI metrics on this node." env:"PULSE_PROXMOX_ENABLE_LOCAL_CEPH"`
 
 	Local   bool `name:"local" help:"Write collected Pulse batch JSON to stdout instead of sending it." env:"PULSE_LOCAL"`
 	Pretty  bool `name:"pretty" help:"With --local, print a human-readable report instead of JSON." env:"PULSE_LOCAL_PRETTY"`
@@ -83,11 +104,12 @@ func main() {
 	defer cancel()
 
 	runner := monitoring.Runner{
-		EntityID:   cfg.Entity.ID,
-		EntityType: cfg.Entity.Type,
-		Dimensions: map[string]string{
+		EntityID:   entity.HostID(cfg.Entity.ID),
+		EntityType: "host",
+		Label:      cfg.Entity.Label,
+		Dimensions: monitoring.MergeDimensions(cfg.Dimensions, map[string]string{
 			"host": cfg.Entity.ID,
-		},
+		}),
 		Collectors: collectors(cfg),
 		Sender:     sender(c, cfg, log),
 		Timeout:    cfg.CollectorTimeout(),
@@ -119,34 +141,53 @@ func loadConfig(c cli) (config.Config, error) {
 	if err != nil {
 		return config.Config{}, fmt.Errorf("load %s: %w", cfgPath, err)
 	}
+	if fileCfg.Host.ProcRoot == "" {
+		fileCfg.Host.ProcRoot = "/proc"
+	}
+	if fileCfg.Host.SysRoot == "" {
+		fileCfg.Host.SysRoot = "/sys"
+	}
+	if fileCfg.Host.Root == "" {
+		fileCfg.Host.Root = "/"
+	}
+	dimensions, err := config.ParseDimensions(c.Dimensions)
+	if err != nil {
+		return config.Config{}, err
+	}
 	cfg, err := config.Resolve(fileCfg, config.Overlay{
-		ConfigPath:                cfgPath,
-		IngestURL:                 c.IngestURL,
-		IngestToken:               c.IngestToken,
-		EntityID:                  c.EntityID,
-		EntityType:                c.EntityType,
-		TimeoutSeconds:            c.TimeoutSeconds,
-		MaxRetries:                c.MaxRetries,
-		InitialBackoffMS:          c.InitialBackoffMS,
-		IntervalSeconds:           c.IntervalSeconds,
-		CollectorTimeoutSeconds:   c.CollectorTimeoutSeconds,
-		ProxmoxAPIURL:             c.ProxmoxAPIURL,
-		ProxmoxAPIToken:           c.ProxmoxAPIToken,
-		ProxmoxTimeoutSeconds:     c.ProxmoxTimeoutSeconds,
-		ProxmoxInsecureSkipVerify: c.ProxmoxInsecureSkipVerify,
-		ProxmoxEnableCephAPI:      c.ProxmoxEnableCephAPI,
-		ProxmoxEnableLocalCeph:    c.ProxmoxEnableLocalCeph,
-		AllowMissingPulse:         c.Local,
+		ConfigPath:                    cfgPath,
+		IngestURL:                     c.IngestURL,
+		IngestToken:                   c.IngestToken,
+		EntityID:                      c.EntityID,
+		EntityLabel:                   c.EntityLabel,
+		Dimensions:                    dimensions,
+		TimeoutSeconds:                c.TimeoutSeconds,
+		MaxRetries:                    c.MaxRetries,
+		InitialBackoffMS:              c.InitialBackoffMS,
+		IntervalSeconds:               c.IntervalSeconds,
+		CollectorTimeoutSeconds:       c.CollectorTimeoutSeconds,
+		ProcRoot:                      c.ProcRoot,
+		SysRoot:                       c.SysRoot,
+		HostRoot:                      c.HostRoot,
+		CPUSampleMS:                   c.CPUSampleMS,
+		LinuxProfile:                  c.LinuxProfile,
+		LinuxSystemdUnits:             splitCSV(c.SystemdUnits),
+		LinuxPackageTimeoutSeconds:    c.PackageTimeoutSeconds,
+		LinuxDiskHealthTimeoutSeconds: c.DiskHealthTimeoutSeconds,
+		ProxmoxPveshPath:              c.ProxmoxPveshPath,
+		ProxmoxTimeoutSeconds:         c.ProxmoxTimeoutSeconds,
+		ProxmoxEnableCephAPI:          c.ProxmoxEnableCephAPI,
+		ProxmoxEnableLocalCeph:        c.ProxmoxEnableLocalCeph,
+		AllowMissingPulse:             c.Local,
 	})
 	if err != nil {
 		return config.Config{}, err
 	}
-	if cfg.Proxmox.APIURL == "" {
-		return config.Config{}, fmt.Errorf("proxmox api_url is required")
+	cfg.Entity.ID = entity.StableHostID(cfg.Entity.ID)
+	if cfg.Entity.ID == "" {
+		return config.Config{}, fmt.Errorf("entity id is required")
 	}
-	if cfg.Proxmox.APIToken == "" {
-		return config.Config{}, fmt.Errorf("proxmox api_token is required")
-	}
+	cfg.Entity.Type = "host"
 	return cfg, nil
 }
 
@@ -166,15 +207,34 @@ func sender(c cli, cfg config.Config, log *slog.Logger) monitoring.Sender {
 
 func collectors(cfg config.Config) []monitoring.Collector {
 	out := []monitoring.Collector{
-		proxmox.Collector{
-			BaseURL:            cfg.Proxmox.APIURL,
-			APIToken:           cfg.Proxmox.APIToken,
-			Timeout:            cfg.ProxmoxTimeout(),
-			InsecureSkipVerify: cfg.Proxmox.InsecureSkipVerify,
-			EnableCephAPI:      cfg.Proxmox.EnableCephAPI,
+		system.Collector{ProcRoot: cfg.Host.ProcRoot, CPUSampleTime: cfg.CPUSampleWindow()},
+		filesystem.Collector{ProcRoot: cfg.Host.ProcRoot, HostRoot: cfg.Host.Root},
+		network.Collector{ProcRoot: cfg.Host.ProcRoot},
+		linuxruntime.Collector{ProcRoot: cfg.Host.ProcRoot},
+		packages.Collector{Timeout: time.Duration(cfg.Linux.PackageTimeoutSeconds) * time.Second},
+		systemd.Collector{Units: linuxSystemdUnits(cfg), Timeout: 5 * time.Second},
+		diskhealth.Collector{Timeout: time.Duration(cfg.Linux.DiskHealthTimeoutSeconds) * time.Second},
+		monitoring.ScopedCollector{
+			EntityID:   entity.ID("proxmox-node", cfg.Entity.ID),
+			EntityType: "proxmox-node",
+			Label:      cfg.Entity.Label,
+			Collector: proxmox.Collector{
+				PveshPath:     cfg.Proxmox.PveshPath,
+				Timeout:       cfg.ProxmoxTimeout(),
+				EnableCephAPI: cfg.ProxmoxCephAPIEnabled(),
+			},
 		},
 	}
-	if cfg.Proxmox.EnableLocalCeph {
+	if cfg.ThermalEnabled() {
+		out = append(out, thermal.Collector{SysRoot: cfg.Host.SysRoot})
+	}
+	if cfg.BtrfsEnabled() {
+		out = append(out, btrfs.Collector{ProcRoot: cfg.Host.ProcRoot, HostRoot: cfg.Host.Root, Timeout: 5 * time.Second})
+	}
+	if cfg.ZfsEnabled() {
+		out = append(out, zfs.Collector{Timeout: 5 * time.Second})
+	}
+	if cfg.ProxmoxLocalCephEnabled() || cfg.CephEnabled() {
 		out = append(out, ceph.Collector{Timeout: 5 * time.Second})
 	}
 	if len(cfg.Scripts) > 0 {
@@ -189,6 +249,58 @@ func collectors(cfg config.Config) []monitoring.Collector {
 			})
 		}
 		out = append(out, script.Collector{Scripts: scripts})
+	}
+	return out
+}
+
+func linuxSystemdUnits(cfg config.Config) []string {
+	return mergeStringLists(profileSystemdUnits(cfg.Linux.Profile), cfg.Linux.SystemdUnits)
+}
+
+func profileSystemdUnits(profile string) []string {
+	switch strings.TrimSpace(strings.ToLower(profile)) {
+	case "", "none":
+		return nil
+	case "server":
+		return []string{"ssh.service", "sshd.service"}
+	case "desktop":
+		return []string{"ssh.service", "sshd.service", "display-manager.service"}
+	case "docker-host":
+		return []string{"docker.service", "containerd.service", "ssh.service", "sshd.service"}
+	case "proxmox":
+		return []string{"pveproxy.service", "pvedaemon.service", "pvestatd.service", "pve-cluster.service", "corosync.service", "ssh.service", "sshd.service"}
+	default:
+		return nil
+	}
+}
+
+func mergeStringLists(values ...[]string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, list := range values {
+		for _, value := range list {
+			value = strings.TrimSpace(value)
+			if value == "" || seen[value] {
+				continue
+			}
+			seen[value] = true
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func splitCSV(value string) []string {
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
 	}
 	return out
 }

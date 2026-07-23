@@ -2,24 +2,26 @@ package pbs
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/valentinkolb/pulse-injestors/internal/entity"
 	"github.com/valentinkolb/pulse-injestors/internal/monitoring"
 	"github.com/valentinkolb/pulse-injestors/internal/pulse"
 )
 
+var ErrCommandNotFound = errors.New("pbs command not found")
+
 type Collector struct {
-	BaseURL            string
-	APIToken           string
-	Timeout            time.Duration
-	InsecureSkipVerify bool
-	HTTPClient         *http.Client
+	CommandPath string
+	Timeout     time.Duration
+	Runner      CommandRunner
 }
 
 func (c Collector) Name() string { return "pbs" }
@@ -29,86 +31,140 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 	client, err := c.client()
 	if err != nil {
 		b.State("pbs.available", false, nil)
-		b.Event("pbs.config.failed", nil, map[string]any{"error": err.Error()})
+		if !errors.Is(err, ErrCommandNotFound) {
+			emitError(b, "pbs.config.failed", "configure", nil, err)
+		}
 		return b.Batch(), nil
 	}
 	if err := collectVersion(ctx, b, client); err != nil {
 		b.State("pbs.available", false, nil)
-		b.Event("pbs.version.failed", nil, map[string]any{"error": err.Error()})
+		emitError(b, "pbs.version.failed", "version", nil, err)
 		return b.Batch(), nil
 	}
 	b.State("pbs.available", true, nil)
 
-	stores, err := collectDatastoreUsage(ctx, b, client)
+	stores, err := collectDatastoreUsage(ctx, b, client, scope)
 	if err != nil {
-		b.Event("pbs.datastore.usage.failed", nil, map[string]any{"error": err.Error()})
+		emitError(b, "pbs.datastore.usage.failed", "datastore_usage", nil, err)
 	}
 	for _, store := range stores {
-		if err := collectSnapshots(ctx, b, client, store); err != nil {
-			b.Event("pbs.datastore.snapshots.failed", map[string]string{"datastore": store}, map[string]any{"error": err.Error()})
+		if err := collectSnapshots(ctx, b, client, store, scope); err != nil {
+			db := monitoring.NewBuilder(datastoreScope(scope, store))
+			emitError(db, "pbs.datastore.snapshots.failed", "snapshots", map[string]string{"datastore": store}, err)
+			b.Merge(db.Batch())
 		}
 	}
-	collectJobs(ctx, b, client)
+	collectJobs(ctx, b, client, scope)
 	collectTasks(ctx, b, client)
 	return b.Batch(), nil
 }
 
 func (c Collector) client() (Client, error) {
-	if c.BaseURL == "" {
-		return Client{}, fmt.Errorf("pbs api url is required")
+	path := strings.TrimSpace(c.CommandPath)
+	if path == "" {
+		path = "proxmox-backup-debug"
 	}
-	if c.APIToken == "" {
-		return Client{}, fmt.Errorf("pbs api token is required")
-	}
-	base, err := normalizeBaseURL(c.BaseURL)
-	if err != nil {
-		return Client{}, err
-	}
-	httpClient := c.HTTPClient
-	if httpClient == nil {
-		timeout := c.Timeout
-		if timeout <= 0 {
-			timeout = 10 * time.Second
+	runner := c.Runner
+	if runner == nil {
+		if !strings.Contains(path, "/") {
+			resolved, err := exec.LookPath(path)
+			if err != nil {
+				return Client{}, fmt.Errorf("%w: %s", ErrCommandNotFound, path)
+			}
+			path = resolved
+		} else if _, err := os.Stat(path); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return Client{}, fmt.Errorf("%w: %s", ErrCommandNotFound, path)
+			}
+			return Client{}, err
 		}
-		transport := http.DefaultTransport.(*http.Transport).Clone()
-		if c.InsecureSkipVerify {
-			transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-		}
-		httpClient = &http.Client{Timeout: timeout, Transport: transport}
+		runner = execRunner{}
 	}
-	return Client{BaseURL: base, APIToken: authHeader(c.APIToken), HTTPClient: httpClient}, nil
+	timeout := c.Timeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	return Client{CommandPath: path, Timeout: timeout, Runner: runner}, nil
 }
 
 type Client struct {
-	BaseURL    string
-	APIToken   string
-	HTTPClient *http.Client
+	CommandPath string
+	Timeout     time.Duration
+	Runner      CommandRunner
+}
+
+type CommandRunner interface {
+	Run(ctx context.Context, name string, args ...string) ([]byte, error)
+}
+
+type execRunner struct{}
+
+func (execRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	if err != nil {
+		if len(out) > 0 {
+			return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+		}
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c Client) get(ctx context.Context, path string, target any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
+	args, err := debugAPIArgs(path)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", c.APIToken)
-	resp, err := c.HTTPClient.Do(req)
+	runCtx, cancel := context.WithTimeout(ctx, c.Timeout)
+	defer cancel()
+	out, err := c.Runner.Run(runCtx, c.CommandPath, args...)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("pbs API HTTP %d", resp.StatusCode)
-	}
-	var envelope struct {
-		Data json.RawMessage `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
-		return err
-	}
-	if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
+	out = []byte(strings.TrimSpace(string(out)))
+	if len(out) == 0 || string(out) == "null" {
 		return nil
 	}
-	return json.Unmarshal(envelope.Data, target)
+	return json.Unmarshal(out, target)
+}
+
+func debugAPIArgs(path string) ([]string, error) {
+	cleanPath, query, err := splitAPIPath(path)
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"api", "get", cleanPath}
+	args = append(args, queryCLIArgs(query)...)
+	args = append(args, "--output-format", "json")
+	return args, nil
+}
+
+func splitAPIPath(path string) (string, url.Values, error) {
+	u, err := url.Parse(path)
+	if err != nil {
+		return "", nil, err
+	}
+	cleanPath := u.EscapedPath()
+	if cleanPath == "" {
+		cleanPath = path
+	}
+	return cleanPath, u.Query(), nil
+}
+
+func queryCLIArgs(query url.Values) []string {
+	if len(query) == 0 {
+		return nil
+	}
+	args := []string{}
+	for key, values := range query {
+		for _, value := range values {
+			args = append(args, "--"+key)
+			if value != "" {
+				args = append(args, value)
+			}
+		}
+	}
+	return args
 }
 
 func collectVersion(ctx context.Context, b *monitoring.Builder, client Client) error {
@@ -132,7 +188,7 @@ func collectVersion(ctx context.Context, b *monitoring.Builder, client Client) e
 	return nil
 }
 
-func collectDatastoreUsage(ctx context.Context, b *monitoring.Builder, client Client) ([]string, error) {
+func collectDatastoreUsage(ctx context.Context, b *monitoring.Builder, client Client, scope monitoring.Scope) ([]string, error) {
 	var rows []DatastoreUsage
 	if err := client.get(ctx, "/status/datastore-usage", &rows); err != nil {
 		return nil, err
@@ -144,22 +200,24 @@ func collectDatastoreUsage(ctx context.Context, b *monitoring.Builder, client Cl
 		}
 		stores = append(stores, row.Store)
 		dims := map[string]string{"datastore": row.Store}
-		b.State("pbs.datastore.present", true, dims)
-		emitUsage(b, "pbs.datastore.bytes", row.Used, row.Total, dims)
+		db := monitoring.NewBuilder(datastoreScope(scope, row.Store))
+		db.State("pbs.datastore.present", true, dims)
+		emitUsage(db, "pbs.datastore.bytes", row.Used, row.Total, dims)
 		if row.Available > 0 {
-			b.Metric("pbs.datastore.bytes.available", "gauge", row.Available, "bytes", dims)
+			db.Metric("pbs.datastore.bytes.available", "gauge", row.Available, "bytes", dims)
 		}
 		if row.EstimatedFullDate > 0 {
 			ts := time.Unix(row.EstimatedFullDate, 0).UTC()
-			b.State("pbs.datastore.estimated_full.time", ts.Format(time.RFC3339), dims)
-			b.Metric("pbs.datastore.estimated_full.seconds_until", "gauge", time.Until(ts).Seconds(), "seconds", dims)
+			db.State("pbs.datastore.estimated_full.time", ts.Format(time.RFC3339), dims)
+			db.Metric("pbs.datastore.estimated_full.seconds_until", "gauge", time.Until(ts).Seconds(), "seconds", dims)
 		}
+		b.Merge(db.Batch())
 	}
-	b.Metric("pbs.datastores.total", "gauge", float64(len(stores)), "count", nil)
+	b.Metric("pbs.datastores.total", "gauge", float64(len(stores)), "", nil)
 	return stores, nil
 }
 
-func collectSnapshots(ctx context.Context, b *monitoring.Builder, client Client, store string) error {
+func collectSnapshots(ctx context.Context, b *monitoring.Builder, client Client, store string, scope monitoring.Scope) error {
 	var rows []Snapshot
 	if err := client.get(ctx, "/admin/datastore/"+url.PathEscape(store)+"/snapshots", &rows); err != nil {
 		return err
@@ -177,19 +235,21 @@ func collectSnapshots(ctx context.Context, b *monitoring.Builder, client Client,
 		}
 	}
 	dims := map[string]string{"datastore": store}
-	b.Metric("pbs.datastore.snapshots.total", "gauge", float64(len(rows)), "count", dims)
+	db := monitoring.NewBuilder(datastoreScope(scope, store))
+	db.Metric("pbs.datastore.snapshots.total", "gauge", float64(len(rows)), "", dims)
 	for typ, count := range byType {
-		b.Metric("pbs.datastore.snapshots.by_type", "gauge", float64(count), "count", map[string]string{"datastore": store, "type": typ})
+		db.Metric("pbs.datastore.snapshots.by_type", "gauge", float64(count), "", map[string]string{"datastore": store, "type": typ})
 	}
 	if newest > 0 {
 		ts := time.Unix(newest, 0).UTC()
-		b.State("pbs.datastore.snapshot.latest.time", ts.Format(time.RFC3339), dims)
-		b.Metric("pbs.datastore.snapshot.latest.age", "gauge", time.Since(ts).Seconds(), "seconds", dims)
+		db.State("pbs.datastore.snapshot.latest.time", ts.Format(time.RFC3339), dims)
+		db.Metric("pbs.datastore.snapshot.latest.age", "gauge", time.Since(ts).Seconds(), "seconds", dims)
 	}
+	b.Merge(db.Batch())
 	return nil
 }
 
-func collectJobs(ctx context.Context, b *monitoring.Builder, client Client) {
+func collectJobs(ctx context.Context, b *monitoring.Builder, client Client, scope monitoring.Scope) {
 	for _, spec := range []struct {
 		Kind string
 		Path string
@@ -201,57 +261,61 @@ func collectJobs(ctx context.Context, b *monitoring.Builder, client Client) {
 	} {
 		var rows []map[string]any
 		if err := client.get(ctx, spec.Path, &rows); err != nil {
-			b.Event("pbs.job.list.failed", map[string]string{"kind": spec.Kind}, map[string]any{"error": err.Error()})
+			emitError(b, "pbs.job.list.failed", "job_list", map[string]string{"kind": spec.Kind}, err)
 			continue
 		}
-		emitJobs(b, spec.Kind, parseJobs(rows))
+		emitJobs(b, scope, spec.Kind, parseJobs(rows))
 	}
 }
 
-func emitJobs(b *monitoring.Builder, kind string, jobs []Job) {
+func emitJobs(b *monitoring.Builder, scope monitoring.Scope, kind string, jobs []Job) {
 	enabled := 0
 	for _, job := range jobs {
 		dims := map[string]string{"kind": kind, "job": job.ID}
 		addDim(dims, "datastore", job.Store)
-		b.State("pbs.job.present", true, dims)
-		b.State("pbs.job.enabled", !job.Disabled, dims)
+		jb := monitoring.NewBuilder(jobScope(scope, kind, job.ID))
+		jb.State("pbs.job.present", true, dims)
+		jb.State("pbs.job.enabled", !job.Disabled, dims)
 		if !job.Disabled {
 			enabled++
 		}
 		if job.Schedule != "" {
-			b.State("pbs.job.schedule", job.Schedule, dims)
+			jb.State("pbs.job.schedule", job.Schedule, dims)
 		}
 		if job.LastRunState != "" {
-			b.State("pbs.job.last_run.state", job.LastRunState, dims)
+			jb.State("pbs.job.last_run.state", job.LastRunState, dims)
 			if job.LastRunState != "OK" && job.LastRunState != "ok" {
-				b.Event("pbs.job.failed", dims, map[string]any{"state": job.LastRunState})
+				jb.EventDetails("pbs.job.failed", monitoring.MergeDimensions(dims, map[string]string{"status": "error"}), monitoring.EventDetails{
+					Attributes: map[string]any{"state": job.LastRunState},
+				})
 			}
 		}
 		if job.LastRunEndTime > 0 {
 			ts := time.Unix(job.LastRunEndTime, 0).UTC()
-			b.State("pbs.job.last_run.time", ts.Format(time.RFC3339), dims)
-			b.Metric("pbs.job.last_run.age", "gauge", time.Since(ts).Seconds(), "seconds", dims)
+			jb.State("pbs.job.last_run.time", ts.Format(time.RFC3339), dims)
+			jb.Metric("pbs.job.last_run.age", "gauge", time.Since(ts).Seconds(), "seconds", dims)
 		}
 		if job.NextRun > 0 {
 			ts := time.Unix(job.NextRun, 0).UTC()
-			b.State("pbs.job.next_run.time", ts.Format(time.RFC3339), dims)
-			b.Metric("pbs.job.next_run.seconds_until", "gauge", time.Until(ts).Seconds(), "seconds", dims)
+			jb.State("pbs.job.next_run.time", ts.Format(time.RFC3339), dims)
+			jb.Metric("pbs.job.next_run.seconds_until", "gauge", time.Until(ts).Seconds(), "seconds", dims)
 		}
+		b.Merge(jb.Batch())
 	}
-	b.Metric("pbs.jobs.total", "gauge", float64(len(jobs)), "count", map[string]string{"kind": kind})
-	b.Metric("pbs.jobs.enabled", "gauge", float64(enabled), "count", map[string]string{"kind": kind})
+	b.Metric("pbs.jobs.total", "gauge", float64(len(jobs)), "", map[string]string{"kind": kind})
+	b.Metric("pbs.jobs.enabled", "gauge", float64(enabled), "", map[string]string{"kind": kind})
 }
 
 func collectTasks(ctx context.Context, b *monitoring.Builder, client Client) {
 	var rows []Task
 	if err := client.get(ctx, "/nodes/localhost/tasks?limit=50", &rows); err != nil {
-		b.Event("pbs.tasks.failed", nil, map[string]any{"error": err.Error()})
+		emitError(b, "pbs.tasks.failed", "tasks", nil, err)
 		return
 	}
 	byStatus := map[string]int{}
 	byTypeStatus := map[string]int{}
 	failedEvents := 0
-	b.Metric("pbs.tasks.recent", "gauge", float64(len(rows)), "count", nil)
+	b.Metric("pbs.tasks.recent", "gauge", float64(len(rows)), "", nil)
 	for _, task := range rows {
 		status := taskStatusClass(task)
 		typ := task.WorkerType
@@ -261,16 +325,16 @@ func collectTasks(ctx context.Context, b *monitoring.Builder, client Client) {
 		byStatus[status]++
 		byTypeStatus[typ+":"+status]++
 		if status == "error" && failedEvents < 10 {
-			b.Event("pbs.task.failed", taskDims(task), taskPayload(task))
+			emitTaskEvent(b, "pbs.task.failed", task)
 			failedEvents++
 		}
 	}
 	for status, count := range byStatus {
-		b.Metric("pbs.tasks.by_status", "gauge", float64(count), "count", map[string]string{"status": status})
+		b.Metric("pbs.tasks.by_status", "gauge", float64(count), "", map[string]string{"status": status})
 	}
 	for key, count := range byTypeStatus {
 		typ, status, _ := strings.Cut(key, ":")
-		b.Metric("pbs.tasks.by_type_status", "gauge", float64(count), "count", map[string]string{"type": typ, "status": status})
+		b.Metric("pbs.tasks.by_type_status", "gauge", float64(count), "", map[string]string{"type": typ, "status": status})
 	}
 }
 
@@ -346,25 +410,46 @@ func taskDims(task Task) map[string]string {
 	dims := map[string]string{}
 	addDim(dims, "node", task.Node)
 	addDim(dims, "type", task.WorkerType)
-	addDim(dims, "id", task.WorkerID)
+	addDim(dims, "status", taskStatusClass(task))
 	return dims
 }
 
-func taskPayload(task Task) map[string]any {
-	payload := map[string]any{
-		"status": task.Status,
-		"upid":   task.UPID,
+func taskSubject(prefix string, task Task) string {
+	parts := []string{prefix}
+	if task.WorkerType != "" {
+		parts = append(parts, task.WorkerType)
 	}
-	if task.User != "" {
-		payload["user"] = task.User
+	if task.WorkerID != "" {
+		parts = append(parts, task.WorkerID)
+	} else if task.Node != "" {
+		parts = append(parts, task.Node)
+	}
+	return strings.Join(parts, ":")
+}
+
+func taskPayload(task Task) map[string]any {
+	attributes := map[string]any{}
+	if task.Status != "" {
+		attributes["status"] = task.Status
+	}
+	if task.WorkerID != "" {
+		attributes["workerId"] = task.WorkerID
 	}
 	if task.StartTime > 0 {
-		payload["startTime"] = time.Unix(task.StartTime, 0).UTC().Format(time.RFC3339)
+		attributes["startTime"] = time.Unix(task.StartTime, 0).UTC().Format(time.RFC3339)
 	}
 	if task.EndTime > 0 {
-		payload["endTime"] = time.Unix(task.EndTime, 0).UTC().Format(time.RFC3339)
+		attributes["endTime"] = time.Unix(task.EndTime, 0).UTC().Format(time.RFC3339)
 	}
-	return payload
+	return attributes
+}
+
+func emitTaskEvent(b *monitoring.Builder, kind string, task Task) {
+	b.EventDetails(kind, taskDims(task), monitoring.EventDetails{
+		Attributes:    taskPayload(task),
+		ActorID:       task.User,
+		CorrelationID: task.UPID,
+	})
 }
 
 func emitUsage(b *monitoring.Builder, prefix string, used, max float64, dims map[string]string) {
@@ -377,6 +462,40 @@ func emitUsage(b *monitoring.Builder, prefix string, used, max float64, dims map
 			b.Metric(prefix+".usage", "gauge", (used/max)*100, "percent", dims)
 		}
 	}
+}
+
+func datastoreScope(scope monitoring.Scope, datastore string) monitoring.Scope {
+	scope.EntityType = "pbs-datastore"
+	scope.EntityID = entity.ID("pbs-datastore", stableHostFromScope(scope), datastore)
+	scope.Label = datastore
+	return scope
+}
+
+func jobScope(scope monitoring.Scope, kind, job string) monitoring.Scope {
+	scope.EntityType = "pbs-job"
+	scope.EntityID = entity.ID("pbs-job", stableHostFromScope(scope), entity.Key(kind, "unknown"), entity.Key(job, "unknown"))
+	scope.Label = labelValue(job, "unknown")
+	return scope
+}
+
+func labelValue(value, fallback string) string {
+	if value = strings.TrimSpace(value); value != "" {
+		return value
+	}
+	if fallback = strings.TrimSpace(fallback); fallback != "" {
+		return fallback
+	}
+	return "unknown"
+}
+
+func stableHostFromScope(scope monitoring.Scope) string {
+	return entity.StableHostIDFromScope(scope.EntityID, scope.Dimensions)
+}
+
+func emitError(b *monitoring.Builder, kind, operation string, dims map[string]string, err error) {
+	b.EventDetails(kind, monitoring.MergeDimensions(dims, map[string]string{"operation": operation}), monitoring.EventDetails{
+		Attributes: map[string]any{"error": err.Error()},
+	})
 }
 
 func firstString(row map[string]any, keys ...string) string {
@@ -457,30 +576,4 @@ func addDim(dims map[string]string, key, value string) {
 	if value != "" {
 		dims[key] = value
 	}
-}
-
-func normalizeBaseURL(raw string) (string, error) {
-	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "", err
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", fmt.Errorf("pbs api url must use http or https")
-	}
-	if u.Host == "" {
-		return "", fmt.Errorf("pbs api url must include a host")
-	}
-	if !strings.HasSuffix(u.Path, "/api2/json") {
-		u.Path = strings.TrimRight(u.Path, "/") + "/api2/json"
-	}
-	return strings.TrimRight(u.String(), "/"), nil
-}
-
-func authHeader(token string) string {
-	token = strings.TrimSpace(token)
-	if strings.HasPrefix(token, "PBSAPIToken=") {
-		return token
-	}
-	return "PBSAPIToken=" + token
 }

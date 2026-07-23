@@ -14,6 +14,32 @@ type Collector interface {
 	Collect(context.Context, Scope) (pulse.Batch, error)
 }
 
+type ScopedCollector struct {
+	Collector  Collector
+	EntityID   string
+	EntityType string
+	Label      string
+	Dimensions map[string]string
+}
+
+func (s ScopedCollector) Name() string {
+	return s.Collector.Name()
+}
+
+func (s ScopedCollector) Collect(ctx context.Context, scope Scope) (pulse.Batch, error) {
+	if s.EntityID != "" {
+		scope.EntityID = s.EntityID
+	}
+	if s.EntityType != "" {
+		scope.EntityType = s.EntityType
+	}
+	if s.Label != "" {
+		scope.Label = s.Label
+	}
+	scope.Dimensions = mergeDims(scope.Dimensions, s.Dimensions)
+	return s.Collector.Collect(ctx, scope)
+}
+
 type Sender interface {
 	PostBatch(context.Context, pulse.Batch) error
 }
@@ -21,6 +47,7 @@ type Sender interface {
 type Runner struct {
 	EntityID   string
 	EntityType string
+	Label      string
 	Dimensions map[string]string
 	Collectors []Collector
 	Sender     Sender
@@ -45,6 +72,7 @@ func (r Runner) Once(ctx context.Context) error {
 	scope := Scope{
 		EntityID:   r.EntityID,
 		EntityType: r.EntityType,
+		Label:      r.Label,
 		Dimensions: r.Dimensions,
 		Timestamp:  now().UTC(),
 	}
@@ -57,7 +85,6 @@ func (r Runner) Once(ctx context.Context) error {
 
 	for _, collector := range r.Collectors {
 		collectorScope := scope
-		collectorScope.Dimensions = mergeDims(scope.Dimensions, map[string]string{"collector": collector.Name()})
 		collectCtx := ctx
 		cancel := func() {}
 		if r.Timeout > 0 {
@@ -65,12 +92,14 @@ func (r Runner) Once(ctx context.Context) error {
 		}
 		part, err := collector.Collect(collectCtx, collectorScope)
 		cancel()
-		part = Inject(part, scope, map[string]string{"collector": collector.Name()})
+		part = Inject(part, scope, nil)
 		Merge(&batch, part)
 		if err != nil {
 			log.Warn("collector failed", "collector", collector.Name(), "err", err)
 			builder.State("ingestor.collector.ok", false, map[string]string{"collector": collector.Name()})
-			builder.Event("ingestor.collector.failed", map[string]string{"collector": collector.Name()}, map[string]any{"error": err.Error()})
+			builder.EventDetails("ingestor.collector.failed", map[string]string{"collector": collector.Name()}, EventDetails{
+				Attributes: map[string]any{"error": err.Error()},
+			})
 			continue
 		}
 		builder.State("ingestor.collector.ok", true, map[string]string{"collector": collector.Name()})

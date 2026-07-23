@@ -8,7 +8,10 @@ func TestResolveOverlayBeatsFile(t *testing.T) {
 			IngestURL:   "https://file.example/ingest",
 			IngestToken: "file-token",
 		},
-		Entity: EntityConfig{ID: "file-node", Type: "host"},
+		Entity: EntityConfig{ID: "file-node", Label: "File node", Type: "host"},
+		Dimensions: map[string]string{
+			"environment": "staging",
+		},
 		HTTP:   HTTPConfig{TimeoutSeconds: 5, MaxRetries: 1, InitialBackoffMS: 100},
 		Runner: RunnerConfig{IntervalSeconds: 30, CollectorTimeoutSeconds: 45},
 		Docker: DockerConfig{RegistryTimeoutSeconds: 12},
@@ -17,7 +20,9 @@ func TestResolveOverlayBeatsFile(t *testing.T) {
 		IngestURL:                     "https://env.example/ingest",
 		IngestToken:                   "env-token",
 		EntityID:                      "env-node",
+		EntityLabel:                   "Environment node",
 		EntityType:                    "container",
+		Dimensions:                    map[string]string{"environment": "production", "region": "eu-central"},
 		TimeoutSeconds:                9,
 		IntervalSeconds:               60,
 		CollectorTimeoutSeconds:       90,
@@ -37,8 +42,11 @@ func TestResolveOverlayBeatsFile(t *testing.T) {
 	if cfg.Pulse.IngestToken != "env-token" {
 		t.Fatalf("ingest token = %q", cfg.Pulse.IngestToken)
 	}
-	if cfg.Entity.ID != "env-node" || cfg.Entity.Type != "container" {
+	if cfg.Entity.ID != "env-node" || cfg.Entity.Label != "Environment node" || cfg.Entity.Type != "container" {
 		t.Fatalf("entity = %#v", cfg.Entity)
+	}
+	if cfg.Dimensions["environment"] != "production" || cfg.Dimensions["region"] != "eu-central" {
+		t.Fatalf("dimensions = %#v", cfg.Dimensions)
 	}
 	if cfg.HTTP.TimeoutSeconds != 9 || cfg.HTTP.MaxRetries != 1 {
 		t.Fatalf("http = %#v", cfg.HTTP)
@@ -57,6 +65,19 @@ func TestResolveOverlayBeatsFile(t *testing.T) {
 	}
 	if cfg.Linux.PackageTimeoutSeconds != 21 || cfg.Linux.DiskHealthTimeoutSeconds != 22 {
 		t.Fatalf("linux = %#v", cfg.Linux)
+	}
+}
+
+func TestParseDimensions(t *testing.T) {
+	dimensions, err := ParseDimensions([]string{"environment=production", "region=eu-central"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dimensions["environment"] != "production" || dimensions["region"] != "eu-central" {
+		t.Fatalf("dimensions = %#v", dimensions)
+	}
+	if _, err := ParseDimensions([]string{"missing-value"}); err == nil {
+		t.Fatal("expected invalid dimension error")
 	}
 }
 
@@ -112,26 +133,48 @@ func TestResolveMacOSSystemProfilerCanBeDisabled(t *testing.T) {
 }
 
 func TestResolveProxmoxOverlay(t *testing.T) {
+	enableCephAPI := true
+	enableLocalCeph := true
 	cfg, err := Resolve(Config{
 		Pulse:   PulseConfig{IngestURL: "https://example.com/ingest", IngestToken: "token"},
 		Entity:  EntityConfig{ID: "node"},
-		Proxmox: ProxmoxConfig{APIURL: "https://file.example:8006", APIToken: "file", TimeoutSeconds: 11},
+		Proxmox: ProxmoxConfig{PveshPath: "/usr/sbin/pvesh", TimeoutSeconds: 11},
 	}, Overlay{
-		ProxmoxAPIURL:             "https://env.example:8006",
-		ProxmoxAPIToken:           "env",
-		ProxmoxTimeoutSeconds:     12,
-		ProxmoxInsecureSkipVerify: true,
-		ProxmoxEnableCephAPI:      true,
-		ProxmoxEnableLocalCeph:    true,
+		ProxmoxPveshPath:       "/custom/pvesh",
+		ProxmoxTimeoutSeconds:  12,
+		ProxmoxEnableCephAPI:   &enableCephAPI,
+		ProxmoxEnableLocalCeph: &enableLocalCeph,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Proxmox.APIURL != "https://env.example:8006" || cfg.Proxmox.APIToken != "env" {
+	if cfg.Proxmox.PveshPath != "/custom/pvesh" {
 		t.Fatalf("proxmox = %#v", cfg.Proxmox)
 	}
-	if cfg.Proxmox.TimeoutSeconds != 12 || !cfg.Proxmox.InsecureSkipVerify || !cfg.Proxmox.EnableCephAPI || !cfg.Proxmox.EnableLocalCeph {
+	if cfg.Proxmox.TimeoutSeconds != 12 || !cfg.ProxmoxCephAPIEnabled() || !cfg.ProxmoxLocalCephEnabled() {
 		t.Fatalf("proxmox = %#v", cfg.Proxmox)
+	}
+}
+
+func TestResolveProxmoxOverlayCanDisableCeph(t *testing.T) {
+	enabled := true
+	disabled := false
+	cfg, err := Resolve(Config{
+		Pulse:  PulseConfig{IngestURL: "https://example.com/ingest", IngestToken: "token"},
+		Entity: EntityConfig{ID: "node"},
+		Proxmox: ProxmoxConfig{
+			EnableCephAPI:   &enabled,
+			EnableLocalCeph: &enabled,
+		},
+	}, Overlay{
+		ProxmoxEnableCephAPI:   &disabled,
+		ProxmoxEnableLocalCeph: &disabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProxmoxCephAPIEnabled() || cfg.ProxmoxLocalCephEnabled() {
+		t.Fatalf("expected proxmox ceph disabled: %#v", cfg.Proxmox)
 	}
 }
 
@@ -141,20 +184,18 @@ func TestResolvePBSOverlay(t *testing.T) {
 		Entity: EntityConfig{
 			ID: "node",
 		},
-		PBS: PBSConfig{APIURL: "https://file.example:8007", APIToken: "file", TimeoutSeconds: 11},
+		PBS: PBSConfig{CommandPath: "/usr/sbin/proxmox-backup-debug", TimeoutSeconds: 11},
 	}, Overlay{
-		PBSAPIURL:             "https://env.example:8007",
-		PBSAPIToken:           "env",
-		PBSTimeoutSeconds:     12,
-		PBSInsecureSkipVerify: true,
+		PBSCommandPath:    "/custom/proxmox-backup-debug",
+		PBSTimeoutSeconds: 12,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.PBS.APIURL != "https://env.example:8007" || cfg.PBS.APIToken != "env" {
+	if cfg.PBS.CommandPath != "/custom/proxmox-backup-debug" {
 		t.Fatalf("pbs = %#v", cfg.PBS)
 	}
-	if cfg.PBS.TimeoutSeconds != 12 || !cfg.PBS.InsecureSkipVerify {
+	if cfg.PBS.TimeoutSeconds != 12 {
 		t.Fatalf("pbs = %#v", cfg.PBS)
 	}
 }
@@ -176,8 +217,23 @@ func TestResolveMergesHostZfsFlag(t *testing.T) {
 	}
 }
 
+func TestResolveHostCephDefaultsEnabled(t *testing.T) {
+	cfg, err := Resolve(Config{
+		Pulse: PulseConfig{IngestURL: "https://example.com/ingest", IngestToken: "token"},
+		Entity: EntityConfig{
+			ID: "node",
+		},
+	}, Overlay{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.CephEnabled() {
+		t.Fatal("expected ceph enabled by default")
+	}
+}
+
 func TestResolveMergesHostCephFlag(t *testing.T) {
-	enabled := true
+	enabled := false
 	cfg, err := Resolve(Config{
 		Pulse: PulseConfig{IngestURL: "https://example.com/ingest", IngestToken: "token"},
 		Entity: EntityConfig{
@@ -188,7 +244,107 @@ func TestResolveMergesHostCephFlag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.CephEnabled() {
-		t.Fatal("expected ceph enabled")
+	if cfg.CephEnabled() {
+		t.Fatal("expected ceph disabled")
+	}
+}
+
+func TestResolveProxmoxCephDefaultsEnabled(t *testing.T) {
+	cfg, err := Resolve(Config{
+		Pulse: PulseConfig{IngestURL: "https://example.com/ingest", IngestToken: "token"},
+		Entity: EntityConfig{
+			ID: "node",
+		},
+	}, Overlay{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ProxmoxCephAPIEnabled() || !cfg.ProxmoxLocalCephEnabled() {
+		t.Fatalf("expected proxmox ceph defaults enabled: %#v", cfg.Proxmox)
+	}
+}
+
+func TestResolveMergesProxmoxCephOptOut(t *testing.T) {
+	enabled := false
+	cfg, err := Resolve(Config{
+		Pulse: PulseConfig{IngestURL: "https://example.com/ingest", IngestToken: "token"},
+		Entity: EntityConfig{
+			ID: "node",
+		},
+		Proxmox: ProxmoxConfig{EnableCephAPI: &enabled, EnableLocalCeph: &enabled},
+	}, Overlay{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProxmoxCephAPIEnabled() || cfg.ProxmoxLocalCephEnabled() {
+		t.Fatalf("expected proxmox ceph disabled: %#v", cfg.Proxmox)
+	}
+}
+
+func TestResolveUptimeDefaultsAndTargets(t *testing.T) {
+	cfg, err := Resolve(Config{
+		Uptime: UptimeConfig{
+			Targets: []UptimeTargetConfig{{
+				ID:             "pulse",
+				Label:          "Pulse",
+				Kind:           "http",
+				Address:        "https://pulse.example.test/health",
+				ExpectedStatus: 200,
+				TimeoutSeconds: 3,
+			}},
+		},
+	}, Overlay{
+		EntityID:          "probe-01",
+		AllowMissingPulse: true,
+		UptimeConcurrency: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.UptimeDefaultsEnabled() {
+		t.Fatal("expected uptime defaults enabled")
+	}
+	if cfg.Uptime.Concurrency != 8 || cfg.Uptime.TimeoutSeconds != 5 {
+		t.Fatalf("uptime = %#v", cfg.Uptime)
+	}
+	if len(cfg.Uptime.Targets) != 1 || cfg.Uptime.Targets[0].ID != "pulse" {
+		t.Fatalf("targets = %#v", cfg.Uptime.Targets)
+	}
+}
+
+func TestResolveUptimeDefaultsCanBeDisabled(t *testing.T) {
+	cfg, err := Resolve(Config{}, Overlay{
+		EntityID:              "probe-01",
+		AllowMissingPulse:     true,
+		UptimeDisableDefaults: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UptimeDefaultsEnabled() {
+		t.Fatal("expected uptime defaults disabled")
+	}
+}
+
+func TestResolveRejectsInvalidUptimeTargets(t *testing.T) {
+	tests := []UptimeTargetConfig{
+		{ID: "bad id", Label: "Bad", Kind: "dns", Address: "example.com"},
+		{ID: "missing-label", Kind: "dns", Address: "example.com"},
+		{ID: "bad-kind", Label: "Bad", Kind: "smtp", Address: "example.com"},
+		{ID: "bad-icmp", Label: "Bad", Kind: "icmp", Address: "example.com"},
+		{ID: "bad-dns", Label: "Bad", Kind: "dns", Address: "https://example.com"},
+		{ID: "bad-tcp", Label: "Bad", Kind: "tcp", Address: "example.com"},
+		{ID: "bad-http", Label: "Bad", Kind: "http", Address: "file:///tmp/check"},
+		{ID: "credentials", Label: "Bad", Kind: "http", Address: "https://user:secret@example.com/"},
+		{ID: "bad-status", Label: "Bad", Kind: "http", Address: "https://example.com/", ExpectedStatus: 99},
+		{ID: "bad-timeout", Label: "Bad", Kind: "dns", Address: "example.com", TimeoutSeconds: -1},
+	}
+	for _, target := range tests {
+		_, err := Resolve(Config{
+			Uptime: UptimeConfig{Targets: []UptimeTargetConfig{target}},
+		}, Overlay{EntityID: "probe-01", AllowMissingPulse: true})
+		if err == nil {
+			t.Fatalf("expected target %#v to fail", target)
+		}
 	}
 }

@@ -42,7 +42,9 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 		part, err := runScript(ctx, scope, script)
 		if err != nil {
 			errs = append(errs, err)
-			b.Event("script.failed", map[string]string{"script": script.Name}, map[string]any{"error": err.Error()})
+			b.EventDetails("script.failed", map[string]string{"script": script.Name, "operation": "execute"}, monitoring.EventDetails{
+				Attributes: map[string]any{"error": err.Error()},
+			})
 			b.State("script.ok", false, map[string]string{"script": script.Name})
 			continue
 		}

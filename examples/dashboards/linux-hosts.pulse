@@ -1,0 +1,39 @@
+dashboard "Linux hosts" {
+  description "Host health, capacity, traffic, and package updates."
+
+  controls {
+    range "Range" variable range default 24h options 1h, 6h, 24h, 7d
+  }
+
+  section "Fleet" {
+    row height md {
+      stat "Available package updates" {
+        query metric system.packages.updates.total latest every 5m reduce sum since $range
+      }
+
+      line "CPU usage by host" {
+        query metric system.cpu.usage avg every 5m group by resource since $range
+      }
+    }
+
+    line "Memory usage by host" {
+      query metric system.memory.usage avg every 5m group by resource since $range
+    }
+  }
+
+  section "Storage and network" {
+    line "Filesystem usage" {
+      query metric system.filesystem.usage max every 5m group by resource since $range
+    }
+
+    line "Receive throughput by interface" {
+      query metric system.network.rx rate every 5m reduce sum group by resource since $range
+    }
+  }
+
+  section "Collection" {
+    line "Collector failures" {
+      query events ingestor.collector.failed count every 1h since $range
+    }
+  }
+}

@@ -1,0 +1,37 @@
+[pulse]
+ingest_url = "https://pulse.example.com/api/pulse/ingest"
+ingest_token = "replace-me"
+
+[entity]
+# Use a stable identifier for the physical host or Docker VM.
+id = "server-01"
+label = "Server 01"
+
+[dimensions]
+environment = "production"
+
+[runner]
+interval_seconds = 60
+collector_timeout_seconds = 60
+
+[http]
+timeout_seconds = 10
+max_retries = 3
+initial_backoff_ms = 500
+
+[host]
+proc_root = "/host/proc"
+sys_root = "/host/sys"
+root = "/host/root"
+cpu_sample_ms = 250
+enable_thermal = true
+enable_btrfs = true
+enable_zfs = true
+
+[docker]
+socket_path = "/var/run/docker.sock"
+host_root = "/host/root"
+concurrency = 4
+container_timeout_seconds = 10
+enable_registry_checks = false
+registry_timeout_seconds = 10

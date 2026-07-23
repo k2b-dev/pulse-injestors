@@ -3,8 +3,15 @@ ingest_url = "https://pulse.example.com/ingest/source"
 ingest_token = "replace-me"
 
 [entity]
-id = "docker-host-1"
-type = "docker-host"
+# Stable monitored host id and display label. Do not use the ingestor container id.
+# pulse-docker derives host, daemon, logical container, Compose, image, and
+# filesystem resources from this host identity.
+id = "server-01"
+label = "server-01"
+type = "host"
+
+[dimensions]
+environment = "production"
 
 [runner]
 interval_seconds = 60

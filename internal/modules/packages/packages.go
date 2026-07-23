@@ -39,7 +39,7 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 	}
 	b.State("system.packages.available", found, nil)
 	if found {
-		b.Metric("system.packages.updates.total", "gauge", float64(total), "count", nil)
+		b.Metric("system.packages.updates.total", "gauge", float64(total), "", nil)
 	}
 	return b.Batch(), nil
 }
@@ -66,13 +66,15 @@ func collectManager(ctx context.Context, b *monitoring.Builder, manager packageM
 	if err != nil {
 		if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != manager.AllowedExit {
 			b.State("system.packages.manager.updates_available", false, dims)
-			b.Event("system.packages.manager.failed", dims, map[string]any{"error": err.Error()})
+			b.EventDetails("system.packages.manager.failed", monitoring.MergeDimensions(dims, map[string]string{"operation": "list_updates"}), monitoring.EventDetails{
+				Attributes: map[string]any{"error": err.Error()},
+			})
 			return 0, false
 		}
 	}
 	count := manager.Count(out)
 	b.State("system.packages.manager.updates_available", true, dims)
-	b.Metric("system.packages.manager.updates", "gauge", float64(count), "count", dims)
+	b.Metric("system.packages.manager.updates", "gauge", float64(count), "", dims)
 	return count, true
 }
 

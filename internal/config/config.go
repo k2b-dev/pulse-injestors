@@ -3,8 +3,11 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -13,17 +16,19 @@ import (
 const DefaultConfigPath = "/etc/pulse/ingestor.toml"
 
 type Config struct {
-	Pulse   PulseConfig    `toml:"pulse"`
-	Entity  EntityConfig   `toml:"entity"`
-	HTTP    HTTPConfig     `toml:"http"`
-	Runner  RunnerConfig   `toml:"runner"`
-	Host    HostConfig     `toml:"host"`
-	Docker  DockerConfig   `toml:"docker"`
-	Linux   LinuxConfig    `toml:"linux"`
-	MacOS   MacOSConfig    `toml:"macos"`
-	Proxmox ProxmoxConfig  `toml:"proxmox"`
-	PBS     PBSConfig      `toml:"pbs"`
-	Scripts []ScriptConfig `toml:"script"`
+	Pulse      PulseConfig       `toml:"pulse"`
+	Entity     EntityConfig      `toml:"entity"`
+	Dimensions map[string]string `toml:"dimensions"`
+	HTTP       HTTPConfig        `toml:"http"`
+	Runner     RunnerConfig      `toml:"runner"`
+	Host       HostConfig        `toml:"host"`
+	Docker     DockerConfig      `toml:"docker"`
+	Linux      LinuxConfig       `toml:"linux"`
+	MacOS      MacOSConfig       `toml:"macos"`
+	Proxmox    ProxmoxConfig     `toml:"proxmox"`
+	PBS        PBSConfig         `toml:"pbs"`
+	Uptime     UptimeConfig      `toml:"uptime"`
+	Scripts    []ScriptConfig    `toml:"script"`
 }
 
 type PulseConfig struct {
@@ -32,8 +37,9 @@ type PulseConfig struct {
 }
 
 type EntityConfig struct {
-	ID   string `toml:"id"`
-	Type string `toml:"type"`
+	ID    string `toml:"id"`
+	Label string `toml:"label"`
+	Type  string `toml:"type"`
 }
 
 type HTTPConfig struct {
@@ -84,19 +90,31 @@ type MacOSConfig struct {
 }
 
 type ProxmoxConfig struct {
-	APIURL             string `toml:"api_url"`
-	APIToken           string `toml:"api_token"`
-	TimeoutSeconds     int    `toml:"timeout_seconds"`
-	InsecureSkipVerify bool   `toml:"insecure_skip_verify"`
-	EnableCephAPI      bool   `toml:"enable_ceph_api"`
-	EnableLocalCeph    bool   `toml:"enable_local_ceph"`
+	PveshPath       string `toml:"pvesh_path"`
+	TimeoutSeconds  int    `toml:"timeout_seconds"`
+	EnableCephAPI   *bool  `toml:"enable_ceph_api"`
+	EnableLocalCeph *bool  `toml:"enable_local_ceph"`
 }
 
 type PBSConfig struct {
-	APIURL             string `toml:"api_url"`
-	APIToken           string `toml:"api_token"`
-	TimeoutSeconds     int    `toml:"timeout_seconds"`
-	InsecureSkipVerify bool   `toml:"insecure_skip_verify"`
+	CommandPath    string `toml:"command_path"`
+	TimeoutSeconds int    `toml:"timeout_seconds"`
+}
+
+type UptimeConfig struct {
+	EnableDefaults *bool                `toml:"enable_defaults"`
+	Concurrency    int                  `toml:"concurrency"`
+	TimeoutSeconds int                  `toml:"timeout_seconds"`
+	Targets        []UptimeTargetConfig `toml:"target"`
+}
+
+type UptimeTargetConfig struct {
+	ID             string `toml:"id"`
+	Label          string `toml:"label"`
+	Kind           string `toml:"kind"`
+	Address        string `toml:"address"`
+	ExpectedStatus int    `toml:"expected_status"`
+	TimeoutSeconds int    `toml:"timeout_seconds"`
 }
 
 type ScriptConfig struct {
@@ -112,7 +130,9 @@ type Overlay struct {
 	IngestURL                     string
 	IngestToken                   string
 	EntityID                      string
+	EntityLabel                   string
 	EntityType                    string
+	Dimensions                    map[string]string
 	TimeoutSeconds                int
 	MaxRetries                    int
 	InitialBackoffMS              int
@@ -136,16 +156,15 @@ type Overlay struct {
 	SoftwareUpdateTimeoutSeconds  int
 	DisableSystemProfiler         bool
 	SystemProfilerTimeoutSeconds  int
-	ProxmoxAPIURL                 string
-	ProxmoxAPIToken               string
+	ProxmoxPveshPath              string
 	ProxmoxTimeoutSeconds         int
-	ProxmoxInsecureSkipVerify     bool
-	ProxmoxEnableCephAPI          bool
-	ProxmoxEnableLocalCeph        bool
-	PBSAPIURL                     string
-	PBSAPIToken                   string
+	ProxmoxEnableCephAPI          *bool
+	ProxmoxEnableLocalCeph        *bool
+	PBSCommandPath                string
 	PBSTimeoutSeconds             int
-	PBSInsecureSkipVerify         bool
+	UptimeDisableDefaults         bool
+	UptimeConcurrency             int
+	UptimeTimeoutSeconds          int
 	AllowMissingPulse             bool
 }
 
@@ -169,12 +188,22 @@ func Resolve(file Config, overlay Overlay) (Config, error) {
 	merge(&cfg, file)
 	applyOverlay(&cfg, overlay)
 
+	host, hostErr := os.Hostname()
 	if cfg.Entity.ID == "" {
-		host, err := os.Hostname()
-		if err != nil || host == "" {
+		if hostErr != nil || host == "" {
 			return cfg, errors.New("entity id is required when hostname cannot be resolved")
 		}
 		cfg.Entity.ID = host
+	}
+	if cfg.Entity.Label == "" {
+		if hostErr == nil && host != "" {
+			cfg.Entity.Label = host
+		} else {
+			cfg.Entity.Label = cfg.Entity.ID
+		}
+	}
+	if err := validateDimensions(cfg.Dimensions); err != nil {
+		return cfg, err
 	}
 	if !overlay.AllowMissingPulse {
 		if cfg.Pulse.IngestURL == "" {
@@ -233,6 +262,15 @@ func Resolve(file Config, overlay Overlay) (Config, error) {
 	if cfg.PBS.TimeoutSeconds <= 0 {
 		return cfg, errors.New("pbs timeout_seconds must be positive")
 	}
+	if cfg.Uptime.Concurrency <= 0 {
+		return cfg, errors.New("uptime concurrency must be positive")
+	}
+	if cfg.Uptime.TimeoutSeconds <= 0 {
+		return cfg, errors.New("uptime timeout_seconds must be positive")
+	}
+	if err := validateUptimeTargets(cfg.Uptime.Targets); err != nil {
+		return cfg, err
+	}
 	if cfg.Linux.PackageTimeoutSeconds <= 0 {
 		return cfg, errors.New("linux package_timeout_seconds must be positive")
 	}
@@ -283,7 +321,15 @@ func (c Config) ZfsEnabled() bool {
 }
 
 func (c Config) CephEnabled() bool {
-	return c.Host.EnableCeph != nil && *c.Host.EnableCeph
+	return c.Host.EnableCeph == nil || *c.Host.EnableCeph
+}
+
+func (c Config) ProxmoxCephAPIEnabled() bool {
+	return c.Proxmox.EnableCephAPI == nil || *c.Proxmox.EnableCephAPI
+}
+
+func (c Config) ProxmoxLocalCephEnabled() bool {
+	return c.Proxmox.EnableLocalCeph == nil || *c.Proxmox.EnableLocalCeph
 }
 
 func (c Config) HomebrewEnabled() bool {
@@ -316,6 +362,14 @@ func (c Config) ProxmoxTimeout() time.Duration {
 
 func (c Config) PBSTimeout() time.Duration {
 	return time.Duration(c.PBS.TimeoutSeconds) * time.Second
+}
+
+func (c Config) UptimeDefaultsEnabled() bool {
+	return c.Uptime.EnableDefaults == nil || *c.Uptime.EnableDefaults
+}
+
+func (c Config) UptimeTimeout() time.Duration {
+	return time.Duration(c.Uptime.TimeoutSeconds) * time.Second
 }
 
 func defaults() Config {
@@ -355,10 +409,16 @@ func defaults() Config {
 			SystemProfilerTimeoutSeconds: 10,
 		},
 		Proxmox: ProxmoxConfig{
+			PveshPath:      "pvesh",
 			TimeoutSeconds: 10,
 		},
 		PBS: PBSConfig{
+			CommandPath:    "proxmox-backup-debug",
 			TimeoutSeconds: 10,
+		},
+		Uptime: UptimeConfig{
+			Concurrency:    4,
+			TimeoutSeconds: 5,
 		},
 	}
 }
@@ -373,9 +433,13 @@ func merge(dst *Config, src Config) {
 	if src.Entity.ID != "" {
 		dst.Entity.ID = src.Entity.ID
 	}
+	if src.Entity.Label != "" {
+		dst.Entity.Label = src.Entity.Label
+	}
 	if src.Entity.Type != "" {
 		dst.Entity.Type = src.Entity.Type
 	}
+	dst.Dimensions = mergeDimensions(dst.Dimensions, src.Dimensions)
 	if src.HTTP.TimeoutSeconds != 0 {
 		dst.HTTP.TimeoutSeconds = src.HTTP.TimeoutSeconds
 	}
@@ -463,35 +527,35 @@ func merge(dst *Config, src Config) {
 	if src.MacOS.SystemProfilerTimeoutSeconds != 0 {
 		dst.MacOS.SystemProfilerTimeoutSeconds = src.MacOS.SystemProfilerTimeoutSeconds
 	}
-	if src.Proxmox.APIURL != "" {
-		dst.Proxmox.APIURL = src.Proxmox.APIURL
-	}
-	if src.Proxmox.APIToken != "" {
-		dst.Proxmox.APIToken = src.Proxmox.APIToken
+	if src.Proxmox.PveshPath != "" {
+		dst.Proxmox.PveshPath = src.Proxmox.PveshPath
 	}
 	if src.Proxmox.TimeoutSeconds != 0 {
 		dst.Proxmox.TimeoutSeconds = src.Proxmox.TimeoutSeconds
 	}
-	if src.Proxmox.InsecureSkipVerify {
-		dst.Proxmox.InsecureSkipVerify = true
+	if src.Proxmox.EnableCephAPI != nil {
+		dst.Proxmox.EnableCephAPI = src.Proxmox.EnableCephAPI
 	}
-	if src.Proxmox.EnableCephAPI {
-		dst.Proxmox.EnableCephAPI = true
+	if src.Proxmox.EnableLocalCeph != nil {
+		dst.Proxmox.EnableLocalCeph = src.Proxmox.EnableLocalCeph
 	}
-	if src.Proxmox.EnableLocalCeph {
-		dst.Proxmox.EnableLocalCeph = true
-	}
-	if src.PBS.APIURL != "" {
-		dst.PBS.APIURL = src.PBS.APIURL
-	}
-	if src.PBS.APIToken != "" {
-		dst.PBS.APIToken = src.PBS.APIToken
+	if src.PBS.CommandPath != "" {
+		dst.PBS.CommandPath = src.PBS.CommandPath
 	}
 	if src.PBS.TimeoutSeconds != 0 {
 		dst.PBS.TimeoutSeconds = src.PBS.TimeoutSeconds
 	}
-	if src.PBS.InsecureSkipVerify {
-		dst.PBS.InsecureSkipVerify = true
+	if src.Uptime.EnableDefaults != nil {
+		dst.Uptime.EnableDefaults = src.Uptime.EnableDefaults
+	}
+	if src.Uptime.Concurrency != 0 {
+		dst.Uptime.Concurrency = src.Uptime.Concurrency
+	}
+	if src.Uptime.TimeoutSeconds != 0 {
+		dst.Uptime.TimeoutSeconds = src.Uptime.TimeoutSeconds
+	}
+	if len(src.Uptime.Targets) > 0 {
+		dst.Uptime.Targets = src.Uptime.Targets
 	}
 	if len(src.Scripts) > 0 {
 		dst.Scripts = src.Scripts
@@ -508,9 +572,13 @@ func applyOverlay(dst *Config, o Overlay) {
 	if o.EntityID != "" {
 		dst.Entity.ID = o.EntityID
 	}
+	if o.EntityLabel != "" {
+		dst.Entity.Label = o.EntityLabel
+	}
 	if o.EntityType != "" {
 		dst.Entity.Type = o.EntityType
 	}
+	dst.Dimensions = mergeDimensions(dst.Dimensions, o.Dimensions)
 	if o.TimeoutSeconds != 0 {
 		dst.HTTP.TimeoutSeconds = o.TimeoutSeconds
 	}
@@ -581,36 +649,164 @@ func applyOverlay(dst *Config, o Overlay) {
 	if o.SystemProfilerTimeoutSeconds != 0 {
 		dst.MacOS.SystemProfilerTimeoutSeconds = o.SystemProfilerTimeoutSeconds
 	}
-	if o.ProxmoxAPIURL != "" {
-		dst.Proxmox.APIURL = o.ProxmoxAPIURL
-	}
-	if o.ProxmoxAPIToken != "" {
-		dst.Proxmox.APIToken = o.ProxmoxAPIToken
+	if o.ProxmoxPveshPath != "" {
+		dst.Proxmox.PveshPath = o.ProxmoxPveshPath
 	}
 	if o.ProxmoxTimeoutSeconds != 0 {
 		dst.Proxmox.TimeoutSeconds = o.ProxmoxTimeoutSeconds
 	}
-	if o.ProxmoxInsecureSkipVerify {
-		dst.Proxmox.InsecureSkipVerify = true
+	if o.ProxmoxEnableCephAPI != nil {
+		dst.Proxmox.EnableCephAPI = o.ProxmoxEnableCephAPI
 	}
-	if o.ProxmoxEnableCephAPI {
-		dst.Proxmox.EnableCephAPI = true
+	if o.ProxmoxEnableLocalCeph != nil {
+		dst.Proxmox.EnableLocalCeph = o.ProxmoxEnableLocalCeph
 	}
-	if o.ProxmoxEnableLocalCeph {
-		dst.Proxmox.EnableLocalCeph = true
-	}
-	if o.PBSAPIURL != "" {
-		dst.PBS.APIURL = o.PBSAPIURL
-	}
-	if o.PBSAPIToken != "" {
-		dst.PBS.APIToken = o.PBSAPIToken
+	if o.PBSCommandPath != "" {
+		dst.PBS.CommandPath = o.PBSCommandPath
 	}
 	if o.PBSTimeoutSeconds != 0 {
 		dst.PBS.TimeoutSeconds = o.PBSTimeoutSeconds
 	}
-	if o.PBSInsecureSkipVerify {
-		dst.PBS.InsecureSkipVerify = true
+	if o.UptimeDisableDefaults {
+		enabled := false
+		dst.Uptime.EnableDefaults = &enabled
 	}
+	if o.UptimeConcurrency != 0 {
+		dst.Uptime.Concurrency = o.UptimeConcurrency
+	}
+	if o.UptimeTimeoutSeconds != 0 {
+		dst.Uptime.TimeoutSeconds = o.UptimeTimeoutSeconds
+	}
+}
+
+func validateUptimeTargets(targets []UptimeTargetConfig) error {
+	seen := make(map[string]bool, len(targets))
+	for _, target := range targets {
+		if !validUptimeTargetID(target.ID) {
+			return fmt.Errorf("uptime target id %q must contain only letters, digits, dot, underscore, or hyphen", target.ID)
+		}
+		if seen[target.ID] {
+			return fmt.Errorf("uptime target id %q is duplicated", target.ID)
+		}
+		seen[target.ID] = true
+		if strings.TrimSpace(target.Label) == "" {
+			return fmt.Errorf("uptime target %q label is required", target.ID)
+		}
+		if strings.TrimSpace(target.Address) == "" {
+			return fmt.Errorf("uptime target %q address is required", target.ID)
+		}
+		switch strings.ToLower(strings.TrimSpace(target.Kind)) {
+		case "icmp":
+			if target.ExpectedStatus != 0 {
+				return fmt.Errorf("uptime target %q expected_status is only valid for http checks", target.ID)
+			}
+			if net.ParseIP(target.Address) == nil {
+				return fmt.Errorf("uptime target %q ICMP address must be an IP address", target.ID)
+			}
+		case "dns":
+			if target.ExpectedStatus != 0 {
+				return fmt.Errorf("uptime target %q expected_status is only valid for http checks", target.ID)
+			}
+			if strings.ContainsAny(target.Address, "/: \t\r\n") {
+				return fmt.Errorf("uptime target %q DNS address must be a hostname", target.ID)
+			}
+		case "tcp":
+			if target.ExpectedStatus != 0 {
+				return fmt.Errorf("uptime target %q expected_status is only valid for http checks", target.ID)
+			}
+			host, port, err := net.SplitHostPort(target.Address)
+			portNumber, portErr := strconv.Atoi(port)
+			if err != nil || host == "" || portErr != nil || portNumber < 1 || portNumber > 65535 {
+				return fmt.Errorf("uptime target %q TCP address must use host:port", target.ID)
+			}
+		case "http":
+			u, err := url.Parse(target.Address)
+			if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+				return fmt.Errorf("uptime target %q address must be an http or https URL", target.ID)
+			}
+			if u.User != nil {
+				return fmt.Errorf("uptime target %q URL must not contain credentials", target.ID)
+			}
+			if target.ExpectedStatus != 0 && (target.ExpectedStatus < 100 || target.ExpectedStatus > 599) {
+				return fmt.Errorf("uptime target %q expected_status must be between 100 and 599", target.ID)
+			}
+		default:
+			return fmt.Errorf("uptime target %q kind must be icmp, dns, tcp, or http", target.ID)
+		}
+		if target.TimeoutSeconds < 0 {
+			return fmt.Errorf("uptime target %q timeout_seconds must not be negative", target.ID)
+		}
+	}
+	return nil
+}
+
+func validUptimeTargetID(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') ||
+			r == '.' || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func mergeDimensions(base, overlay map[string]string) map[string]string {
+	if len(base) == 0 && len(overlay) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(base)+len(overlay))
+	for key, value := range base {
+		if value != "" {
+			out[key] = value
+		}
+	}
+	for key, value := range overlay {
+		if value != "" {
+			out[key] = value
+		}
+	}
+	return out
+}
+
+func validateDimensions(dimensions map[string]string) error {
+	if len(dimensions) > 32 {
+		return errors.New("dimensions cannot exceed 32 keys")
+	}
+	for key, value := range dimensions {
+		if key == "" || len(key) > 80 {
+			return fmt.Errorf("invalid dimension key %q", key)
+		}
+		if len(value) > 500 {
+			return fmt.Errorf("dimension %q exceeds 500 characters", key)
+		}
+	}
+	return nil
+}
+
+func ParseDimensions(values []string) (map[string]string, error) {
+	dimensions := map[string]string{}
+	for _, value := range values {
+		key, dimensionValue, ok := strings.Cut(value, "=")
+		key = strings.TrimSpace(key)
+		dimensionValue = strings.TrimSpace(dimensionValue)
+		if !ok || key == "" || dimensionValue == "" {
+			return nil, fmt.Errorf("dimension %q must use key=value", value)
+		}
+		dimensions[key] = dimensionValue
+	}
+	if err := validateDimensions(dimensions); err != nil {
+		return nil, err
+	}
+	if len(dimensions) == 0 {
+		return nil, nil
+	}
+	return dimensions, nil
 }
 
 func validateHTTPURL(raw string) error {

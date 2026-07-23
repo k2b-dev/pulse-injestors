@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/valentinkolb/pulse-injestors/internal/entity"
 	"github.com/valentinkolb/pulse-injestors/internal/monitoring"
 	"github.com/valentinkolb/pulse-injestors/internal/pulse"
 )
@@ -35,16 +36,25 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 	b.State("system.network.available", true, nil)
 	for _, row := range rows {
 		dims := map[string]string{"interface": row.Interface}
-		b.Metric("system.network.rx", "counter", float64(row.RxBytes), "bytes", dims)
-		b.Metric("system.network.rx_packets", "counter", float64(row.RxPackets), "count", dims)
-		b.Metric("system.network.rx_errors", "counter", float64(row.RxErrors), "count", dims)
-		b.Metric("system.network.rx_dropped", "counter", float64(row.RxDropped), "count", dims)
-		b.Metric("system.network.tx", "counter", float64(row.TxBytes), "bytes", dims)
-		b.Metric("system.network.tx_packets", "counter", float64(row.TxPackets), "count", dims)
-		b.Metric("system.network.tx_errors", "counter", float64(row.TxErrors), "count", dims)
-		b.Metric("system.network.tx_dropped", "counter", float64(row.TxDropped), "count", dims)
+		ib := monitoring.NewBuilder(interfaceScope(scope, row.Interface))
+		ib.Metric("system.network.rx", "counter", float64(row.RxBytes), "bytes", dims)
+		ib.Metric("system.network.rx_packets", "counter", float64(row.RxPackets), "count", dims)
+		ib.Metric("system.network.rx_errors", "counter", float64(row.RxErrors), "count", dims)
+		ib.Metric("system.network.rx_dropped", "counter", float64(row.RxDropped), "count", dims)
+		ib.Metric("system.network.tx", "counter", float64(row.TxBytes), "bytes", dims)
+		ib.Metric("system.network.tx_packets", "counter", float64(row.TxPackets), "count", dims)
+		ib.Metric("system.network.tx_errors", "counter", float64(row.TxErrors), "count", dims)
+		ib.Metric("system.network.tx_dropped", "counter", float64(row.TxDropped), "count", dims)
+		b.Merge(ib.Batch())
 	}
 	return b.Batch(), nil
+}
+
+func interfaceScope(scope monitoring.Scope, iface string) monitoring.Scope {
+	scope.EntityType = "network-interface"
+	scope.EntityID = entity.ID("network-interface", entity.StableHostIDFromScope(scope.EntityID, scope.Dimensions), iface)
+	scope.Label = iface
+	return scope
 }
 
 type NetDevRow struct {

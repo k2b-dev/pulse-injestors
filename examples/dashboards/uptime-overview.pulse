@@ -1,0 +1,37 @@
+dashboard "Uptime overview" {
+  description "Endpoint availability, check duration, DNS results, and TLS certificate lifetime."
+
+  controls {
+    range "Range" variable range default 24h options 1h, 6h, 24h, 7d, 30d
+  }
+
+  section "Availability" {
+    row height sm {
+      stat "Average availability" {
+        query metric uptime.check.availability avg every 5m reduce avg since $range
+      }
+
+      stat "Slowest check" {
+        query metric uptime.check.duration max every 5m reduce max since $range
+      }
+    }
+
+    line "Availability by endpoint" {
+      query metric uptime.check.availability avg every 5m group by resource since $range
+    }
+
+    line "Duration by endpoint" {
+      query metric uptime.check.duration avg every 5m group by resource since $range
+    }
+  }
+
+  section "DNS and TLS" {
+    line "DNS address count" {
+      query metric uptime.dns.address_count latest every 5m group by resource since $range
+    }
+
+    line "TLS certificate lifetime" {
+      query metric uptime.tls.certificate.expires_in min every 1h group by resource since $range
+    }
+  }
+}

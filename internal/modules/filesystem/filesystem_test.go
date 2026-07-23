@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/valentinkolb/pulse-injestors/internal/monitoring"
 )
 
 func TestReadMounts(t *testing.T) {
@@ -21,5 +23,19 @@ func TestReadMounts(t *testing.T) {
 	}
 	if mounts[1].Point != "/with space" || mounts[1].FSType != "btrfs" {
 		t.Fatalf("mount = %#v", mounts[1])
+	}
+}
+
+func TestFilesystemScopeUsesResourceEntity(t *testing.T) {
+	scope := filesystemScope(monitoring.Scope{
+		EntityID:   "host:server-01",
+		EntityType: "host",
+		Dimensions: map[string]string{
+			"host": "server-01",
+		},
+	}, Mount{Point: "/var/lib/docker"})
+
+	if scope.EntityType != "filesystem" || scope.EntityID != "filesystem:server-01:var_lib_docker" {
+		t.Fatalf("scope = %#v", scope)
 	}
 }

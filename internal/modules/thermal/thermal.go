@@ -40,10 +40,11 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 			continue
 		}
 		typ := readTrimmed(filepath.Join(zone, "type"))
-		b.Metric("system.temperature", "gauge", temp, "celsius", map[string]string{
+		dims := map[string]string{
 			"sensor": filepath.Base(zone),
 			"type":   typ,
-		})
+		}
+		b.Metric("system.temperature", "gauge", temp, "celsius", dims)
 		count++
 	}
 	hwmons, err := filepath.Glob(filepath.Join(sys, "class", "hwmon", "hwmon*"))
@@ -61,11 +62,13 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 			}
 			prefix := strings.TrimSuffix(filepath.Base(input), "_input")
 			label := readTrimmed(filepath.Join(hwmon, prefix+"_label"))
-			b.Metric("system.temperature", "gauge", temp, "celsius", map[string]string{
-				"sensor": filepath.Base(hwmon) + "." + prefix,
+			sensor := filepath.Base(hwmon) + "." + prefix
+			dims := map[string]string{
+				"sensor": sensor,
 				"chip":   name,
 				"label":  label,
-			})
+			}
+			b.Metric("system.temperature", "gauge", temp, "celsius", dims)
 			count++
 		}
 	}

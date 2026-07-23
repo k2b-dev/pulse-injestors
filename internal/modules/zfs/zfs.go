@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/valentinkolb/pulse-injestors/internal/entity"
 	"github.com/valentinkolb/pulse-injestors/internal/monitoring"
 	"github.com/valentinkolb/pulse-injestors/internal/pulse"
 )
@@ -33,105 +34,136 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 	b.State("system.zfs.available", zpoolErr == nil || zfsErr == nil, nil)
 
 	if zpoolErr == nil {
-		collectPools(ctx, b, zpoolPath, timeout)
-		collectPoolStatus(ctx, b, zpoolPath, timeout)
+		collectPools(ctx, b, scope, zpoolPath, timeout)
+		collectPoolStatus(ctx, b, scope, zpoolPath, timeout)
 	}
 	if zfsErr == nil {
-		collectDatasets(ctx, b, zfsPath, timeout)
-		collectSnapshots(ctx, b, zfsPath, timeout)
+		collectDatasets(ctx, b, scope, zfsPath, timeout)
+		collectSnapshots(ctx, b, scope, zfsPath, timeout)
 	}
 	return b.Batch(), nil
 }
 
-func collectPools(ctx context.Context, b *monitoring.Builder, path string, timeout time.Duration) {
+func collectPools(ctx context.Context, b *monitoring.Builder, scope monitoring.Scope, path string, timeout time.Duration) {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	out, err := exec.CommandContext(runCtx, path, "list", "-Hp", "-o", "name,size,alloc,free,capacity,fragmentation,health").Output()
 	cancel()
 	if err != nil {
-		b.Event("system.zfs.pools.failed", nil, map[string]any{"error": err.Error()})
+		b.EventDetails("system.zfs.pools.failed", map[string]string{"operation": "pool_list"}, monitoring.EventDetails{
+			Attributes: map[string]any{"error": err.Error()},
+		})
 		return
 	}
 	pools := parsePoolList(out)
-	b.Metric("system.zfs.pools", "gauge", float64(len(pools)), "count", nil)
+	b.Metric("system.zfs.pools", "gauge", float64(len(pools)), "", nil)
 	for _, pool := range pools {
 		dims := map[string]string{"pool": pool.Name}
-		b.State("system.zfs.pool.present", true, dims)
-		b.State("system.zfs.pool.health", pool.Health, dims)
-		b.State("system.zfs.pool.healthy", pool.Health == "ONLINE", dims)
-		b.Metric("system.zfs.pool.size", "gauge", pool.Size, "bytes", dims)
-		b.Metric("system.zfs.pool.allocated", "gauge", pool.Allocated, "bytes", dims)
-		b.Metric("system.zfs.pool.free", "gauge", pool.Free, "bytes", dims)
+		pb := monitoring.NewBuilder(poolScope(scope, pool.Name))
+		pb.State("system.zfs.pool.present", true, dims)
+		pb.State("system.zfs.pool.health", pool.Health, dims)
+		pb.State("system.zfs.pool.healthy", pool.Health == "ONLINE", dims)
+		pb.Metric("system.zfs.pool.size", "gauge", pool.Size, "bytes", dims)
+		pb.Metric("system.zfs.pool.allocated", "gauge", pool.Allocated, "bytes", dims)
+		pb.Metric("system.zfs.pool.free", "gauge", pool.Free, "bytes", dims)
 		if pool.Capacity >= 0 {
-			b.Metric("system.zfs.pool.capacity", "gauge", pool.Capacity, "percent", dims)
+			pb.Metric("system.zfs.pool.capacity", "gauge", pool.Capacity, "percent", dims)
 		}
 		if pool.Fragmentation >= 0 {
-			b.Metric("system.zfs.pool.fragmentation", "gauge", pool.Fragmentation, "percent", dims)
+			pb.Metric("system.zfs.pool.fragmentation", "gauge", pool.Fragmentation, "percent", dims)
 		}
+		b.Merge(pb.Batch())
 	}
 }
 
-func collectPoolStatus(ctx context.Context, b *monitoring.Builder, path string, timeout time.Duration) {
+func collectPoolStatus(ctx context.Context, b *monitoring.Builder, scope monitoring.Scope, path string, timeout time.Duration) {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	out, err := exec.CommandContext(runCtx, path, "status").Output()
 	cancel()
 	if err != nil {
-		b.Event("system.zfs.pool.status.failed", nil, map[string]any{"error": err.Error()})
+		b.EventDetails("system.zfs.pool.status.failed", map[string]string{"operation": "pool_status"}, monitoring.EventDetails{
+			Attributes: map[string]any{"error": err.Error()},
+		})
 		return
 	}
 	for _, scan := range parsePoolScans(out) {
 		dims := map[string]string{"pool": scan.Pool}
+		pb := monitoring.NewBuilder(poolScope(scope, scan.Pool))
 		if scan.Status != "" {
-			b.State("system.zfs.pool.scan.status", scan.Status, dims)
+			pb.State("system.zfs.pool.scan.status", scan.Status, dims)
 		}
 		if scan.CompletedAt != "" {
-			b.State("system.zfs.pool.scan.completed_at", scan.CompletedAt, dims)
+			pb.State("system.zfs.pool.scan.completed_at", scan.CompletedAt, dims)
 		}
 		if scan.Errors >= 0 {
-			b.Metric("system.zfs.pool.scan.errors", "gauge", float64(scan.Errors), "count", dims)
+			pb.Metric("system.zfs.pool.scan.errors", "gauge", float64(scan.Errors), "count", dims)
 		}
+		b.Merge(pb.Batch())
 	}
 }
 
-func collectDatasets(ctx context.Context, b *monitoring.Builder, path string, timeout time.Duration) {
+func collectDatasets(ctx context.Context, b *monitoring.Builder, scope monitoring.Scope, path string, timeout time.Duration) {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	out, err := exec.CommandContext(runCtx, path, "list", "-Hp", "-t", "filesystem,volume", "-o", "name,type,used,avail,refer,compressratio,mountpoint").Output()
 	cancel()
 	if err != nil {
-		b.Event("system.zfs.datasets.failed", nil, map[string]any{"error": err.Error()})
+		b.EventDetails("system.zfs.datasets.failed", map[string]string{"operation": "dataset_list"}, monitoring.EventDetails{
+			Attributes: map[string]any{"error": err.Error()},
+		})
 		return
 	}
 	datasets := parseDatasetList(out)
-	b.Metric("system.zfs.datasets", "gauge", float64(len(datasets)), "count", nil)
+	b.Metric("system.zfs.datasets", "gauge", float64(len(datasets)), "", nil)
 	for _, dataset := range datasets {
-		dims := map[string]string{"dataset": dataset.Name, "type": dataset.Type}
-		b.State("system.zfs.dataset.present", true, dims)
+		dims := map[string]string{"dataset": dataset.Name}
+		db := monitoring.NewBuilder(datasetScope(scope, dataset.Name))
+		db.State("system.zfs.dataset.present", true, dims)
+		db.State("system.zfs.dataset.type", dataset.Type, dims)
 		if dataset.Mountpoint != "" && dataset.Mountpoint != "-" {
-			b.State("system.zfs.dataset.mountpoint", dataset.Mountpoint, dims)
+			db.State("system.zfs.dataset.mountpoint", dataset.Mountpoint, dims)
 		}
-		b.Metric("system.zfs.dataset.used", "gauge", dataset.Used, "bytes", dims)
-		b.Metric("system.zfs.dataset.available", "gauge", dataset.Available, "bytes", dims)
-		b.Metric("system.zfs.dataset.referenced", "gauge", dataset.Referenced, "bytes", dims)
+		db.Metric("system.zfs.dataset.used", "gauge", dataset.Used, "bytes", dims)
+		db.Metric("system.zfs.dataset.available", "gauge", dataset.Available, "bytes", dims)
+		db.Metric("system.zfs.dataset.referenced", "gauge", dataset.Referenced, "bytes", dims)
 		if dataset.CompressRatio >= 0 {
-			b.Metric("system.zfs.dataset.compressratio", "gauge", dataset.CompressRatio, "ratio", dims)
+			db.Metric("system.zfs.dataset.compressratio", "gauge", dataset.CompressRatio, "ratio", dims)
 		}
+		b.Merge(db.Batch())
 	}
 }
 
-func collectSnapshots(ctx context.Context, b *monitoring.Builder, path string, timeout time.Duration) {
+func collectSnapshots(ctx context.Context, b *monitoring.Builder, scope monitoring.Scope, path string, timeout time.Duration) {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	out, err := exec.CommandContext(runCtx, path, "list", "-Hp", "-t", "snapshot", "-o", "name").Output()
 	cancel()
 	if err != nil {
-		b.Event("system.zfs.snapshots.failed", nil, map[string]any{"error": err.Error()})
+		b.EventDetails("system.zfs.snapshots.failed", map[string]string{"operation": "snapshot_list"}, monitoring.EventDetails{
+			Attributes: map[string]any{"error": err.Error()},
+		})
 		return
 	}
 	counts := parseSnapshotCounts(out)
 	total := 0
 	for dataset, count := range counts {
 		total += count
-		b.Metric("system.zfs.dataset.snapshots", "gauge", float64(count), "count", map[string]string{"dataset": dataset})
+		db := monitoring.NewBuilder(datasetScope(scope, dataset))
+		db.Metric("system.zfs.dataset.snapshots", "gauge", float64(count), "", map[string]string{"dataset": dataset})
+		b.Merge(db.Batch())
 	}
-	b.Metric("system.zfs.snapshots", "gauge", float64(total), "count", nil)
+	b.Metric("system.zfs.snapshots", "gauge", float64(total), "", nil)
+}
+
+func poolScope(scope monitoring.Scope, pool string) monitoring.Scope {
+	scope.EntityType = "zfs-pool"
+	scope.EntityID = entity.ID("zfs-pool", entity.StableHostIDFromScope(scope.EntityID, scope.Dimensions), pool)
+	scope.Label = pool
+	return scope
+}
+
+func datasetScope(scope monitoring.Scope, dataset string) monitoring.Scope {
+	scope.EntityType = "zfs-dataset"
+	scope.EntityID = entity.ID("zfs-dataset", entity.StableHostIDFromScope(scope.EntityID, scope.Dimensions), dataset)
+	scope.Label = dataset
+	return scope
 }
 
 type Pool struct {

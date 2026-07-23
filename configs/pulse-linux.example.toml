@@ -4,7 +4,11 @@ ingest_token = "replace-me"
 
 [entity]
 id = "linux-host-1"
-type = "linux-host"
+label = "linux-host-1"
+type = "host"
+
+[dimensions]
+environment = "production"
 
 [runner]
 interval_seconds = 60
@@ -23,7 +27,7 @@ cpu_sample_ms = 250
 enable_thermal = true
 enable_btrfs = true
 enable_zfs = true
-enable_ceph = false
+enable_ceph = true
 
 [linux]
 profile = "docker-host"

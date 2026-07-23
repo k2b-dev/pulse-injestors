@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/valentinkolb/pulse-injestors/internal/entity"
 	"github.com/valentinkolb/pulse-injestors/internal/monitoring"
 	"github.com/valentinkolb/pulse-injestors/internal/pulse"
 )
@@ -36,22 +37,23 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 	if err := collectSystem(ctx, b); err != nil {
 		reportSubmoduleError(b, "system", err)
 	}
-	if err := collectFilesystems(ctx, b); err != nil {
+	if err := collectFilesystems(ctx, b, scope); err != nil {
 		reportSubmoduleError(b, "filesystem", err)
 	}
 	if err := collectBattery(ctx, b); err != nil {
 		reportSubmoduleError(b, "battery", err)
 	}
 	if c.EnableSystemProfiler {
-		if err := collectDisplays(ctx, b, c.SystemProfilerTimeout); err != nil {
+		if err := collectDisplays(ctx, b, scope, c.SystemProfilerTimeout); err != nil {
 			reportSubmoduleError(b, "display", err)
 		}
 	} else {
-		b.State("system.display.available", false, map[string]string{"reason": "system_profiler_disabled"})
+		b.State("system.display.available", false, nil)
+		b.State("system.display.unavailable_reason", "system_profiler_disabled", nil)
 		b.State("macos.system_profiler.enabled", false, nil)
 	}
 	if c.EnableHomebrew {
-		if err := collectHomebrew(ctx, b, c.HomebrewTimeout); err != nil {
+		if err := collectHomebrew(ctx, b, scope, c.HomebrewTimeout); err != nil {
 			reportSubmoduleError(b, "homebrew", err)
 		}
 	}
@@ -66,7 +68,9 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 func reportSubmoduleError(b *monitoring.Builder, submodule string, err error) {
 	dims := map[string]string{"submodule": submodule}
 	b.State("macos.submodule.ok", false, dims)
-	b.Event("macos.submodule.failed", dims, map[string]any{"error": err.Error()})
+	b.EventDetails("macos.submodule.failed", dims, monitoring.EventDetails{
+		Attributes: map[string]any{"error": err.Error()},
+	})
 }
 
 func collectOS(ctx context.Context, b *monitoring.Builder) error {
@@ -103,10 +107,10 @@ func collectSystem(ctx context.Context, b *monitoring.Builder) error {
 		}
 	}
 	if v, err := sysctlUint(ctx, "hw.logicalcpu"); err == nil {
-		b.Metric("system.cpu.cores.logical", "gauge", float64(v), "count", nil)
+		b.Metric("system.cpu.cores.logical", "gauge", float64(v), "", nil)
 	}
 	if v, err := sysctlUint(ctx, "hw.physicalcpu"); err == nil {
-		b.Metric("system.cpu.cores.physical", "gauge", float64(v), "count", nil)
+		b.Metric("system.cpu.cores.physical", "gauge", float64(v), "", nil)
 	}
 	if uptime, err := macUptime(ctx); err != nil {
 		errs = append(errs, err)
@@ -116,7 +120,7 @@ func collectSystem(ctx context.Context, b *monitoring.Builder) error {
 	return errors.Join(errs...)
 }
 
-func collectFilesystems(ctx context.Context, b *monitoring.Builder) error {
+func collectFilesystems(ctx context.Context, b *monitoring.Builder, scope monitoring.Scope) error {
 	out, err := run(ctx, 5*time.Second, nil, "df", "-k", "-P", "-l")
 	if err != nil {
 		return fmt.Errorf("df: %w", err)
@@ -141,16 +145,19 @@ func collectFilesystems(ctx context.Context, b *monitoring.Builder) error {
 		if strings.HasPrefix(mount, "/System/Volumes/Data/") {
 			continue
 		}
-		dims := map[string]string{"mount": mount, "source": fields[0]}
-		b.Metric("system.filesystem.total", "gauge", float64(totalKB*1024), "bytes", dims)
-		b.Metric("system.filesystem.used", "gauge", float64(usedKB*1024), "bytes", dims)
-		b.Metric("system.filesystem.available", "gauge", float64(availKB*1024), "bytes", dims)
-		b.Metric("system.filesystem.usage", "gauge", usePct, "percent", dims)
+		dims := map[string]string{"mount": mount}
+		fb := monitoring.NewBuilder(filesystemScope(scope, mount))
+		fb.State("system.filesystem.source", fields[0], dims)
+		fb.Metric("system.filesystem.total", "gauge", float64(totalKB*1024), "bytes", dims)
+		fb.Metric("system.filesystem.used", "gauge", float64(usedKB*1024), "bytes", dims)
+		fb.Metric("system.filesystem.available", "gauge", float64(availKB*1024), "bytes", dims)
+		fb.Metric("system.filesystem.usage", "gauge", usePct, "percent", dims)
+		b.Merge(fb.Batch())
 	}
 	return sc.Err()
 }
 
-func collectHomebrew(ctx context.Context, b *monitoring.Builder, timeout time.Duration) error {
+func collectHomebrew(ctx context.Context, b *monitoring.Builder, scope monitoring.Scope, timeout time.Duration) error {
 	if timeout <= 0 {
 		timeout = 20 * time.Second
 	}
@@ -167,7 +174,7 @@ func collectHomebrew(ctx context.Context, b *monitoring.Builder, timeout time.Du
 		version := strings.Split(strings.TrimSpace(string(out)), "\n")[0]
 		b.State("package.homebrew.version", version, nil)
 	}
-	collectHomebrewServices(ctx, b, path, timeout)
+	collectHomebrewServices(ctx, b, scope, path, timeout)
 	env := []string{"HOMEBREW_NO_AUTO_UPDATE=1", "HOMEBREW_NO_ANALYTICS=1"}
 	out, err := run(ctx, timeout, env, path, "outdated", "--json=v2")
 	if err != nil {
@@ -183,45 +190,51 @@ func collectHomebrew(ctx context.Context, b *monitoring.Builder, timeout time.Du
 		return fmt.Errorf("brew outdated json: %w", err)
 	}
 	b.State("package.homebrew.outdated.available", true, nil)
-	b.Metric("system.packages.homebrew.outdated.formulae", "gauge", float64(len(parsed.Formulae)), "count", nil)
-	b.Metric("system.packages.homebrew.outdated.casks", "gauge", float64(len(parsed.Casks)), "count", nil)
-	b.Metric("system.packages.homebrew.outdated.total", "gauge", float64(len(parsed.Formulae)+len(parsed.Casks)), "count", nil)
+	b.Metric("system.packages.homebrew.outdated.formulae", "gauge", float64(len(parsed.Formulae)), "", nil)
+	b.Metric("system.packages.homebrew.outdated.casks", "gauge", float64(len(parsed.Casks)), "", nil)
+	b.Metric("system.packages.homebrew.outdated.total", "gauge", float64(len(parsed.Formulae)+len(parsed.Casks)), "", nil)
 	return nil
 }
 
-func collectHomebrewServices(ctx context.Context, b *monitoring.Builder, path string, timeout time.Duration) {
+func collectHomebrewServices(ctx context.Context, b *monitoring.Builder, scope monitoring.Scope, path string, timeout time.Duration) {
 	out, err := run(ctx, timeout, []string{"HOMEBREW_NO_AUTO_UPDATE=1", "HOMEBREW_NO_ANALYTICS=1"}, path, "services", "info", "--all", "--json")
 	if err != nil {
 		b.State("package.homebrew.services.available", false, nil)
-		b.Event("package.homebrew.services.failed", nil, map[string]any{"error": err.Error()})
+		b.EventDetails("package.homebrew.services.failed", map[string]string{"operation": "services_info"}, monitoring.EventDetails{
+			Attributes: map[string]any{"error": err.Error()},
+		})
 		return
 	}
 	services, err := parseHomebrewServices(out)
 	if err != nil {
 		b.State("package.homebrew.services.available", false, nil)
-		b.Event("package.homebrew.services.failed", nil, map[string]any{"error": err.Error()})
+		b.EventDetails("package.homebrew.services.failed", map[string]string{"operation": "services_parse"}, monitoring.EventDetails{
+			Attributes: map[string]any{"error": err.Error()},
+		})
 		return
 	}
 	b.State("package.homebrew.services.available", true, nil)
-	b.Metric("system.service.homebrew.services", "gauge", float64(len(services)), "count", nil)
+	b.Metric("system.service.homebrew.services", "gauge", float64(len(services)), "", nil)
 	states := map[string]int{}
 	for _, service := range services {
-		dims := map[string]string{"service": service.Name}
-		b.State("system.service.homebrew.present", true, dims)
+		dims := map[string]string{"service": service.Name, "service_manager": "homebrew"}
+		sb := monitoring.NewBuilder(homebrewServiceScope(scope, service.Name))
+		sb.State("system.service.homebrew.present", true, dims)
 		if service.Status != "" {
-			b.State("system.service.homebrew.status", service.Status, dims)
+			sb.State("system.service.homebrew.status", service.Status, dims)
 			states[service.Status]++
 		}
 		if service.User != "" {
-			b.State("system.service.homebrew.user", service.User, dims)
+			sb.State("system.service.homebrew.user", service.User, dims)
 		}
 		if service.File != "" {
-			b.State("system.service.homebrew.file", service.File, dims)
+			sb.State("system.service.homebrew.file", service.File, dims)
 		}
-		b.State("system.service.homebrew.running", service.Status == "started", dims)
+		sb.State("system.service.homebrew.running", service.Status == "started", dims)
+		b.Merge(sb.Batch())
 	}
 	for state, count := range states {
-		b.Metric("system.service.homebrew.by_status", "gauge", float64(count), "count", map[string]string{"status": state})
+		b.Metric("system.service.homebrew.by_status", "gauge", float64(count), "", map[string]string{"status": state})
 	}
 }
 
@@ -237,7 +250,7 @@ func collectSoftwareUpdate(ctx context.Context, b *monitoring.Builder, timeout t
 	text := string(out)
 	count := strings.Count(text, "\n   * ")
 	b.State("macos.softwareupdate.available", true, nil)
-	b.Metric("system.packages.macos.updates", "gauge", float64(count), "count", nil)
+	b.Metric("system.packages.macos.updates", "gauge", float64(count), "", nil)
 	return nil
 }
 
@@ -277,11 +290,11 @@ func collectBattery(ctx context.Context, b *monitoring.Builder) error {
 		unit string
 	}{
 		"CurrentCapacity":         {"system.battery.charge", "percent"},
-		"AppleRawCurrentCapacity": {"system.battery.current_capacity", "mAh"},
-		"AppleRawMaxCapacity":     {"system.battery.max_capacity", "mAh"},
-		"DesignCapacity":          {"system.battery.design_capacity", "mAh"},
-		"NominalChargeCapacity":   {"system.battery.nominal_charge_capacity", "mAh"},
-		"CycleCount":              {"system.battery.cycle_count", "count"},
+		"AppleRawCurrentCapacity": {"system.battery.current_capacity", "milliampere-hour"},
+		"AppleRawMaxCapacity":     {"system.battery.max_capacity", "milliampere-hour"},
+		"DesignCapacity":          {"system.battery.design_capacity", "milliampere-hour"},
+		"NominalChargeCapacity":   {"system.battery.nominal_charge_capacity", "milliampere-hour"},
+		"CycleCount":              {"system.battery.cycle_count", ""},
 		"Voltage":                 {"system.battery.voltage", "millivolt"},
 		"AppleRawBatteryVoltage":  {"system.battery.raw_voltage", "millivolt"},
 		"Amperage":                {"system.battery.amperage", "milliampere"},
@@ -289,7 +302,7 @@ func collectBattery(ctx context.Context, b *monitoring.Builder) error {
 		"AvgTimeToEmpty":          {"system.battery.time_to_empty", "minutes"},
 		"AvgTimeToFull":           {"system.battery.time_to_full", "minutes"},
 		"TimeRemaining":           {"system.battery.time_remaining", "minutes"},
-		"DesignCycleCount9C":      {"system.battery.design_cycle_count", "count"},
+		"DesignCycleCount9C":      {"system.battery.design_cycle_count", ""},
 		"Watts":                   {"system.power.adapter.watts", "watt"},
 		"AdapterVoltage":          {"system.power.adapter.voltage", "millivolt"},
 		"SystemPowerIn":           {"system.power.input", "milliwatt"},
@@ -307,12 +320,14 @@ func collectBattery(ctx context.Context, b *monitoring.Builder) error {
 	if v, ok := nums["VirtualTemperature"]; ok {
 		b.Metric("system.battery.virtual_temperature", "gauge", float64(v)/100, "celsius", nil)
 	}
-	b.State("macos.thermal.cpu.available", false, map[string]string{"source": "powermetrics", "reason": "privileged_or_tool_required"})
-	b.State("macos.thermal.gpu.available", false, map[string]string{"source": "powermetrics", "reason": "privileged_or_tool_required"})
+	b.State("macos.thermal.cpu.available", false, map[string]string{"source": "powermetrics"})
+	b.State("macos.thermal.cpu.unavailable_reason", "privileged_or_tool_required", map[string]string{"source": "powermetrics"})
+	b.State("macos.thermal.gpu.available", false, map[string]string{"source": "powermetrics"})
+	b.State("macos.thermal.gpu.unavailable_reason", "privileged_or_tool_required", map[string]string{"source": "powermetrics"})
 	return nil
 }
 
-func emitBatteryHealth(b *monitoring.Builder, nums map[string]uint64) {
+func emitBatteryHealth(b *monitoring.Builder, nums map[string]int64) {
 	maxCapacity, maxOK := nums["AppleRawMaxCapacity"]
 	if !maxOK {
 		maxCapacity, maxOK = nums["NominalChargeCapacity"]
@@ -360,7 +375,7 @@ func parseHomebrewServices(out []byte) ([]HomebrewService, error) {
 	return services, nil
 }
 
-func collectDisplays(ctx context.Context, b *monitoring.Builder, timeout time.Duration) error {
+func collectDisplays(ctx context.Context, b *monitoring.Builder, scope monitoring.Scope, timeout time.Duration) error {
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
@@ -401,7 +416,7 @@ func collectDisplays(ctx context.Context, b *monitoring.Builder, timeout time.Du
 		b.State("system.gpu.metal", gpu.Metal, dims)
 		b.State("system.gpu.bus", gpu.Bus, dims)
 		if cores, err := strconv.ParseFloat(gpu.Cores, 64); err == nil {
-			b.Metric("system.gpu.cores", "gauge", cores, "count", dims)
+			b.Metric("system.gpu.cores", "gauge", cores, "", dims)
 		}
 		for _, display := range gpu.Devices {
 			displayCount++
@@ -422,8 +437,22 @@ func collectDisplays(ctx context.Context, b *monitoring.Builder, timeout time.Du
 		}
 	}
 	b.State("system.display.available", displayCount > 0, nil)
-	b.Metric("system.display.count", "gauge", float64(displayCount), "count", nil)
+	b.Metric("system.display.count", "gauge", float64(displayCount), "", nil)
 	return nil
+}
+
+func filesystemScope(scope monitoring.Scope, mount string) monitoring.Scope {
+	scope.EntityType = "filesystem"
+	scope.EntityID = entity.ID("filesystem", entity.StableHostIDFromScope(scope.EntityID, scope.Dimensions), entity.Key(mount, "root"))
+	scope.Label = mount
+	return scope
+}
+
+func homebrewServiceScope(scope monitoring.Scope, service string) monitoring.Scope {
+	scope.EntityType = "service"
+	scope.EntityID = entity.ID("service", entity.StableHostIDFromScope(scope.EntityID, scope.Dimensions), "homebrew", service)
+	scope.Label = service
+	return scope
 }
 
 type memory struct {
@@ -541,15 +570,15 @@ func keyValueLines(out []byte, sep string) map[string]string {
 }
 
 var (
-	ioregNumberPattern = regexp.MustCompile(`"([^"]+)" = ([0-9]+)`)
+	ioregNumberPattern = regexp.MustCompile(`"([^"]+)" = (-?[0-9]+)`)
 	ioregBoolPattern   = regexp.MustCompile(`"([^"]+)" = (Yes|No)`)
 	ioregStringPattern = regexp.MustCompile(`"([^"]+)" = "([^"]*)"`)
 )
 
-func ioregNumbers(text string) map[string]uint64 {
-	out := map[string]uint64{}
+func ioregNumbers(text string) map[string]int64 {
+	out := map[string]int64{}
 	for _, match := range ioregNumberPattern.FindAllStringSubmatch(text, -1) {
-		if v, err := strconv.ParseUint(match[2], 10, 64); err == nil {
+		if v, err := strconv.ParseInt(match[2], 10, 64); err == nil {
 			out[match[1]] = v
 		}
 	}

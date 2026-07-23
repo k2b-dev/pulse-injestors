@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/valentinkolb/pulse-injestors/internal/entity"
 	"github.com/valentinkolb/pulse-injestors/internal/monitoring"
 	"github.com/valentinkolb/pulse-injestors/internal/pulse"
 )
@@ -26,12 +27,12 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 		timeout = 20 * time.Second
 	}
 	b := monitoring.NewBuilder(scope)
-	collectSmart(ctx, b, timeout)
-	collectNVMe(ctx, b, timeout)
+	collectSmart(ctx, b, scope, timeout)
+	collectNVMe(ctx, b, scope, timeout)
 	return b.Batch(), nil
 }
 
-func collectSmart(ctx context.Context, b *monitoring.Builder, timeout time.Duration) {
+func collectSmart(ctx context.Context, b *monitoring.Builder, scope monitoring.Scope, timeout time.Duration) {
 	path, err := exec.LookPath("smartctl")
 	if err != nil {
 		b.State("system.disk.smart.available", false, nil)
@@ -42,41 +43,51 @@ func collectSmart(ctx context.Context, b *monitoring.Builder, timeout time.Durat
 	out, err := exec.CommandContext(scanCtx, path, "--scan-open").Output()
 	cancel()
 	if err != nil {
-		b.Event("system.disk.smart.scan.failed", nil, map[string]any{"error": err.Error()})
+		b.EventDetails("system.disk.smart.scan.failed", map[string]string{"operation": "smart_scan"}, monitoring.EventDetails{
+			Attributes: map[string]any{"error": err.Error()},
+		})
 		return
 	}
 	devices := parseSmartScan(out)
-	b.Metric("system.disk.smart.devices", "gauge", float64(len(devices)), "count", nil)
+	b.Metric("system.disk.smart.devices", "gauge", float64(len(devices)), "", nil)
 	for _, device := range devices {
 		runCtx, cancel := context.WithTimeout(ctx, timeout)
 		health, err := exec.CommandContext(runCtx, path, "-H", device).Output()
 		cancel()
 		dims := map[string]string{"device": device}
+		db := monitoring.NewBuilder(diskScope(scope, device, "", ""))
 		if err != nil {
-			b.State("system.disk.smart.health_available", false, dims)
-			b.Event("system.disk.smart.health.failed", dims, map[string]any{"error": err.Error()})
+			db.State("system.disk.smart.health_available", false, dims)
+			db.EventDetails("system.disk.smart.health.failed", monitoring.MergeDimensions(dims, map[string]string{"operation": "smart_health"}), monitoring.EventDetails{
+				Attributes: map[string]any{"error": err.Error()},
+			})
+			b.Merge(db.Batch())
 			continue
 		}
 		status, healthy := parseSmartHealth(health)
-		b.State("system.disk.smart.health_available", true, dims)
+		db.State("system.disk.smart.health_available", true, dims)
 		if status != "" {
-			b.State("system.disk.smart.status", status, dims)
+			db.State("system.disk.smart.status", status, dims)
 		}
-		b.State("system.disk.smart.healthy", healthy, dims)
+		db.State("system.disk.smart.healthy", healthy, dims)
 		attrCtx, cancel := context.WithTimeout(ctx, timeout)
 		attributes, err := exec.CommandContext(attrCtx, path, "-A", device).Output()
 		cancel()
 		if err != nil {
-			b.State("system.disk.smart.attributes_available", false, dims)
-			b.Event("system.disk.smart.attributes.failed", dims, map[string]any{"error": err.Error()})
+			db.State("system.disk.smart.attributes_available", false, dims)
+			db.EventDetails("system.disk.smart.attributes.failed", monitoring.MergeDimensions(dims, map[string]string{"operation": "smart_attributes"}), monitoring.EventDetails{
+				Attributes: map[string]any{"error": err.Error()},
+			})
+			b.Merge(db.Batch())
 			continue
 		}
-		b.State("system.disk.smart.attributes_available", true, dims)
-		emitSmartAttributes(b, dims, attributes)
+		db.State("system.disk.smart.attributes_available", true, dims)
+		emitSmartAttributes(db, dims, attributes)
+		b.Merge(db.Batch())
 	}
 }
 
-func collectNVMe(ctx context.Context, b *monitoring.Builder, timeout time.Duration) {
+func collectNVMe(ctx context.Context, b *monitoring.Builder, scope monitoring.Scope, timeout time.Duration) {
 	path, err := exec.LookPath("nvme")
 	if err != nil {
 		b.State("system.disk.nvme.available", false, nil)
@@ -87,30 +98,71 @@ func collectNVMe(ctx context.Context, b *monitoring.Builder, timeout time.Durati
 	out, err := exec.CommandContext(listCtx, path, "list", "-o", "json").Output()
 	cancel()
 	if err != nil {
-		b.Event("system.disk.nvme.list.failed", nil, map[string]any{"error": err.Error()})
+		b.EventDetails("system.disk.nvme.list.failed", map[string]string{"operation": "nvme_list"}, monitoring.EventDetails{
+			Attributes: map[string]any{"error": err.Error()},
+		})
 		return
 	}
 	devices := parseNVMeList(out)
-	b.Metric("system.disk.nvme.devices", "gauge", float64(len(devices)), "count", nil)
+	b.Metric("system.disk.nvme.devices", "gauge", float64(len(devices)), "", nil)
 	for _, device := range devices {
 		dims := map[string]string{"device": device.Path}
+		db := monitoring.NewBuilder(diskScope(scope, device.Path, device.Serial, diskLabel(device.Path, device.Model, device.Serial)))
+		db.State("system.disk.nvme.present", true, dims)
 		if device.Model != "" {
-			dims["model"] = device.Model
+			db.State("system.disk.model", device.Model, dims)
 		}
 		if device.Serial != "" {
-			dims["serial"] = device.Serial
+			db.State("system.disk.serial", device.Serial, dims)
 		}
-		b.State("system.disk.nvme.present", true, dims)
 		runCtx, cancel := context.WithTimeout(ctx, timeout)
 		out, err := exec.CommandContext(runCtx, path, "smart-log", "-o", "json", device.Path).Output()
 		cancel()
 		if err != nil {
-			b.State("system.disk.nvme.smart_available", false, dims)
-			b.Event("system.disk.nvme.smart.failed", dims, map[string]any{"error": err.Error()})
+			db.State("system.disk.nvme.smart_available", false, dims)
+			db.EventDetails("system.disk.nvme.smart.failed", monitoring.MergeDimensions(dims, map[string]string{"operation": "nvme_smart"}), monitoring.EventDetails{
+				Attributes: map[string]any{"error": err.Error()},
+			})
+			b.Merge(db.Batch())
 			continue
 		}
-		emitNVMeSmart(b, dims, out)
+		emitNVMeSmart(db, dims, out)
+		b.Merge(db.Batch())
 	}
+}
+
+func diskScope(scope monitoring.Scope, device, serial, label string) monitoring.Scope {
+	scope.EntityType = "disk"
+	scope.EntityID = entity.ID("disk", entity.StableHostIDFromScope(scope.EntityID, scope.Dimensions), entity.Key(serial, device))
+	scope.Label = displayLabel(label, device, serial)
+	return scope
+}
+
+func displayLabel(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return "unknown"
+}
+
+func diskLabel(device, model, serial string) string {
+	if model != "" && serial != "" {
+		return model + " (" + shortSerial(serial) + ")"
+	}
+	if model != "" {
+		return model
+	}
+	return device
+}
+
+func shortSerial(serial string) string {
+	serial = strings.TrimSpace(serial)
+	if len(serial) <= 8 {
+		return serial
+	}
+	return serial[:8]
 }
 
 func parseSmartScan(out []byte) []string {
@@ -265,12 +317,14 @@ func emitNVMeSmart(b *monitoring.Builder, dims map[string]string, out []byte) {
 	var raw map[string]any
 	if err := json.Unmarshal(out, &raw); err != nil {
 		b.State("system.disk.nvme.smart_available", false, dims)
-		b.Event("system.disk.nvme.smart.failed", dims, map[string]any{"error": err.Error()})
+		b.EventDetails("system.disk.nvme.smart.failed", monitoring.MergeDimensions(dims, map[string]string{"operation": "parse_nvme_smart"}), monitoring.EventDetails{
+			Attributes: map[string]any{"error": err.Error()},
+		})
 		return
 	}
 	b.State("system.disk.nvme.smart_available", true, dims)
 	if v, ok := jsonNumber(raw["critical_warning"]); ok {
-		b.Metric("system.disk.nvme.critical_warning", "gauge", v, "count", dims)
+		b.Metric("system.disk.nvme.critical_warning", "gauge", v, "", dims)
 		b.State("system.disk.nvme.healthy", v == 0, dims)
 	}
 	emitNVMeTemperature(b, raw, dims)

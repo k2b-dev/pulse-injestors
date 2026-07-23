@@ -1,60 +1,52 @@
 # pulse-injestors
 
-Initial Go ingestors for Pulse.
+Focused Go telemetry ingestors for Pulse.
 
-Current binaries:
+## Native enrollment
 
-- `pulse-docker`: Docker host/container monitoring.
-- `pulse-linux`: Linux host monitoring without Docker.
-- `pulse-macos`: macOS device monitoring.
-- `pulse-proxmox`: Proxmox VE cluster monitoring.
-- `pulse-proxmox-backup-server`: Proxmox Backup Server monitoring.
-- `pulse-mock-server`: local ingest target for smoke tests.
-
-Metric names, units, dimensions, sources, and cost classes are listed in [docs/metrics.md](docs/metrics.md).
-Planned next ingestors and module priorities are listed in [docs/ingestors-plan.md](docs/ingestors-plan.md).
-The macOS LaunchAgent example is documented in [docs/macos-launchagent.md](docs/macos-launchagent.md).
+The signed installer supports Linux, macOS, Proxmox VE, Proxmox Backup Server, and uptime monitoring on `amd64` and `arm64`:
 
 ```sh
-docker run -d \
-  --name pulse-docker \
-  --restart unless-stopped \
-  -e PULSE_INGEST_URL="https://pulse.example.com/ingest/source" \
-  -e PULSE_INGEST_TOKEN="..." \
-  -e PULSE_INTERVAL_SECONDS=60 \
-  -e PULSE_COLLECTOR_TIMEOUT_SECONDS=60 \
-  -e PULSE_ENTITY_ID="$(hostname)" \
-  -v /var/run/docker.sock:/var/run/docker.sock:ro \
-  -v /proc:/host/proc:ro \
-  -v /sys:/host/sys:ro \
-  -v /:/host/root:ro \
-  ghcr.io/valentinkolb/pulse-docker:latest
+curl -fsSL \
+  https://github.com/ValentinKolb/pulse-injestors/releases/latest/download/install.sh \
+  | sh
 ```
 
-The container runs a small scheduling wrapper by default. The wrapper calls the one-shot binary every `PULSE_INTERVAL_SECONDS`; use `once` as the final argument to collect, push, and exit. For local smoke tests, `PULSE_CONTAINER_MAX_RUNS=1` exits after one scheduled run.
+It installs the selected binary, writes a protected config, verifies local collection, sends the first Pulse batch, and enables systemd, cron, or launchd. It also supports fully unattended enrollment with `--config-source` or provisioning environment variables.
 
-Inspect locally without sending:
+## Docker
+
+Docker is deployed with the maintained Compose files:
 
 ```sh
-go run ./cmd/pulse-macos --local once
+cd deploy/docker
+cp pulse-docker.example.toml pulse-docker.toml
+chmod 600 pulse-docker.toml
+docker compose up -d
+```
+
+The complete admin documentation lives in [`docs/en`](docs/en/index.md). Start with:
+
+- [Getting started](docs/en/getting-started.md)
+- [Native installation](docs/en/installation.md)
+- [Docker ingestor](docs/en/ingestor-docker.md)
+- [Operations](docs/en/operations.md)
+- [Troubleshooting](docs/en/troubleshooting.md)
+
+## Development
+
+```sh
+go test ./...
+go build ./...
+bun run docs:build
+```
+
+Inspect source builds without sending:
+
+```sh
 go run ./cmd/pulse-macos --local --pretty once
 go run ./cmd/pulse-linux --local --pretty once
-docker run --rm \
-  -v /var/run/docker.sock:/var/run/docker.sock:ro \
-  -v /proc:/host/proc:ro \
-  -v /sys:/host/sys:ro \
-  -v /:/host/root:ro \
-  pulse-docker:local --local --pretty once
+go run ./cmd/pulse-uptime --local --pretty once
 ```
 
-Local smoke target:
-
-```sh
-go run ./cmd/pulse-mock-server
-```
-
-macOS local smoke:
-
-```sh
-go run ./cmd/pulse-macos --local once
-```
+The canonical telemetry contract is summarized in [docs/metrics.md](docs/metrics.md).

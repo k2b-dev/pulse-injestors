@@ -1,0 +1,49 @@
+dashboard "Proxmox overview" {
+  description "Node, guest, backup, and Ceph health."
+
+  controls {
+    range "Range" variable range default 24h options 1h, 6h, 24h, 7d
+  }
+
+  section "Nodes" {
+    line "CPU usage" {
+      query metric proxmox.node.cpu.usage avg every 5m group by resource since $range
+    }
+
+    line "Memory usage" {
+      query metric proxmox.node.memory.usage avg every 5m group by resource since $range
+    }
+  }
+
+  section "Guests" {
+    line "VM memory used" {
+      query metric proxmox.resource.memory.used avg every 5m group by resource since $range entity_type proxmox-vm
+    }
+
+    line "LXC CPU usage" {
+      query metric proxmox.resource.cpu.usage avg every 5m group by resource since $range entity_type proxmox-container
+    }
+  }
+
+  section "Backup and tasks" {
+    row height sm {
+      stat "Guests without backup" {
+        query metric proxmox.backup.guests.not_backed_up latest every 5m reduce sum since $range
+      }
+
+      stat "Failed backup tasks" {
+        query metric proxmox.backup.tasks.failed latest every 5m reduce sum since $range
+      }
+    }
+
+    line "Failed tasks" {
+      query events proxmox.task.failed count every 1h since $range
+    }
+  }
+
+  section "Ceph" {
+    line "Cluster usage" {
+      query metric system.ceph.bytes.used avg every 5m group by resource since $range
+    }
+  }
+}

@@ -1,0 +1,49 @@
+dashboard "Docker overview" {
+  description "Daemon inventory, Compose services, containers, and collection failures."
+
+  controls {
+    range "Range" variable range default 24h options 1h, 6h, 24h, 7d
+  }
+
+  section "Inventory" {
+    row height sm {
+      stat "Running containers" {
+        query metric docker.containers.running latest every 5m reduce sum since $range
+      }
+
+      stat "Unhealthy containers" {
+        query metric docker.containers.unhealthy latest every 5m reduce sum since $range
+      }
+
+      stat "Image updates" {
+        query metric docker.images.updates_available latest every 5m reduce sum since $range
+      }
+    }
+  }
+
+  section "Compose services" {
+    line "CPU usage" {
+      query metric docker.compose.service.cpu.usage avg every 5m group by resource since $range
+    }
+
+    line "Memory used" {
+      query metric docker.compose.service.memory.used avg every 5m group by resource since $range
+    }
+  }
+
+  section "Containers" {
+    line "CPU usage" {
+      query metric docker.container.cpu.usage avg every 5m group by resource since $range
+    }
+
+    line "Receive throughput" {
+      query metric docker.container.network.rx rate every 5m reduce sum group by resource since $range
+    }
+  }
+
+  section "Failures" {
+    line "Container collection failures" {
+      query events docker.container.collect.failed count every 1h since $range
+    }
+  }
+}

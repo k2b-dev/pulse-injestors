@@ -1,0 +1,12 @@
+{
+  "name": "pulse-injestors-docs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "docs:dev": "fibel dev --config fibel.config.ts",
+    "docs:build": "fibel build --config fibel.config.ts"
+  },
+  "devDependencies": {
+    "@valentinkolb/fibel": "0.0.6"
+  }
+}

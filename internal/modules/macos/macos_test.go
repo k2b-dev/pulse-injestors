@@ -40,7 +40,7 @@ func TestEmitBatteryHealth(t *testing.T) {
 		EntityType: "macos-device",
 		Timestamp:  time.Unix(0, 0).UTC(),
 	})
-	emitBatteryHealth(builder, map[string]uint64{
+	emitBatteryHealth(builder, map[string]int64{
 		"AppleRawMaxCapacity": 8000,
 		"DesignCapacity":      10000,
 		"CycleCount":          250,
@@ -55,5 +55,41 @@ func TestEmitBatteryHealth(t *testing.T) {
 	}
 	if values["system.battery.cycle_usage"] != 25 {
 		t.Fatalf("cycle usage = %v", values["system.battery.cycle_usage"])
+	}
+}
+
+func TestIoregNumbersParsesSignedValues(t *testing.T) {
+	values := ioregNumbers(`"Amperage" = -1840
+"Voltage" = 12510`)
+	if values["Amperage"] != -1840 {
+		t.Fatalf("amperage = %d", values["Amperage"])
+	}
+	if values["Voltage"] != 12510 {
+		t.Fatalf("voltage = %d", values["Voltage"])
+	}
+}
+
+func TestMacOSResourceScopes(t *testing.T) {
+	scope := monitoring.Scope{
+		EntityID:   "host:macbook-01",
+		EntityType: "host",
+		Dimensions: map[string]string{
+			"host": "macbook-01",
+		},
+	}
+
+	filesystem := filesystemScope(scope, "/System/Volumes/Data")
+	if filesystem.EntityType != "filesystem" || filesystem.EntityID != "filesystem:macbook-01:System_Volumes_Data" {
+		t.Fatalf("filesystem scope = %#v", filesystem)
+	}
+	if filesystem.Label != "/System/Volumes/Data" {
+		t.Fatalf("filesystem label = %q", filesystem.Label)
+	}
+	service := homebrewServiceScope(scope, "postgresql@17")
+	if service.EntityType != "service" || service.EntityID != "service:macbook-01:homebrew:postgresql@17" {
+		t.Fatalf("service scope = %#v", service)
+	}
+	if service.Label != "postgresql@17" {
+		t.Fatalf("service label = %q", service.Label)
 	}
 }

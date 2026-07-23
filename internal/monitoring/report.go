@@ -27,7 +27,7 @@ func writeMetrics(w io.Writer, metrics []pulse.Metric) {
 	sections := map[string]map[string][]pulse.Metric{}
 	for _, metric := range metrics {
 		section := sectionName(metric.Name)
-		group := groupName(metric.Name, metric.Dimensions)
+		group := groupName(metric.Name, resourceLabel(metric.Resource), metric.Dimensions)
 		if sections[section] == nil {
 			sections[section] = map[string][]pulse.Metric{}
 		}
@@ -59,6 +59,9 @@ func writeStates(w io.Writer, states []pulse.State) {
 	fmt.Fprintln(w, "States")
 	for _, state := range states {
 		name := state.Key
+		if label := resourceLabel(state.Resource); label != "" {
+			name += " " + bracket("resource="+label)
+		}
 		if suffix := dimensionSuffix(state.Dimensions); suffix != "" {
 			name += " " + suffix
 		}
@@ -77,6 +80,9 @@ func writeEvents(w io.Writer, events []pulse.Event) {
 	fmt.Fprintln(w, "Events")
 	for _, event := range events {
 		name := event.Kind
+		if label := resourceLabel(event.Resource); label != "" {
+			name += " " + bracket("resource="+label)
+		}
 		if suffix := dimensionSuffix(event.Dimensions); suffix != "" {
 			name += " " + suffix
 		}
@@ -84,8 +90,18 @@ func writeEvents(w io.Writer, events []pulse.Event) {
 		if len(event.Payload) > 0 {
 			fmt.Fprintf(w, "    payload: %v\n", event.Payload)
 		}
+		if len(event.Attributes) > 0 {
+			fmt.Fprintf(w, "    attributes: %v\n", event.Attributes)
+		}
 	}
 	fmt.Fprintln(w)
+}
+
+func resourceLabel(resource *pulse.ResourceRef) string {
+	if resource == nil {
+		return ""
+	}
+	return resource.Label
 }
 
 func sectionName(name string) string {
@@ -104,7 +120,7 @@ func sectionName(name string) string {
 	}
 }
 
-func groupName(name string, dims map[string]string) string {
+func groupName(name, label string, dims map[string]string) string {
 	parts := strings.Split(name, ".")
 	if len(parts) < 3 {
 		if suffix := compactMetricDims(dims); suffix != "" {
@@ -114,10 +130,17 @@ func groupName(name string, dims map[string]string) string {
 	}
 	groupParts := parts[1 : len(parts)-1]
 	group := strings.Join(groupParts, ".")
+	if label != "" {
+		group += " " + bracket("label="+label)
+	}
 	if suffix := preferredDimensionSuffix(dims); suffix != "" {
 		group += " " + suffix
 	}
 	return group
+}
+
+func bracket(value string) string {
+	return "[" + value + "]"
 }
 
 func metricLabel(name string) string {
@@ -129,7 +152,7 @@ func metricLabel(name string) string {
 }
 
 func preferredDimensionSuffix(dims map[string]string) string {
-	keys := []string{"container", "mount", "display", "gpu", "interface", "volume", "script", "submodule"}
+	keys := []string{"endpoint", "check_type", "container", "compose_project", "compose_service", "service", "mount", "display", "gpu", "interface", "device", "datastore", "job", "pool", "node", "status", "volume", "script", "submodule"}
 	var parts []string
 	for _, key := range keys {
 		if value := dims[key]; value != "" {
@@ -143,7 +166,7 @@ func preferredDimensionSuffix(dims map[string]string) string {
 }
 
 func dimensionSuffix(dims map[string]string) string {
-	keys := []string{"collector", "container", "mount", "display", "gpu", "interface", "volume", "script", "submodule"}
+	keys := []string{"collector", "endpoint", "check_type", "container", "compose_project", "compose_service", "service", "mount", "display", "gpu", "interface", "device", "datastore", "job", "pool", "node", "status", "volume", "script", "submodule"}
 	var parts []string
 	for _, key := range keys {
 		if value := dims[key]; value != "" {
@@ -197,6 +220,8 @@ func formatValue(value float64, unit string) string {
 		return fmt.Sprintf("%.1f%%", value)
 	case "seconds":
 		return formatSeconds(value)
+	case "milliseconds":
+		return fmt.Sprintf("%.1f ms", value)
 	case "celsius":
 		return fmt.Sprintf("%.1f °C", value)
 	case "count":
@@ -207,6 +232,8 @@ func formatValue(value float64, unit string) string {
 		return fmt.Sprintf("%.2f V", value/1000)
 	case "milliampere":
 		return fmt.Sprintf("%.0f mA", value)
+	case "milliampere-hour":
+		return fmt.Sprintf("%.2f mAh", value)
 	case "milliwatt":
 		return fmt.Sprintf("%.2f W", value/1000)
 	case "watt":

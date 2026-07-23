@@ -1,6 +1,10 @@
 package zfs
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/valentinkolb/pulse-injestors/internal/monitoring"
+)
 
 func TestParsePoolList(t *testing.T) {
 	pools := parsePoolList([]byte("tank\t1099511627776\t274877906944\t824633720832\t25\t3\tONLINE\nbackup\t1000\t500\t500\t50%\t-\tDEGRADED\n"))
@@ -57,5 +61,24 @@ config:
 	}
 	if scans[1].Pool != "backup" || scans[1].Status != "none" || scans[1].Errors != -1 {
 		t.Fatalf("second scan = %#v", scans[1])
+	}
+}
+
+func TestZFSScopeUsesResourceEntities(t *testing.T) {
+	scope := monitoring.Scope{
+		EntityID:   "host:server-01",
+		EntityType: "host",
+		Dimensions: map[string]string{
+			"host": "server-01",
+		},
+	}
+
+	pool := poolScope(scope, "tank")
+	if pool.EntityType != "zfs-pool" || pool.EntityID != "zfs-pool:server-01:tank" {
+		t.Fatalf("pool scope = %#v", pool)
+	}
+	dataset := datasetScope(scope, "tank/app")
+	if dataset.EntityType != "zfs-dataset" || dataset.EntityID != "zfs-dataset:server-01:tank_app" {
+		t.Fatalf("dataset scope = %#v", dataset)
 	}
 }

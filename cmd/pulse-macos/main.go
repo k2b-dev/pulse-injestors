@@ -13,6 +13,7 @@ import (
 	"github.com/alecthomas/kong"
 
 	"github.com/valentinkolb/pulse-injestors/internal/config"
+	"github.com/valentinkolb/pulse-injestors/internal/entity"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/macos"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/script"
 	"github.com/valentinkolb/pulse-injestors/internal/monitoring"
@@ -24,10 +25,11 @@ var version = "dev"
 type cli struct {
 	Config string `name:"config" help:"TOML config path. Defaults to /etc/pulse/ingestor.toml when present." env:"PULSE_CONFIG"`
 
-	IngestURL   string `name:"ingest-url" help:"Pulse ingest endpoint URL." env:"PULSE_INGEST_URL"`
-	IngestToken string `name:"ingest-token" help:"Pulse ingest bearer token." env:"PULSE_INGEST_TOKEN"`
-	EntityID    string `name:"entity-id" help:"Stable monitored entity id. Defaults to hostname." env:"PULSE_ENTITY_ID"`
-	EntityType  string `name:"entity-type" help:"Monitored entity type." env:"PULSE_ENTITY_TYPE"`
+	IngestURL   string   `name:"ingest-url" help:"Pulse ingest endpoint URL." env:"PULSE_INGEST_URL"`
+	IngestToken string   `name:"ingest-token" help:"Pulse ingest bearer token." env:"PULSE_INGEST_TOKEN"`
+	EntityID    string   `name:"entity-id" help:"Stable monitored entity id. Defaults to hostname." env:"PULSE_ENTITY_ID"`
+	EntityLabel string   `name:"entity-label" help:"Human-readable monitored host label. Defaults to hostname." env:"PULSE_ENTITY_LABEL"`
+	Dimensions  []string `name:"dimension" help:"Bounded global dimension as key=value. Repeat for multiple values." env:"PULSE_DIMENSIONS" sep:","`
 
 	IntervalSeconds         int `name:"interval-seconds" help:"Collection interval for run mode." env:"PULSE_INTERVAL_SECONDS"`
 	CollectorTimeoutSeconds int `name:"collector-timeout-seconds" help:"Overall timeout per collector in seconds." env:"PULSE_COLLECTOR_TIMEOUT_SECONDS"`
@@ -80,11 +82,12 @@ func main() {
 	defer cancel()
 
 	runner := monitoring.Runner{
-		EntityID:   cfg.Entity.ID,
-		EntityType: cfg.Entity.Type,
-		Dimensions: map[string]string{
+		EntityID:   entity.HostID(cfg.Entity.ID),
+		EntityType: "host",
+		Label:      cfg.Entity.Label,
+		Dimensions: monitoring.MergeDimensions(cfg.Dimensions, map[string]string{
 			"host": cfg.Entity.ID,
-		},
+		}),
 		Collectors: collectors(cfg),
 		Sender:     sender(c, cfg, log),
 		Timeout:    cfg.CollectorTimeout(),
@@ -116,12 +119,17 @@ func loadConfig(c cli) (config.Config, error) {
 	if err != nil {
 		return config.Config{}, fmt.Errorf("load %s: %w", cfgPath, err)
 	}
-	return config.Resolve(fileCfg, config.Overlay{
+	dimensions, err := config.ParseDimensions(c.Dimensions)
+	if err != nil {
+		return config.Config{}, err
+	}
+	cfg, err := config.Resolve(fileCfg, config.Overlay{
 		ConfigPath:                   cfgPath,
 		IngestURL:                    c.IngestURL,
 		IngestToken:                  c.IngestToken,
 		EntityID:                     c.EntityID,
-		EntityType:                   c.EntityType,
+		EntityLabel:                  c.EntityLabel,
+		Dimensions:                   dimensions,
 		TimeoutSeconds:               c.TimeoutSeconds,
 		MaxRetries:                   c.MaxRetries,
 		InitialBackoffMS:             c.InitialBackoffMS,
@@ -133,6 +141,15 @@ func loadConfig(c cli) (config.Config, error) {
 		SystemProfilerTimeoutSeconds: c.SystemProfilerTimeoutSeconds,
 		AllowMissingPulse:            c.Local,
 	})
+	if err != nil {
+		return config.Config{}, err
+	}
+	cfg.Entity.ID = entity.StableHostID(cfg.Entity.ID)
+	if cfg.Entity.ID == "" {
+		return config.Config{}, fmt.Errorf("entity id is required")
+	}
+	cfg.Entity.Type = "host"
+	return cfg, nil
 }
 
 func sender(c cli, cfg config.Config, log *slog.Logger) monitoring.Sender {

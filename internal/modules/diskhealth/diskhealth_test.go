@@ -120,3 +120,20 @@ func TestEmitNVMeSmartAddsCelsiusTemperature(t *testing.T) {
 		t.Fatalf("celsius = %v", metrics["system.disk.nvme.temperature.celsius"])
 	}
 }
+
+func TestDiskScopeUsesResourceEntity(t *testing.T) {
+	scope := diskScope(monitoring.Scope{
+		EntityID:   "host:server-01",
+		EntityType: "host",
+		Dimensions: map[string]string{
+			"host": "server-01",
+		},
+	}, "/dev/nvme0n1", "S7ABC123456", diskLabel("/dev/nvme0n1", "Samsung SSD 990 PRO", "S7ABC123456"))
+
+	if scope.EntityType != "disk" || scope.EntityID != "disk:server-01:S7ABC123456" {
+		t.Fatalf("scope = %#v", scope)
+	}
+	if scope.Label != "Samsung SSD 990 PRO (S7ABC123)" {
+		t.Fatalf("label = %q", scope.Label)
+	}
+}

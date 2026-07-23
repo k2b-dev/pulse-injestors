@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/valentinkolb/pulse-injestors/internal/entity"
 	"github.com/valentinkolb/pulse-injestors/internal/monitoring"
 	"github.com/valentinkolb/pulse-injestors/internal/pulse"
 )
@@ -38,13 +39,22 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 		timeout = 5 * time.Second
 	}
 	for _, unit := range units {
-		collectUnit(ctx, b, path, unit, timeout)
+		ub := monitoring.NewBuilder(unitScope(scope, unit))
+		collectUnit(ctx, ub, path, unit, timeout)
+		b.Merge(ub.Batch())
 	}
 	return b.Batch(), nil
 }
 
+func unitScope(scope monitoring.Scope, unit string) monitoring.Scope {
+	scope.EntityType = "service"
+	scope.EntityID = entity.ID("service", entity.StableHostIDFromScope(scope.EntityID, scope.Dimensions), "systemd", unit)
+	scope.Label = unit
+	return scope
+}
+
 func collectUnit(ctx context.Context, b *monitoring.Builder, systemctl, unit string, timeout time.Duration) {
-	dims := map[string]string{"service": unit}
+	dims := map[string]string{"service": unit, "service_manager": "systemd"}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	out, err := exec.CommandContext(runCtx, systemctl, "show", unit,
@@ -57,7 +67,9 @@ func collectUnit(ctx context.Context, b *monitoring.Builder, systemctl, unit str
 	).Output()
 	if err != nil {
 		b.State("system.service.available", false, dims)
-		b.Event("system.service.collect.failed", dims, map[string]any{"error": err.Error()})
+		b.EventDetails("system.service.collect.failed", monitoring.MergeDimensions(dims, map[string]string{"operation": "systemctl_show"}), monitoring.EventDetails{
+			Attributes: map[string]any{"error": err.Error()},
+		})
 		return
 	}
 	values := keyValues(out)

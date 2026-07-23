@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/valentinkolb/pulse-injestors/internal/entity"
 	"github.com/valentinkolb/pulse-injestors/internal/modules/filesystem"
 	"github.com/valentinkolb/pulse-injestors/internal/monitoring"
 	"github.com/valentinkolb/pulse-injestors/internal/pulse"
@@ -42,7 +43,9 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 	mounts, err := filesystem.ReadMounts(filepath.Join(proc, "self", "mountinfo"))
 	if err != nil {
 		b.State("system.btrfs.available", false, nil)
-		b.Event("system.btrfs.mounts.failed", nil, map[string]any{"error": err.Error()})
+		b.EventDetails("system.btrfs.mounts.failed", map[string]string{"operation": "read_mounts"}, monitoring.EventDetails{
+			Attributes: map[string]any{"error": err.Error()},
+		})
 		return b.Batch(), nil
 	}
 	timeout := c.Timeout
@@ -56,33 +59,46 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 			continue
 		}
 		count++
-		dims := map[string]string{"mount": mount.Point, "source": mount.Source}
-		b.State("system.btrfs.mount.present", true, dims)
+		dims := map[string]string{"mount": mount.Point}
+		fb := monitoring.NewBuilder(btrfsScope(scope, mount))
+		fb.State("system.btrfs.mount.present", true, dims)
+		fb.State("system.filesystem.source", mount.Source, dims)
 		path := filepath.Join(hostRoot, strings.TrimPrefix(mount.Point, "/"))
 		collectCtx, cancel := context.WithTimeout(ctx, timeout)
 		out, err := exec.CommandContext(collectCtx, "btrfs", "filesystem", "usage", "-b", path).Output()
 		cancel()
 		if err != nil {
-			b.State("system.btrfs.usage.available", false, dims)
-			b.Event("system.btrfs.usage.failed", dims, map[string]any{"error": fmt.Sprintf("btrfs filesystem usage %s: %v", mount.Point, err)})
+			fb.State("system.btrfs.usage.available", false, dims)
+			fb.EventDetails("system.btrfs.usage.failed", monitoring.MergeDimensions(dims, map[string]string{"operation": "filesystem_usage"}), monitoring.EventDetails{
+				Attributes: map[string]any{"error": fmt.Sprintf("btrfs filesystem usage %s: %v", mount.Point, err)},
+			})
+			b.Merge(fb.Batch())
 			continue
 		}
-		b.State("system.btrfs.usage.available", true, dims)
-		emitUsage(b, mount, out)
+		fb.State("system.btrfs.usage.available", true, dims)
+		emitUsage(fb, mount, out)
+		b.Merge(fb.Batch())
 		collected++
 	}
 	b.State("system.btrfs.available", count > 0, nil)
 	if count > 0 {
-		b.Metric("system.btrfs.filesystems", "gauge", float64(count), "count", nil)
-		b.Metric("system.btrfs.filesystems.collected", "gauge", float64(collected), "count", nil)
+		b.Metric("system.btrfs.filesystems", "gauge", float64(count), "", nil)
+		b.Metric("system.btrfs.filesystems.collected", "gauge", float64(collected), "", nil)
 	}
 	return b.Batch(), nil
+}
+
+func btrfsScope(scope monitoring.Scope, mount filesystem.Mount) monitoring.Scope {
+	scope.EntityType = "filesystem"
+	scope.EntityID = entity.ID("filesystem", entity.StableHostIDFromScope(scope.EntityID, scope.Dimensions), entity.Key(mount.Point, "root"))
+	scope.Label = mount.Point
+	return scope
 }
 
 var bytesLine = regexp.MustCompile(`^([A-Za-z ]+):\s+([0-9]+)`)
 
 func emitUsage(b *monitoring.Builder, mount filesystem.Mount, out []byte) {
-	dims := map[string]string{"mount": mount.Point, "source": mount.Source}
+	dims := map[string]string{"mount": mount.Point}
 	sc := bufio.NewScanner(bytes.NewReader(out))
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
