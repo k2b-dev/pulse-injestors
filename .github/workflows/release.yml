@@ -6,11 +6,14 @@ on:
       - "v*"
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
+
+env:
+  BUN_VERSION: "1.3.14"
 
 jobs:
-  release:
+  verify:
+    name: Verify release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -22,13 +25,145 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Test
-        run: go test ./...
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
 
-      - name: Build release
+      - name: Install documentation dependencies
+        run: bun install --frozen-lockfile --registry=https://registry.npmjs.org
+
+      - name: Test Go code
+        run: go test -race ./...
+
+      - name: Vet Go code
+        run: go vet ./...
+
+      - name: Build Go commands
+        run: go build ./...
+
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes shellcheck
+
+      - name: Check shell scripts
+        run: shellcheck scripts/install.sh tests/install.sh
+
+      - name: Test installer
+        run: tests/install.sh
+
+      - name: Build documentation
+        env:
+          FIBEL_SITE_URL: https://docs.example.test
+          FIBEL_AI_PROVIDER: ollama
+          FIBEL_AI_MODEL: release-smoke
+        run: bun run docs:build
+
+      - name: Check documentation routes and links
+        env:
+          FIBEL_SITE_URL: https://docs.example.test
+          FIBEL_AI_PROVIDER: ollama
+          FIBEL_AI_MODEL: release-smoke
+        run: bun run docs:check
+
+      - name: Cross-build release targets
         uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --snapshot --clean
+
+  verify-macos-installer:
+    name: Verify macOS installer
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: tests/install.sh
+
+  images:
+    name: Release image (${{ matrix.name }})
+    needs: [verify, verify-macos-installer]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: pulse-docker
+            file: Dockerfile
+            image: ghcr.io/valentinkolb/pulse-docker
+          - name: documentation
+            file: deploy/docs/Dockerfile
+            image: ghcr.io/valentinkolb/pulse-injestors-docs
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ matrix.image }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+
+      - name: Build and publish image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+          provenance: mode=max
+          sbom: true
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Sign image
+        run: cosign sign --yes "${{ matrix.image }}@${{ steps.build.outputs.digest }}"
+
+  native:
+    name: Release native binaries
+    needs: images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build and publish release
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

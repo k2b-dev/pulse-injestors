@@ -192,7 +192,8 @@ func jsonDepth(value any, depth int) int {
 }
 
 func shouldCapPercent(name string) bool {
-	if name == "docker.container.cpu.usage" {
+	switch name {
+	case "docker.container.cpu.usage", "docker.compose.service.cpu.usage":
 		return false
 	}
 	return strings.HasSuffix(name, ".usage") || strings.HasSuffix(name, ".cpu.usage")

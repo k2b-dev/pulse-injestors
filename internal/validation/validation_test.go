@@ -19,11 +19,13 @@ func TestBatchRejectsDuplicateMetricSeries(t *testing.T) {
 }
 
 func TestBatchAllowsDockerCPUOverHundred(t *testing.T) {
-	err := Batch(pulse.Batch{Metrics: []pulse.Metric{
+	for _, metric := range []pulse.Metric{
 		{Name: "docker.container.cpu.usage", Type: "gauge", Value: 250, Unit: "percent", Timestamp: time.Now().UTC(), EntityID: "docker-container:server-01:name:api", EntityType: "docker-container", Resource: &pulse.ResourceRef{Type: "docker-container", ID: "server-01:name:api", Label: "api"}},
-	}})
-	if err != nil {
-		t.Fatal(err)
+		{Name: "docker.compose.service.cpu.usage", Type: "gauge", Value: 350, Unit: "percent", Timestamp: time.Now().UTC(), EntityID: "docker-compose-service:server-01:app:api", EntityType: "docker-compose-service", Resource: &pulse.ResourceRef{Type: "docker-compose-service", ID: "server-01:app:api", Label: "app / api"}},
+	} {
+		if err := Batch(pulse.Batch{Metrics: []pulse.Metric{metric}}); err != nil {
+			t.Errorf("%s: %v", metric.Name, err)
+		}
 	}
 }
 

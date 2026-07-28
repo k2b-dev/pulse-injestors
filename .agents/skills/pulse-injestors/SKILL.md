@@ -74,7 +74,8 @@ Fibel docs:
 
 ```sh
 bun install
-bun run docs:build
+FIBEL_SITE_URL=https://docs.example.test FIBEL_AI_PROVIDER=ollama FIBEL_AI_MODEL=release-smoke bun run docs:build
+FIBEL_SITE_URL=https://docs.example.test FIBEL_AI_PROVIDER=ollama FIBEL_AI_MODEL=release-smoke bun run docs:check
 bun run docs:dev -- --port 5173
 ```
 
@@ -97,4 +98,7 @@ User-facing ingestor pages must lead with requirements, installation, enrollment
 - `pulse-docker` is a multi-architecture GHCR image deployed through the maintained Compose file. The native installer must never manage Docker.
 - Tagged native releases publish signed Linux/macOS `amd64`/`arm64` archives and `install.sh`.
 - The native installer supports `pulse-linux`, `pulse-macos`, `pulse-proxmox`, `pulse-proxmox-backup-server`, and `pulse-uptime`.
+- CI publishes the Fibel runtime as `ghcr.io/valentinkolb/pulse-injestors-docs` after documentation route, link, and container smoke checks pass.
+- The documentation container always exposes the public read-only Fibel MCP endpoint. Its assistant is enabled only when `FIBEL_AI_MODEL` and valid provider configuration are present.
+- Both published images are multi-architecture, include SBOM/provenance attestations, and are signed by the repository workflow identity.
 - Package-manager-specific distribution is not available.

@@ -1,31 +1,45 @@
-import { defaultPlugins, defineFibel, type FibelPlugin } from "@valentinkolb/fibel";
+import { defaultPlugins, defineFibel } from "@k2b/fibel";
+import {
+  assistantPlugin,
+  imprintPlugin,
+  mcpPlugin,
+  providerFromEnv,
+} from "@k2b/fibel/plugins";
 
-const pulseHeaderLinks = (): FibelPlugin => ({
-  name: "pulse-header-links",
-  setup(context) {
-    const renderPage = context.services.renderPage;
-    context.services.renderPage = (page, request, currentContext) => {
-      const localeRoot = `${currentContext.config.routing.basePath}/${page.locale.code}`;
-      return renderPage(page, request, currentContext)
-        .replace(`href="${localeRoot}/runtime"`, `href="${localeRoot}/getting-started"`)
-        .replace(`href="${localeRoot}/plugins"`, `href="${localeRoot}/modules"`)
-        .replace(">Docs Home</a>", ">Home</a>")
-        .replace(">Guide</a>", ">Install</a>")
-        .replace(">API Reference</a>", ">Modules</a>");
-    };
-  },
-});
+const assistantPlugins = process.env.FIBEL_AI_MODEL?.trim()
+  ? [
+      assistantPlugin({
+        provider: providerFromEnv(),
+        launcherLabel: "Ask Pulse Docs",
+        systemPrompt:
+          "Help administrators install, configure, and troubleshoot Pulse Ingestors. Base answers on the documentation and keep commands precise.",
+      }),
+    ]
+  : [];
 
 export default defineFibel({
   title: "Pulse Ingestors",
-  description: "Documentation for Pulse telemetry ingestors.",
-  siteUrl: "http://localhost:5173",
+  description: "Install, configure, and operate Pulse telemetry ingestors for infrastructure monitoring.",
+  siteUrl: process.env.FIBEL_SITE_URL,
   locales: [{ code: "en", label: "English" }],
   defaultLocale: "en",
+  headerLinks: [
+    { label: "Home", value: "/" },
+    { label: "Install", value: "/getting-started" },
+    { label: "Modules", value: "/modules" },
+  ],
+  seo: {
+    disallow: [],
+  },
   routing: {
     basePath: "",
     internalPath: "/_fibel",
     assetsPath: "/assets",
   },
-  plugins: [...defaultPlugins(), pulseHeaderLinks()],
+  plugins: [
+    ...defaultPlugins(),
+    ...assistantPlugins,
+    mcpPlugin(),
+    imprintPlugin({ url: "https://impressum.valentin-kolb.com" }),
+  ],
 });

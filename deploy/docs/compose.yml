@@ -1,0 +1,23 @@
+services:
+  pulse-injestors-docs:
+    image: ghcr.io/valentinkolb/pulse-injestors-docs:latest
+    container_name: pulse-injestors-docs
+    restart: unless-stopped
+    environment:
+      FIBEL_SITE_URL: ${FIBEL_SITE_URL:?Set FIBEL_SITE_URL to the public documentation URL}
+      FIBEL_AI_PROVIDER: ${FIBEL_AI_PROVIDER:-}
+      FIBEL_AI_MODEL: ${FIBEL_AI_MODEL:-}
+      FIBEL_AI_BASE_URL: ${FIBEL_AI_BASE_URL:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+    ports:
+      - "${DOCS_BIND_ADDRESS:-127.0.0.1}:${DOCS_PORT:-3000}:3000"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
