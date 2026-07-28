@@ -1,6 +1,6 @@
 services:
   pulse-injestors-docs:
-    image: ghcr.io/valentinkolb/pulse-injestors-docs:latest
+    image: ghcr.io/k2b-dev/pulse-injestors-docs:latest
     container_name: pulse-injestors-docs
     restart: unless-stopped
     environment:

@@ -9,8 +9,8 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/valentinkolb/pulse-injestors/internal/monitoring"
-	"github.com/valentinkolb/pulse-injestors/internal/pulse"
+	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
+	"github.com/k2b-dev/pulse-injestors/internal/pulse"
 )
 
 type Script struct {

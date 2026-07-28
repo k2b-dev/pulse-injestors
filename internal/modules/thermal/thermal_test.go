@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/valentinkolb/pulse-injestors/internal/monitoring"
+	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
 )
 
 func TestThermalSensorsRemainOnHostResource(t *testing.T) {

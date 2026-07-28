@@ -31,7 +31,7 @@ Run the installer as the user whose Homebrew installation and services should be
 
 ```sh
 curl -fsSL \
-  https://github.com/ValentinKolb/pulse-injestors/releases/latest/download/install.sh \
+  https://github.com/k2b-dev/pulse-injestors/releases/latest/download/install.sh \
   | sh -s -- --ingestor=macos
 ```
 
@@ -50,7 +50,7 @@ Run unattended enrollment in the target user session:
 
 ```sh
 curl -fsSL \
-  https://github.com/ValentinKolb/pulse-injestors/releases/latest/download/install.sh \
+  https://github.com/k2b-dev/pulse-injestors/releases/latest/download/install.sh \
   -o /tmp/pulse-install.sh
 
 sh /tmp/pulse-install.sh \
@@ -77,7 +77,7 @@ Update by running the interactive installer again. Remove the binary and LaunchA
 
 ```sh
 curl -fsSL \
-  https://github.com/ValentinKolb/pulse-injestors/releases/latest/download/install.sh \
+  https://github.com/k2b-dev/pulse-injestors/releases/latest/download/install.sh \
   | sh -s -- --uninstall --ingestor=macos
 ```
 

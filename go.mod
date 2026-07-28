@@ -1,4 +1,4 @@
-module github.com/valentinkolb/pulse-injestors
+module github.com/k2b-dev/pulse-injestors
 
 go 1.26.2
 

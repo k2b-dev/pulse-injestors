@@ -3,7 +3,7 @@ package ceph
 import (
 	"testing"
 
-	"github.com/valentinkolb/pulse-injestors/internal/monitoring"
+	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
 )
 
 func TestParseStatus(t *testing.T) {

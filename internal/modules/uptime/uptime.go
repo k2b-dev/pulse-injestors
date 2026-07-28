@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/valentinkolb/pulse-injestors/internal/entity"
-	"github.com/valentinkolb/pulse-injestors/internal/monitoring"
-	"github.com/valentinkolb/pulse-injestors/internal/pulse"
+	"github.com/k2b-dev/pulse-injestors/internal/entity"
+	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
+	"github.com/k2b-dev/pulse-injestors/internal/pulse"
 )
 
 const (

@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/valentinkolb/pulse-injestors/internal/monitoring"
-	"github.com/valentinkolb/pulse-injestors/internal/pulse"
-	"github.com/valentinkolb/pulse-injestors/internal/validation"
+	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
+	"github.com/k2b-dev/pulse-injestors/internal/pulse"
+	"github.com/k2b-dev/pulse-injestors/internal/validation"
 )
 
 func TestDebugAPIArgs(t *testing.T) {

@@ -30,7 +30,7 @@ Missing optional tools do not stop CPU, memory, filesystem, or other collectors.
 
 ```sh
 curl -fsSL \
-  https://github.com/ValentinKolb/pulse-injestors/releases/latest/download/install.sh \
+  https://github.com/k2b-dev/pulse-injestors/releases/latest/download/install.sh \
   | sh -s -- --ingestor=linux
 ```
 
@@ -40,7 +40,7 @@ The installer writes `/etc/pulse/ingestor.toml`, verifies a local collection, se
 
 ```sh
 curl -fsSL \
-  https://github.com/ValentinKolb/pulse-injestors/releases/latest/download/install.sh \
+  https://github.com/k2b-dev/pulse-injestors/releases/latest/download/install.sh \
   -o /tmp/pulse-install.sh
 
 sudo sh /tmp/pulse-install.sh \
@@ -64,7 +64,7 @@ Update by running the same installer command again. Remove the binary and schedu
 
 ```sh
 curl -fsSL \
-  https://github.com/ValentinKolb/pulse-injestors/releases/latest/download/install.sh \
+  https://github.com/k2b-dev/pulse-injestors/releases/latest/download/install.sh \
   | sh -s -- --uninstall --ingestor=linux
 ```
 

@@ -12,16 +12,16 @@ import (
 
 	"github.com/alecthomas/kong"
 
-	"github.com/valentinkolb/pulse-injestors/internal/config"
-	"github.com/valentinkolb/pulse-injestors/internal/modules/btrfs"
-	dockermodule "github.com/valentinkolb/pulse-injestors/internal/modules/docker"
-	"github.com/valentinkolb/pulse-injestors/internal/modules/filesystem"
-	"github.com/valentinkolb/pulse-injestors/internal/modules/script"
-	"github.com/valentinkolb/pulse-injestors/internal/modules/system"
-	"github.com/valentinkolb/pulse-injestors/internal/modules/thermal"
-	"github.com/valentinkolb/pulse-injestors/internal/modules/zfs"
-	"github.com/valentinkolb/pulse-injestors/internal/monitoring"
-	"github.com/valentinkolb/pulse-injestors/internal/pulse"
+	"github.com/k2b-dev/pulse-injestors/internal/config"
+	"github.com/k2b-dev/pulse-injestors/internal/modules/btrfs"
+	dockermodule "github.com/k2b-dev/pulse-injestors/internal/modules/docker"
+	"github.com/k2b-dev/pulse-injestors/internal/modules/filesystem"
+	"github.com/k2b-dev/pulse-injestors/internal/modules/script"
+	"github.com/k2b-dev/pulse-injestors/internal/modules/system"
+	"github.com/k2b-dev/pulse-injestors/internal/modules/thermal"
+	"github.com/k2b-dev/pulse-injestors/internal/modules/zfs"
+	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
+	"github.com/k2b-dev/pulse-injestors/internal/pulse"
 )
 
 var version = "dev"

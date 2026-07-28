@@ -64,7 +64,7 @@ Re-run the installer with the same ingestor. Existing configuration is preserved
 
 ```sh
 curl -fsSL \
-  https://github.com/ValentinKolb/pulse-injestors/releases/latest/download/install.sh \
+  https://github.com/k2b-dev/pulse-injestors/releases/latest/download/install.sh \
   | sh -s -- --ingestor=linux
 ```
 
@@ -85,7 +85,7 @@ Use `--reconfigure` only when the installer should replace the existing config f
 
 ```sh
 curl -fsSL \
-  https://github.com/ValentinKolb/pulse-injestors/releases/latest/download/install.sh \
+  https://github.com/k2b-dev/pulse-injestors/releases/latest/download/install.sh \
   | sh -s -- --uninstall --ingestor=linux
 ```
 

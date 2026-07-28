@@ -3,7 +3,7 @@ package zfs
 import (
 	"testing"
 
-	"github.com/valentinkolb/pulse-injestors/internal/monitoring"
+	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
 )
 
 func TestParsePoolList(t *testing.T) {

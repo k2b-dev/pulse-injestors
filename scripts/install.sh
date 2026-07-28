@@ -2,7 +2,7 @@
 
 set -eu
 
-REPO="${PULSE_INSTALL_REPO:-ValentinKolb/pulse-injestors}"
+REPO="${PULSE_INSTALL_REPO:-k2b-dev/pulse-injestors}"
 GITHUB_BASE="${PULSE_GITHUB_BASE:-https://github.com/${REPO}}"
 VERSION="${PULSE_INSTALL_VERSION:-latest}"
 INGESTOR="auto"
@@ -395,7 +395,7 @@ curl -fsSL "${DOWNLOAD_BASE}/checksums.txt.pem" -o "${TMP}/checksums.txt.pem" ||
     die "missing checksums.txt.pem"
 
 identity_tag=$(printf '%s' "$RELEASE_TAG" | sed 's/\./\\./g')
-identity_regex="${PULSE_COSIGN_IDENTITY_REGEX:-^https://github\\.com/ValentinKolb/pulse-injestors/\\.github/workflows/release\\.yml@refs/tags/${identity_tag}$}"
+identity_regex="${PULSE_COSIGN_IDENTITY_REGEX:-^https://github\\.com/k2b-dev/pulse-injestors/\\.github/workflows/release\\.yml@refs/tags/${identity_tag}$}"
 "$COSIGN" verify-blob \
     --certificate "${TMP}/checksums.txt.pem" \
     --signature "${TMP}/checksums.txt.sig" \

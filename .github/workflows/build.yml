@@ -152,10 +152,10 @@ jobs:
         include:
           - name: pulse-docker
             file: Dockerfile
-            image: ghcr.io/valentinkolb/pulse-docker
+            image: ghcr.io/k2b-dev/pulse-docker
           - name: documentation
             file: deploy/docs/Dockerfile
-            image: ghcr.io/valentinkolb/pulse-injestors-docs
+            image: ghcr.io/k2b-dev/pulse-injestors-docs
     steps:
       - uses: actions/checkout@v5
 

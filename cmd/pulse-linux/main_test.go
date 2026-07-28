@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/valentinkolb/pulse-injestors/internal/config"
+	"github.com/k2b-dev/pulse-injestors/internal/config"
 )
 
 func TestLoadConfigNormalizesHostEntityID(t *testing.T) {

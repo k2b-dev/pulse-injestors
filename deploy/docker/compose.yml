@@ -1,6 +1,6 @@
 services:
   pulse-docker:
-    image: ghcr.io/valentinkolb/pulse-docker:latest
+    image: ghcr.io/k2b-dev/pulse-docker:latest
     container_name: pulse-docker
     restart: unless-stopped
     command: ["schedule"]

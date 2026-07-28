@@ -95,7 +95,7 @@ changelog:
 
 release:
   github:
-    owner: ValentinKolb
+    owner: k2b-dev
     name: pulse-injestors
   draft: false
   prerelease: auto

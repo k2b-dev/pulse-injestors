@@ -12,12 +12,12 @@ import (
 
 	"github.com/alecthomas/kong"
 
-	"github.com/valentinkolb/pulse-injestors/internal/config"
-	"github.com/valentinkolb/pulse-injestors/internal/entity"
-	"github.com/valentinkolb/pulse-injestors/internal/modules/macos"
-	"github.com/valentinkolb/pulse-injestors/internal/modules/script"
-	"github.com/valentinkolb/pulse-injestors/internal/monitoring"
-	"github.com/valentinkolb/pulse-injestors/internal/pulse"
+	"github.com/k2b-dev/pulse-injestors/internal/config"
+	"github.com/k2b-dev/pulse-injestors/internal/entity"
+	"github.com/k2b-dev/pulse-injestors/internal/modules/macos"
+	"github.com/k2b-dev/pulse-injestors/internal/modules/script"
+	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
+	"github.com/k2b-dev/pulse-injestors/internal/pulse"
 )
 
 var version = "dev"

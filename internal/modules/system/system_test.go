@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/valentinkolb/pulse-injestors/internal/monitoring"
+	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
 )
 
 func TestCollectorReadsSystemStats(t *testing.T) {

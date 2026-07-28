@@ -18,7 +18,7 @@ Release archives are available for Linux and macOS on `amd64` and `arm64`. The i
 
 ```sh
 curl -fsSL \
-  https://github.com/ValentinKolb/pulse-injestors/releases/latest/download/install.sh \
+  https://github.com/k2b-dev/pulse-injestors/releases/latest/download/install.sh \
   | sh -s -- --ingestor=linux
 ```
 
@@ -45,7 +45,7 @@ This is the recommended path for Ansible, cloud-init, configuration management, 
 
 ```sh
 curl -fsSL \
-  https://github.com/ValentinKolb/pulse-injestors/releases/latest/download/install.sh \
+  https://github.com/k2b-dev/pulse-injestors/releases/latest/download/install.sh \
   -o /tmp/pulse-install.sh
 
 sudo sh /tmp/pulse-install.sh \
@@ -63,7 +63,7 @@ Use a token file when possible. Raw tokens are intentionally not accepted as com
 
 ```sh
 curl -fsSL \
-  https://github.com/ValentinKolb/pulse-injestors/releases/latest/download/install.sh \
+  https://github.com/k2b-dev/pulse-injestors/releases/latest/download/install.sh \
   -o /tmp/pulse-install.sh
 
 sudo env \

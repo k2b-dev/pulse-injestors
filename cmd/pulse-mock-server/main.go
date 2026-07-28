@@ -9,8 +9,8 @@ import (
 
 	"github.com/alecthomas/kong"
 
-	"github.com/valentinkolb/pulse-injestors/internal/pulse"
-	"github.com/valentinkolb/pulse-injestors/internal/validation"
+	"github.com/k2b-dev/pulse-injestors/internal/pulse"
+	"github.com/k2b-dev/pulse-injestors/internal/validation"
 )
 
 type cli struct {

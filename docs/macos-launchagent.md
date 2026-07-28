@@ -4,7 +4,7 @@ The native installer creates and manages the macOS LaunchAgent automatically:
 
 ```sh
 curl -fsSL \
-  https://github.com/ValentinKolb/pulse-injestors/releases/latest/download/install.sh \
+  https://github.com/k2b-dev/pulse-injestors/releases/latest/download/install.sh \
   | sh -s -- --ingestor=macos
 ```
 

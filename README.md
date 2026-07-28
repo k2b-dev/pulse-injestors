@@ -8,7 +8,7 @@ The signed installer supports Linux, macOS, Proxmox VE, Proxmox Backup Server, a
 
 ```sh
 curl -fsSL \
-  https://github.com/ValentinKolb/pulse-injestors/releases/latest/download/install.sh \
+  https://github.com/k2b-dev/pulse-injestors/releases/latest/download/install.sh \
   | sh
 ```
 
@@ -30,8 +30,8 @@ docker compose up -d
 Tags matching `v*` publish:
 
 - signed native archives and `install.sh` through GitHub Releases;
-- `pulse-docker` as `ghcr.io/valentinkolb/pulse-docker`;
-- this documentation site as `ghcr.io/valentinkolb/pulse-injestors-docs`.
+- `pulse-docker` as `ghcr.io/k2b-dev/pulse-docker`;
+- this documentation site as `ghcr.io/k2b-dev/pulse-injestors-docs`.
 
 Stable image releases receive the version, major-minor, commit SHA, and `latest` tags. Pull requests build every native target and both multi-architecture images without publishing them.
 

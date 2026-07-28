@@ -30,9 +30,9 @@ sudo install -d -m 0750 /opt/pulse-docker
 cd /opt/pulse-docker
 
 sudo curl -fsSLo compose.yml \
-  https://raw.githubusercontent.com/ValentinKolb/pulse-injestors/main/deploy/docker/compose.yml
+  https://raw.githubusercontent.com/k2b-dev/pulse-injestors/main/deploy/docker/compose.yml
 sudo curl -fsSLo pulse-docker.toml \
-  https://raw.githubusercontent.com/ValentinKolb/pulse-injestors/main/deploy/docker/pulse-docker.example.toml
+  https://raw.githubusercontent.com/k2b-dev/pulse-injestors/main/deploy/docker/pulse-docker.example.toml
 sudo chmod 600 pulse-docker.toml
 ```
 
@@ -70,7 +70,7 @@ The published `deploy/docker/compose.yml` is:
 ```yaml
 services:
   pulse-docker:
-    image: ghcr.io/valentinkolb/pulse-docker:latest
+    image: ghcr.io/k2b-dev/pulse-docker:latest
     container_name: pulse-docker
     restart: unless-stopped
     command: ["schedule"]

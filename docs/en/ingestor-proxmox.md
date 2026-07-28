@@ -28,7 +28,7 @@ The default systemd service runs as root so it can access Proxmox, disks, filesy
 
 ```sh
 curl -fsSL \
-  https://github.com/ValentinKolb/pulse-injestors/releases/latest/download/install.sh \
+  https://github.com/k2b-dev/pulse-injestors/releases/latest/download/install.sh \
   | sh -s -- --ingestor=proxmox
 ```
 
@@ -40,7 +40,7 @@ Use a stable entity ID unique to the physical node. In a cluster, each node uses
 
 ```sh
 curl -fsSL \
-  https://github.com/ValentinKolb/pulse-injestors/releases/latest/download/install.sh \
+  https://github.com/k2b-dev/pulse-injestors/releases/latest/download/install.sh \
   -o /tmp/pulse-install.sh
 
 sudo sh /tmp/pulse-install.sh \
@@ -64,7 +64,7 @@ Update by running the installer again. Remove the binary and timer while preserv
 
 ```sh
 curl -fsSL \
-  https://github.com/ValentinKolb/pulse-injestors/releases/latest/download/install.sh \
+  https://github.com/k2b-dev/pulse-injestors/releases/latest/download/install.sh \
   | sh -s -- --uninstall --ingestor=proxmox
 ```
 

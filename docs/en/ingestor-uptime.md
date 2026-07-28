@@ -27,7 +27,7 @@ On Linux:
 
 ```sh
 curl -fsSL \
-  https://github.com/ValentinKolb/pulse-injestors/releases/latest/download/install.sh \
+  https://github.com/k2b-dev/pulse-injestors/releases/latest/download/install.sh \
   | sh -s -- --ingestor=uptime
 ```
 
@@ -47,7 +47,7 @@ Prepare a complete TOML file and run:
 
 ```sh
 curl -fsSL \
-  https://github.com/ValentinKolb/pulse-injestors/releases/latest/download/install.sh \
+  https://github.com/k2b-dev/pulse-injestors/releases/latest/download/install.sh \
   -o /tmp/pulse-install.sh
 
 sudo sh /tmp/pulse-install.sh \
@@ -84,7 +84,7 @@ Update by running the installer again. Remove the binary and managed scheduler w
 
 ```sh
 curl -fsSL \
-  https://github.com/ValentinKolb/pulse-injestors/releases/latest/download/install.sh \
+  https://github.com/k2b-dev/pulse-injestors/releases/latest/download/install.sh \
   | sh -s -- --uninstall --ingestor=uptime
 ```
 
