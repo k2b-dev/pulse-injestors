@@ -23,6 +23,7 @@ prefix="$TMP/bin"
 config="$TMP/config/ingestor.toml"
 calls="$TMP/calls.log"
 mkdir -p "$release" "$payload" "$prefix"
+export PULSE_INSTALL_NO_SUDO=1
 
 cat > "$payload/$binary" <<'EOF'
 #!/bin/sh
@@ -143,7 +144,6 @@ EOF
     PULSE_COSIGN_BIN="$TMP/cosign" \
     PULSE_INSTALL_TEST_CALLS="$calls" \
     PULSE_INSTALL_TEST_SYSTEMCTL="$TMP/systemctl.log" \
-    PULSE_INSTALL_NO_SUDO=1 \
     PULSE_SYSTEMD_DIR="$systemd_dir" \
     PULSE_CRON_DIR="$cron_dir" \
     PULSE_INTERVAL_SECONDS=120 \
