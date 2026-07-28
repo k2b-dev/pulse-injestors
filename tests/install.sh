@@ -97,7 +97,12 @@ sh "$ROOT/scripts/install.sh" \
 
 test -x "$prefix/$binary"
 test -f "$config"
-test "$(stat -f '%Lp' "$config" 2>/dev/null || stat -c '%a' "$config")" = "600"
+if [ "$os" = "darwin" ]; then
+    config_mode=$(stat -f '%Lp' "$config")
+else
+    config_mode=$(stat -c '%a' "$config")
+fi
+test "$config_mode" = "600"
 grep -Fq 'ingest_url = "https://pulse.example.test/api/pulse/ingest"' "$config"
 grep -Fq 'ingest_token = "secret-token"' "$config"
 grep -Fq 'id = "macbook-test"' "$config"
