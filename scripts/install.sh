@@ -368,20 +368,18 @@ if [ -n "${PULSE_RELEASE_BASE:-}" ]; then
         die "could not download ${ARCHIVE}"
 else
     if [ "$VERSION" = "latest" ]; then
-        archive_url="${GITHUB_BASE}/releases/latest/download/${ARCHIVE}"
+        release_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' "${GITHUB_BASE}/releases/latest") ||
+            die "could not resolve the latest release"
+        RELEASE_TAG=${release_url##*/}
     else
         case "$VERSION" in
             v*) RELEASE_TAG=$VERSION ;;
             *) RELEASE_TAG="v${VERSION}" ;;
         esac
-        archive_url="${GITHUB_BASE}/releases/download/${RELEASE_TAG}/${ARCHIVE}"
     fi
-    effective_url=$(curl -fsSL -w '%{url_effective}' "$archive_url" -o "${TMP}/${ARCHIVE}") ||
+    DOWNLOAD_BASE="${GITHUB_BASE}/releases/download/${RELEASE_TAG}"
+    curl -fsSL "${DOWNLOAD_BASE}/${ARCHIVE}" -o "${TMP}/${ARCHIVE}" ||
         die "could not download ${ARCHIVE}"
-    DOWNLOAD_BASE=${effective_url%/*}
-    if [ "$VERSION" = "latest" ]; then
-        RELEASE_TAG=${DOWNLOAD_BASE##*/}
-    fi
 fi
 
 printf '%s\n' "$RELEASE_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$' ||
