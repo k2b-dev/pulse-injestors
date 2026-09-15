@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
+	"github.com/k2b-dev/pulse-injestors/internal/pulse"
 )
 
 func TestParsePoolList(t *testing.T) {
@@ -66,19 +67,18 @@ config:
 
 func TestZFSScopeUsesResourceEntities(t *testing.T) {
 	scope := monitoring.Scope{
-		EntityID:   "host:server-01",
-		EntityType: "host",
+		Resource: pulse.ResourceRef{Type: "host", ID: "server-01"},
 		Dimensions: map[string]string{
 			"host": "server-01",
 		},
 	}
 
 	pool := poolScope(scope, "tank")
-	if pool.EntityType != "zfs-pool" || pool.EntityID != "zfs-pool:server-01:tank" {
+	if pool.Resource.Type != "zfs-pool" || pool.Resource.Key() != "zfs-pool:server-01:tank" {
 		t.Fatalf("pool scope = %#v", pool)
 	}
 	dataset := datasetScope(scope, "tank/app")
-	if dataset.EntityType != "zfs-dataset" || dataset.EntityID != "zfs-dataset:server-01:tank_app" {
+	if dataset.Resource.Type != "zfs-dataset" || dataset.Resource.Key() != "zfs-dataset:server-01:tank%2Fapp" {
 		t.Fatalf("dataset scope = %#v", dataset)
 	}
 }

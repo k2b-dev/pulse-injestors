@@ -17,7 +17,7 @@ const DefaultConfigPath = "/etc/pulse/ingestor.toml"
 
 type Config struct {
 	Pulse      PulseConfig       `toml:"pulse"`
-	Entity     EntityConfig      `toml:"entity"`
+	Resource   ResourceConfig    `toml:"resource"`
 	Dimensions map[string]string `toml:"dimensions"`
 	HTTP       HTTPConfig        `toml:"http"`
 	Runner     RunnerConfig      `toml:"runner"`
@@ -32,11 +32,13 @@ type Config struct {
 }
 
 type PulseConfig struct {
-	IngestURL   string `toml:"ingest_url"`
-	IngestToken string `toml:"ingest_token"`
+	SpoolDir      string `toml:"spool_dir"`
+	SpoolMaxBytes int64  `toml:"spool_max_bytes"`
+	IngestURL     string `toml:"ingest_url"`
+	IngestToken   string `toml:"ingest_token"`
 }
 
-type EntityConfig struct {
+type ResourceConfig struct {
 	ID    string `toml:"id"`
 	Label string `toml:"label"`
 	Type  string `toml:"type"`
@@ -126,12 +128,14 @@ type ScriptConfig struct {
 }
 
 type Overlay struct {
+	SpoolDir                      string
+	SpoolMaxBytes                 int64
 	ConfigPath                    string
 	IngestURL                     string
 	IngestToken                   string
-	EntityID                      string
-	EntityLabel                   string
-	EntityType                    string
+	ResourceID                    string
+	ResourceLabel                 string
+	ResourceType                  string
 	Dimensions                    map[string]string
 	TimeoutSeconds                int
 	MaxRetries                    int
@@ -177,8 +181,12 @@ func LoadFile(path string, explicit bool) (Config, error) {
 		}
 		return cfg, err
 	}
-	if _, err := toml.Decode(string(data), &cfg); err != nil {
+	metadata, err := toml.Decode(string(data), &cfg)
+	if err != nil {
 		return cfg, err
+	}
+	if len(metadata.Undecoded()) > 0 {
+		return cfg, errors.New("configuration contains unknown fields")
 	}
 	return cfg, nil
 }
@@ -189,17 +197,17 @@ func Resolve(file Config, overlay Overlay) (Config, error) {
 	applyOverlay(&cfg, overlay)
 
 	host, hostErr := os.Hostname()
-	if cfg.Entity.ID == "" {
+	if cfg.Resource.ID == "" {
 		if hostErr != nil || host == "" {
-			return cfg, errors.New("entity id is required when hostname cannot be resolved")
+			return cfg, errors.New("resource id is required when hostname cannot be resolved")
 		}
-		cfg.Entity.ID = host
+		cfg.Resource.ID = host
 	}
-	if cfg.Entity.Label == "" {
+	if cfg.Resource.Label == "" {
 		if hostErr == nil && host != "" {
-			cfg.Entity.Label = host
+			cfg.Resource.Label = host
 		} else {
-			cfg.Entity.Label = cfg.Entity.ID
+			cfg.Resource.Label = cfg.Resource.ID
 		}
 	}
 	if err := validateDimensions(cfg.Dimensions); err != nil {
@@ -219,6 +227,12 @@ func Resolve(file Config, overlay Overlay) (Config, error) {
 		if err := validateHTTPURL(cfg.Pulse.IngestURL); err != nil {
 			return cfg, err
 		}
+	}
+	if cfg.Pulse.SpoolDir != "" && cfg.Pulse.SpoolMaxBytes <= 0 {
+		return cfg, errors.New("pulse spool_max_bytes must be positive when spool_dir is configured")
+	}
+	if cfg.Pulse.SpoolMaxBytes < 0 {
+		return cfg, errors.New("pulse spool_max_bytes must not be negative")
 	}
 	if cfg.HTTP.TimeoutSeconds <= 0 {
 		return cfg, errors.New("http timeout_seconds must be positive")
@@ -374,7 +388,7 @@ func (c Config) UptimeTimeout() time.Duration {
 
 func defaults() Config {
 	return Config{
-		Entity: EntityConfig{
+		Resource: ResourceConfig{
 			Type: "host",
 		},
 		HTTP: HTTPConfig{
@@ -424,20 +438,26 @@ func defaults() Config {
 }
 
 func merge(dst *Config, src Config) {
+	if src.Pulse.SpoolDir != "" {
+		dst.Pulse.SpoolDir = src.Pulse.SpoolDir
+	}
+	if src.Pulse.SpoolMaxBytes != 0 {
+		dst.Pulse.SpoolMaxBytes = src.Pulse.SpoolMaxBytes
+	}
 	if src.Pulse.IngestURL != "" {
 		dst.Pulse.IngestURL = src.Pulse.IngestURL
 	}
 	if src.Pulse.IngestToken != "" {
 		dst.Pulse.IngestToken = src.Pulse.IngestToken
 	}
-	if src.Entity.ID != "" {
-		dst.Entity.ID = src.Entity.ID
+	if src.Resource.ID != "" {
+		dst.Resource.ID = src.Resource.ID
 	}
-	if src.Entity.Label != "" {
-		dst.Entity.Label = src.Entity.Label
+	if src.Resource.Label != "" {
+		dst.Resource.Label = src.Resource.Label
 	}
-	if src.Entity.Type != "" {
-		dst.Entity.Type = src.Entity.Type
+	if src.Resource.Type != "" {
+		dst.Resource.Type = src.Resource.Type
 	}
 	dst.Dimensions = mergeDimensions(dst.Dimensions, src.Dimensions)
 	if src.HTTP.TimeoutSeconds != 0 {
@@ -563,20 +583,26 @@ func merge(dst *Config, src Config) {
 }
 
 func applyOverlay(dst *Config, o Overlay) {
+	if o.SpoolDir != "" {
+		dst.Pulse.SpoolDir = o.SpoolDir
+	}
+	if o.SpoolMaxBytes != 0 {
+		dst.Pulse.SpoolMaxBytes = o.SpoolMaxBytes
+	}
 	if o.IngestURL != "" {
 		dst.Pulse.IngestURL = o.IngestURL
 	}
 	if o.IngestToken != "" {
 		dst.Pulse.IngestToken = o.IngestToken
 	}
-	if o.EntityID != "" {
-		dst.Entity.ID = o.EntityID
+	if o.ResourceID != "" {
+		dst.Resource.ID = o.ResourceID
 	}
-	if o.EntityLabel != "" {
-		dst.Entity.Label = o.EntityLabel
+	if o.ResourceLabel != "" {
+		dst.Resource.Label = o.ResourceLabel
 	}
-	if o.EntityType != "" {
-		dst.Entity.Type = o.EntityType
+	if o.ResourceType != "" {
+		dst.Resource.Type = o.ResourceType
 	}
 	dst.Dimensions = mergeDimensions(dst.Dimensions, o.Dimensions)
 	if o.TimeoutSeconds != 0 {
@@ -812,13 +838,19 @@ func ParseDimensions(values []string) (map[string]string, error) {
 func validateHTTPURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("pulse ingest url is invalid: %w", err)
+		return errors.New("pulse ingest url is invalid")
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return errors.New("pulse ingest url must use http or https")
 	}
 	if u.Host == "" {
 		return errors.New("pulse ingest url must include a host")
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return errors.New("pulse ingest url must not contain credentials, query or fragment")
+	}
+	if u.EscapedPath() != "/api/pulse/ingest" {
+		return errors.New("pulse ingest url path must be /api/pulse/ingest")
 	}
 	return nil
 }

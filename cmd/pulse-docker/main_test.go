@@ -2,18 +2,18 @@ package main
 
 import "testing"
 
-func TestLoadConfigNormalizesDockerEntityID(t *testing.T) {
-	cfg, err := loadConfig(cli{EntityID: "host:server-01", Local: true})
+func TestLoadConfigPreservesExplicitResourceID(t *testing.T) {
+	cfg, err := loadConfig(cli{ResourceID: "host:server-01", Local: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Entity.ID != "server-01" {
-		t.Fatalf("entity id = %q", cfg.Entity.ID)
+	if cfg.Resource.ID != "host:server-01" {
+		t.Fatalf("resource id = %q", cfg.Resource.ID)
 	}
-	if cfg.Entity.Type != "host" {
-		t.Fatalf("entity type = %q", cfg.Entity.Type)
+	if cfg.Resource.Type != "host" {
+		t.Fatalf("resource type = %q", cfg.Resource.Type)
 	}
-	if cfg.Entity.Label != "server-01" {
-		t.Fatalf("entity label = %q", cfg.Entity.Label)
+	if cfg.Resource.Label != "host:server-01" {
+		t.Fatalf("resource label = %q", cfg.Resource.Label)
 	}
 }

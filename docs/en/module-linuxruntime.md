@@ -12,9 +12,9 @@ updated: 2026-06-11
 
 The Linux runtime module reports pressure stall information, process counts, and socket summaries.
 
-## Entity types
+## Resource types
 
-- `host`: Linux runtime data for the monitored host. Example entity id: `host:server-01`.
+- `host`: Linux runtime data for the monitored host. Example resource key: `host:server-01`.
 
 ## Metrics
 

@@ -33,9 +33,7 @@ func TestCollectorEmitsStableEndpointResourcesAndProtocolSignals(t *testing.T) {
 	defer httpServer.Close()
 
 	scope := monitoring.Scope{
-		EntityID:   "uptime-probe:office",
-		EntityType: "uptime-probe",
-		Label:      "Office",
+		Resource:   pulse.ResourceRef{Type: "uptime-probe", ID: "office", Label: "Office"},
 		Dimensions: map[string]string{"probe": "office", "site": "berlin"},
 		Timestamp:  time.Date(2026, 7, 23, 18, 0, 0, 0, time.UTC),
 	}
@@ -101,8 +99,7 @@ func TestCollectorModelsTargetFailureWithoutReturningCollectorError(t *testing.T
 			ExpectedStatus: http.StatusOK,
 		}},
 	}).Collect(context.Background(), monitoring.Scope{
-		EntityID:   "uptime-probe:office",
-		EntityType: "uptime-probe",
+		Resource:   pulse.ResourceRef{Type: "uptime-probe", ID: "office"},
 		Dimensions: map[string]string{"probe": "office"},
 	})
 	if err != nil {
@@ -129,8 +126,7 @@ func TestCollectorDoesNotReportUnavailablePingCommandAsDowntimeMetric(t *testing
 			ID: "router", Label: "Router", Kind: KindICMP, Address: "192.0.2.1",
 		}},
 	}).Collect(context.Background(), monitoring.Scope{
-		EntityID:   "uptime-probe:office",
-		EntityType: "uptime-probe",
+		Resource:   pulse.ResourceRef{Type: "uptime-probe", ID: "office"},
 		Dimensions: map[string]string{"probe": "office"},
 	})
 	if err != nil {
@@ -156,8 +152,7 @@ func TestCollectorDoesNotReportPingExecutionErrorAsDowntimeMetric(t *testing.T) 
 			ID: "router", Label: "Router", Kind: KindICMP, Address: "192.0.2.1",
 		}},
 	}).Collect(context.Background(), monitoring.Scope{
-		EntityID:   "uptime-probe:office",
-		EntityType: "uptime-probe",
+		Resource:   pulse.ResourceRef{Type: "uptime-probe", ID: "office"},
 		Dimensions: map[string]string{"probe": "office"},
 	})
 	if err != nil {
@@ -185,8 +180,7 @@ func TestCollectorClearsHTTPResponseStatesAfterRequestFailure(t *testing.T) {
 		}},
 		Timeout: time.Second,
 	}).Collect(context.Background(), monitoring.Scope{
-		EntityID:   "uptime-probe:office",
-		EntityType: "uptime-probe",
+		Resource:   pulse.ResourceRef{Type: "uptime-probe", ID: "office"},
 		Dimensions: map[string]string{"probe": "office"},
 	})
 	if err != nil {
@@ -229,12 +223,12 @@ func TestDefaultTargetsCoverAllCheckTypes(t *testing.T) {
 
 func hasResource(batch pulse.Batch, entityID string) bool {
 	for _, metric := range batch.Metrics {
-		if metric.EntityID == entityID && metric.Resource != nil && metric.Resource.Label != "" {
+		if metric.Resource.Key() == entityID && metric.Resource != nil && metric.Resource.Label != "" {
 			return true
 		}
 	}
 	for _, state := range batch.States {
-		if state.EntityID == entityID && state.Resource != nil && state.Resource.Label != "" {
+		if state.Resource.Key() == entityID && state.Resource != nil && state.Resource.Label != "" {
 			return true
 		}
 	}

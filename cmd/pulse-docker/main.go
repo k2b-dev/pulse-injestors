@@ -29,17 +29,19 @@ var version = "dev"
 type cli struct {
 	Config string `name:"config" help:"TOML config path. Defaults to /etc/pulse/ingestor.toml when present." env:"PULSE_CONFIG"`
 
-	IngestURL   string   `name:"ingest-url" help:"Pulse ingest endpoint URL." env:"PULSE_INGEST_URL"`
-	IngestToken string   `name:"ingest-token" help:"Pulse ingest bearer token." env:"PULSE_INGEST_TOKEN"`
-	EntityID    string   `name:"entity-id" help:"Stable monitored host id. Defaults to the Docker daemon id for pulse-docker." env:"PULSE_ENTITY_ID"`
-	EntityLabel string   `name:"entity-label" help:"Human-readable monitored host label. Defaults to the Docker host name." env:"PULSE_ENTITY_LABEL"`
-	Dimensions  []string `name:"dimension" help:"Bounded global dimension as key=value. Repeat for multiple values." env:"PULSE_DIMENSIONS" sep:","`
+	IngestURL     string   `name:"ingest-url" help:"Pulse ingest endpoint URL." env:"PULSE_INGEST_URL"`
+	IngestToken   string   `name:"ingest-token" help:"Pulse ingest bearer token." env:"PULSE_INGEST_TOKEN"`
+	ResourceID    string   `name:"resource-id" help:"Stable monitored host id. Defaults to the Docker daemon id for pulse-docker." env:"PULSE_RESOURCE_ID"`
+	ResourceLabel string   `name:"resource-label" help:"Human-readable monitored host label. Defaults to the Docker host name." env:"PULSE_RESOURCE_LABEL"`
+	Dimensions    []string `name:"dimension" help:"Bounded global dimension as key=value. Repeat for multiple values." env:"PULSE_DIMENSIONS" sep:","`
 
-	IntervalSeconds         int `name:"interval-seconds" help:"Collection interval for run mode." env:"PULSE_INTERVAL_SECONDS"`
-	CollectorTimeoutSeconds int `name:"collector-timeout-seconds" help:"Overall timeout per collector in seconds." env:"PULSE_COLLECTOR_TIMEOUT_SECONDS"`
-	TimeoutSeconds          int `name:"timeout-seconds" help:"HTTP request timeout in seconds." env:"PULSE_HTTP_TIMEOUT_SECONDS"`
-	MaxRetries              int `name:"max-retries" help:"HTTP retry count for network, 408, 429 and 5xx failures." env:"PULSE_HTTP_MAX_RETRIES"`
-	InitialBackoffMS        int `name:"initial-backoff-ms" help:"Initial retry backoff in milliseconds." env:"PULSE_HTTP_INITIAL_BACKOFF_MS"`
+	IntervalSeconds         int    `name:"interval-seconds" help:"Collection interval for run mode." env:"PULSE_INTERVAL_SECONDS"`
+	CollectorTimeoutSeconds int    `name:"collector-timeout-seconds" help:"Overall timeout per collector in seconds." env:"PULSE_COLLECTOR_TIMEOUT_SECONDS"`
+	TimeoutSeconds          int    `name:"timeout-seconds" help:"HTTP request timeout in seconds." env:"PULSE_HTTP_TIMEOUT_SECONDS"`
+	SpoolDir                string `name:"spool-dir" help:"Private persistent delivery directory." env:"PULSE_SPOOL_DIR"`
+	SpoolMaxBytes           int64  `name:"spool-max-bytes" help:"Maximum persistent delivery bytes; required with spool-dir." env:"PULSE_SPOOL_MAX_BYTES"`
+	MaxRetries              int    `name:"max-retries" help:"HTTP retry count for network, 408, 409, 429 and 5xx failures." env:"PULSE_HTTP_MAX_RETRIES"`
+	InitialBackoffMS        int    `name:"initial-backoff-ms" help:"Initial retry backoff in milliseconds." env:"PULSE_HTTP_INITIAL_BACKOFF_MS"`
 
 	ProcRoot                      string `name:"proc-root" help:"Host procfs root to read." env:"PULSE_HOST_PROC_ROOT"`
 	SysRoot                       string `name:"sys-root" help:"Host sysfs root to read." env:"PULSE_HOST_SYS_ROOT"`
@@ -92,11 +94,9 @@ func main() {
 	defer cancel()
 
 	runner := monitoring.Runner{
-		EntityID:   "host:" + cfg.Entity.ID,
-		EntityType: "host",
-		Label:      cfg.Entity.Label,
+		Resource: pulse.ResourceRef{Type: "host", ID: cfg.Resource.ID, Label: cfg.Resource.Label},
 		Dimensions: monitoring.MergeDimensions(cfg.Dimensions, map[string]string{
-			"host": cfg.Entity.ID,
+			"host": cfg.Resource.ID,
 		}),
 		Collectors: collectors(cfg),
 		Sender:     sender(c, cfg, log),
@@ -129,14 +129,14 @@ func loadConfig(c cli) (config.Config, error) {
 	if err != nil {
 		return config.Config{}, fmt.Errorf("load %s: %w", cfgPath, err)
 	}
-	if c.EntityID == "" && fileCfg.Entity.ID == "" {
+	if c.ResourceID == "" && fileCfg.Resource.ID == "" {
 		stableID, err := dockermodule.DaemonStableID(context.Background(), dockerSocketPath(c, fileCfg), 5*time.Second)
 		if err != nil {
-			return config.Config{}, fmt.Errorf("resolve stable docker host id: %w; set PULSE_ENTITY_ID to a stable host id", err)
+			return config.Config{}, fmt.Errorf("resolve stable docker host id: %w; set PULSE_RESOURCE_ID to a stable host id", err)
 		}
-		fileCfg.Entity.ID = stableID
-		if fileCfg.Entity.Label == "" {
-			fileCfg.Entity.Label = stableID
+		fileCfg.Resource.ID = stableID
+		if fileCfg.Resource.Label == "" {
+			fileCfg.Resource.Label = stableID
 		}
 	}
 	dimensions, err := config.ParseDimensions(c.Dimensions)
@@ -144,11 +144,13 @@ func loadConfig(c cli) (config.Config, error) {
 		return config.Config{}, err
 	}
 	cfg, err := config.Resolve(fileCfg, config.Overlay{
+		SpoolDir:                      c.SpoolDir,
+		SpoolMaxBytes:                 c.SpoolMaxBytes,
 		ConfigPath:                    cfgPath,
 		IngestURL:                     c.IngestURL,
 		IngestToken:                   c.IngestToken,
-		EntityID:                      c.EntityID,
-		EntityLabel:                   c.EntityLabel,
+		ResourceID:                    c.ResourceID,
+		ResourceLabel:                 c.ResourceLabel,
 		Dimensions:                    dimensions,
 		TimeoutSeconds:                c.TimeoutSeconds,
 		MaxRetries:                    c.MaxRetries,
@@ -170,14 +172,14 @@ func loadConfig(c cli) (config.Config, error) {
 	if err != nil {
 		return config.Config{}, err
 	}
-	cfg.Entity.ID = dockermodule.NormalizeStableHostID(cfg.Entity.ID)
-	if cfg.Entity.ID == "" {
-		return config.Config{}, fmt.Errorf("entity id is required")
+	cfg.Resource.ID = dockermodule.NormalizeStableHostID(cfg.Resource.ID)
+	if cfg.Resource.ID == "" {
+		return config.Config{}, fmt.Errorf("resource id is required")
 	}
-	if c.EntityLabel == "" && fileCfg.Entity.Label == "" {
-		cfg.Entity.Label = cfg.Entity.ID
+	if c.ResourceLabel == "" && fileCfg.Resource.Label == "" {
+		cfg.Resource.Label = cfg.Resource.ID
 	}
-	cfg.Entity.Type = "host"
+	cfg.Resource.Type = "host"
 	return cfg, nil
 }
 
@@ -196,6 +198,8 @@ func sender(c cli, cfg config.Config, log *slog.Logger) monitoring.Sender {
 		return monitoring.StdoutSender{Writer: os.Stdout, Pretty: true, Report: c.Pretty}
 	}
 	return pulse.Client{
+		SpoolDir:       cfg.Pulse.SpoolDir,
+		SpoolMaxBytes:  cfg.Pulse.SpoolMaxBytes,
 		URL:            cfg.Pulse.IngestURL,
 		Token:          cfg.Pulse.IngestToken,
 		HTTPClient:     &http.Client{Timeout: cfg.HTTPTimeout()},
@@ -206,7 +210,7 @@ func sender(c cli, cfg config.Config, log *slog.Logger) monitoring.Sender {
 }
 
 func collectors(cfg config.Config) []monitoring.Collector {
-	stableHostID := dockermodule.NormalizeStableHostID(cfg.Entity.ID)
+	stableHostID := dockermodule.NormalizeStableHostID(cfg.Resource.ID)
 	out := []monitoring.Collector{
 		system.Collector{ProcRoot: cfg.Host.ProcRoot, CPUSampleTime: cfg.CPUSampleWindow()},
 		filesystem.Collector{ProcRoot: cfg.Host.ProcRoot, HostRoot: cfg.Host.Root},

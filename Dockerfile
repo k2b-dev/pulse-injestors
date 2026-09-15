@@ -16,8 +16,6 @@ FROM alpine:3.22
 
 RUN apk add --no-cache btrfs-progs ca-certificates
 COPY --from=build /out/pulse-injestor /usr/local/bin/pulse-injestor
-COPY docker/pulse-container-entrypoint.sh /usr/local/bin/pulse-container-entrypoint
-RUN chmod +x /usr/local/bin/pulse-container-entrypoint
 
-ENTRYPOINT ["/usr/local/bin/pulse-container-entrypoint"]
-CMD ["schedule"]
+ENTRYPOINT ["/usr/local/bin/pulse-injestor"]
+CMD ["run"]

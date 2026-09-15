@@ -90,9 +90,9 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 }
 
 func filesystemScope(scope monitoring.Scope, mount Mount) monitoring.Scope {
-	scope.EntityType = "filesystem"
-	scope.EntityID = entity.ID("filesystem", entity.StableHostIDFromScope(scope.EntityID, scope.Dimensions), entity.Key(mount.Point, "root"))
-	scope.Label = mount.Point
+	scope.Resource.Type = "filesystem"
+	scope.Resource.ID = entity.ID(entity.StableHostIDFromScope(scope.Resource.ID, scope.Dimensions), entity.Key(mount.Point, "root"))
+	scope.Resource.Label = mount.Point
 	return scope
 }
 

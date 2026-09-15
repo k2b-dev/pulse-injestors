@@ -1,49 +1,34 @@
 package entity
 
-import "strings"
+import (
+	"net/url"
+	"strings"
+)
 
-func StableHostID(value string) string {
-	value = strings.TrimSpace(value)
-	value = strings.TrimPrefix(value, "host:")
-	value = strings.TrimPrefix(value, "/")
-	if value == "" {
-		return ""
-	}
-	return component(value)
-}
+func StableHostID(value string) string { return strings.TrimSpace(value) }
 
-func HostID(stableHostID string) string {
-	return "host:" + component(stableHostID)
-}
-
-func StableHostIDFromScope(entityID string, dimensions map[string]string) string {
+func StableHostIDFromScope(resourceID string, dimensions map[string]string) string {
 	if dimensions != nil {
 		if host := StableHostID(dimensions["host"]); host != "" {
 			return host
 		}
 	}
-	return StableHostID(entityID)
+	return StableHostID(resourceID)
 }
 
-func ID(kind string, parts ...string) string {
-	out := kind
-	for _, part := range parts {
-		out += ":" + component(part)
+func ID(parts ...string) string {
+	out := make([]string, len(parts))
+	for i, part := range parts {
+		out[i] = component(part)
 	}
-	return out
+	return strings.Join(out, ":")
 }
 
 func Key(value, fallback string) string {
-	key := component(value)
-	if key == "" {
-		return component(fallback)
+	if value == "" {
+		return fallback
 	}
-	return key
+	return value
 }
 
-func component(value string) string {
-	value = strings.TrimSpace(value)
-	value = strings.TrimPrefix(value, "/")
-	replacer := strings.NewReplacer(":", "_", "/", "_", " ", "_", "\t", "_", "\n", "_")
-	return replacer.Replace(value)
-}
+func component(value string) string { return strings.ReplaceAll(url.PathEscape(value), ":", "%3A") }

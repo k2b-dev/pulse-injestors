@@ -8,9 +8,7 @@ import (
 )
 
 type Scope struct {
-	EntityID   string
-	EntityType string
-	Label      string
+	Resource   pulse.ResourceRef
 	Dimensions map[string]string
 	Timestamp  time.Time
 }
@@ -34,6 +32,7 @@ func NewBuilder(scope Scope) *Builder {
 	if scope.Timestamp.IsZero() {
 		scope.Timestamp = time.Now().UTC()
 	}
+	scope.Timestamp = scope.Timestamp.UTC()
 	return &Builder{
 		scope: scope,
 		batch: pulse.Batch{
@@ -52,8 +51,6 @@ func (b *Builder) Metric(name, typ string, value float64, unit string, dims map[
 		Value:      value,
 		Unit:       unit,
 		Timestamp:  b.scope.Timestamp,
-		EntityID:   resourceKey(resource, b.scope.EntityID),
-		EntityType: resourceType(resource, b.scope.EntityType),
 		Resource:   resource,
 		Dimensions: mergeDims(b.scope.Dimensions, dims),
 	})
@@ -69,8 +66,6 @@ func (b *Builder) EventDetails(kind string, dims map[string]string, details Even
 		Kind:          kind,
 		Timestamp:     b.scope.Timestamp,
 		Value:         details.Value,
-		EntityID:      resourceKey(resource, b.scope.EntityID),
-		EntityType:    resourceType(resource, b.scope.EntityType),
 		Resource:      resource,
 		Dimensions:    mergeDims(b.scope.Dimensions, dims),
 		Attributes:    details.Attributes,
@@ -88,8 +83,6 @@ func (b *Builder) State(key string, value any, dims map[string]string) {
 		Key:        key,
 		Value:      value,
 		Timestamp:  b.scope.Timestamp,
-		EntityID:   resourceKey(resource, b.scope.EntityID),
-		EntityType: resourceType(resource, b.scope.EntityType),
 		Resource:   resource,
 		Dimensions: mergeDims(b.scope.Dimensions, dims),
 	})
@@ -108,43 +101,31 @@ func Inject(batch pulse.Batch, scope Scope, extraDims map[string]string) pulse.B
 		scope.Timestamp = time.Now().UTC()
 	}
 	for i := range batch.Metrics {
+		if batch.Metrics[i].Type == "" {
+			batch.Metrics[i].Type = "gauge"
+		}
 		if batch.Metrics[i].Timestamp.IsZero() {
 			batch.Metrics[i].Timestamp = scope.Timestamp
 		}
-		if batch.Metrics[i].EntityID == "" {
-			batch.Metrics[i].EntityID = scope.EntityID
-		}
-		if batch.Metrics[i].EntityType == "" {
-			batch.Metrics[i].EntityType = scope.EntityType
-		}
+		batch.Metrics[i].Timestamp = batch.Metrics[i].Timestamp.UTC()
 		batch.Metrics[i].Dimensions = mergeDims(scope.Dimensions, mergeDims(extraDims, batch.Metrics[i].Dimensions))
-		applyResource(&batch.Metrics[i].EntityID, &batch.Metrics[i].EntityType, &batch.Metrics[i].Resource, scope, batch.Metrics[i].Dimensions)
+		applyResource(&batch.Metrics[i].Resource, scope)
 	}
 	for i := range batch.Events {
 		if batch.Events[i].Timestamp.IsZero() {
 			batch.Events[i].Timestamp = scope.Timestamp
 		}
-		if batch.Events[i].EntityID == "" {
-			batch.Events[i].EntityID = scope.EntityID
-		}
-		if batch.Events[i].EntityType == "" {
-			batch.Events[i].EntityType = scope.EntityType
-		}
+		batch.Events[i].Timestamp = batch.Events[i].Timestamp.UTC()
 		batch.Events[i].Dimensions = mergeDims(scope.Dimensions, mergeDims(extraDims, batch.Events[i].Dimensions))
-		applyResource(&batch.Events[i].EntityID, &batch.Events[i].EntityType, &batch.Events[i].Resource, scope, batch.Events[i].Dimensions)
+		applyResource(&batch.Events[i].Resource, scope)
 	}
 	for i := range batch.States {
 		if batch.States[i].Timestamp.IsZero() {
 			batch.States[i].Timestamp = scope.Timestamp
 		}
-		if batch.States[i].EntityID == "" {
-			batch.States[i].EntityID = scope.EntityID
-		}
-		if batch.States[i].EntityType == "" {
-			batch.States[i].EntityType = scope.EntityType
-		}
+		batch.States[i].Timestamp = batch.States[i].Timestamp.UTC()
 		batch.States[i].Dimensions = mergeDims(scope.Dimensions, mergeDims(extraDims, batch.States[i].Dimensions))
-		applyResource(&batch.States[i].EntityID, &batch.States[i].EntityType, &batch.States[i].Resource, scope, batch.States[i].Dimensions)
+		applyResource(&batch.States[i].Resource, scope)
 	}
 	return batch
 }
@@ -178,25 +159,13 @@ func MergeDimensions(base, extra map[string]string) map[string]string {
 }
 
 func signalLabel(scope Scope) string {
-	if scope.Label != "" {
-		return scope.Label
+	if scope.Resource.Label != "" {
+		return scope.Resource.Label
 	}
 	if v := labelFromDimensions(scope.Dimensions); v != "" {
 		return v
 	}
-	return labelFromEntityID(scope.EntityID)
-}
-
-func injectedLabel(scope Scope, entityID string, dims map[string]string) string {
-	if entityID != "" && entityID != scope.EntityID {
-		if v := labelFromDimensions(dims); v != "" {
-			return v
-		}
-		return labelFromEntityID(entityID)
-	}
-	scoped := scope
-	scoped.Dimensions = dims
-	return signalLabel(scoped)
+	return labelFromResourceID(scope.Resource.ID)
 }
 
 func labelFromDimensions(dims map[string]string) string {
@@ -224,48 +193,33 @@ func labelFromDimensions(dims map[string]string) string {
 	return ""
 }
 
-func labelFromEntityID(entityID string) string {
-	entityID = strings.TrimSpace(entityID)
-	if entityID == "" {
+func labelFromResourceID(resourceID string) string {
+	resourceID = strings.TrimSpace(resourceID)
+	if resourceID == "" {
 		return ""
 	}
-	parts := strings.Split(entityID, ":")
+	parts := strings.Split(resourceID, ":")
 	for i := len(parts) - 1; i >= 0; i-- {
 		if part := strings.TrimSpace(parts[i]); part != "" {
 			return strings.NewReplacer("_", " ").Replace(part)
 		}
 	}
-	return entityID
+	return resourceID
 }
 
 func resourceFromScope(scope Scope) *pulse.ResourceRef {
-	return pulse.ResourceFromEntity(scope.EntityType, scope.EntityID, signalLabel(scope))
+	if scope.Resource.Type == "" && scope.Resource.ID == "" {
+		return nil
+	}
+	resource := scope.Resource
+	if resource.Label == "" {
+		resource.Label = signalLabel(scope)
+	}
+	return &resource
 }
 
-func applyResource(entityID, entityType *string, resource **pulse.ResourceRef, scope Scope, dims map[string]string) {
-	if *resource == nil {
-		label := injectedLabel(scope, *entityID, dims)
-		*resource = pulse.ResourceFromEntity(*entityType, *entityID, label)
-	}
+func applyResource(resource **pulse.ResourceRef, scope Scope) {
 	if *resource == nil {
 		*resource = resourceFromScope(scope)
 	}
-	if *resource != nil {
-		*entityID = (*resource).Key()
-		*entityType = (*resource).Type
-	}
-}
-
-func resourceKey(resource *pulse.ResourceRef, fallback string) string {
-	if resource == nil {
-		return fallback
-	}
-	return resource.Key()
-}
-
-func resourceType(resource *pulse.ResourceRef, fallback string) string {
-	if resource == nil {
-		return fallback
-	}
-	return resource.Type
 }

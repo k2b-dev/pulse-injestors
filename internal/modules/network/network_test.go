@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
+	"github.com/k2b-dev/pulse-injestors/internal/pulse"
 )
 
 func TestParseNetDev(t *testing.T) {
@@ -25,14 +26,13 @@ func TestParseNetDev(t *testing.T) {
 
 func TestInterfaceScopeUsesResourceEntity(t *testing.T) {
 	scope := interfaceScope(monitoring.Scope{
-		EntityID:   "host:server-01",
-		EntityType: "host",
+		Resource: pulse.ResourceRef{Type: "host", ID: "server-01"},
 		Dimensions: map[string]string{
 			"host": "server-01",
 		},
 	}, "eth0")
 
-	if scope.EntityType != "network-interface" || scope.EntityID != "network-interface:server-01:eth0" {
+	if scope.Resource.Type != "network-interface" || scope.Resource.Key() != "network-interface:server-01:eth0" {
 		t.Fatalf("scope = %#v", scope)
 	}
 }

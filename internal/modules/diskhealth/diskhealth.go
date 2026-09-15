@@ -132,9 +132,9 @@ func collectNVMe(ctx context.Context, b *monitoring.Builder, scope monitoring.Sc
 }
 
 func diskScope(scope monitoring.Scope, device, serial, label string) monitoring.Scope {
-	scope.EntityType = "disk"
-	scope.EntityID = entity.ID("disk", entity.StableHostIDFromScope(scope.EntityID, scope.Dimensions), entity.Key(serial, device))
-	scope.Label = displayLabel(label, device, serial)
+	scope.Resource.Type = "disk"
+	scope.Resource.ID = entity.ID(entity.StableHostIDFromScope(scope.Resource.ID, scope.Dimensions), entity.Key(serial, device))
+	scope.Resource.Label = displayLabel(label, device, serial)
 	return scope
 }
 

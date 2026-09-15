@@ -51,9 +51,9 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 }
 
 func interfaceScope(scope monitoring.Scope, iface string) monitoring.Scope {
-	scope.EntityType = "network-interface"
-	scope.EntityID = entity.ID("network-interface", entity.StableHostIDFromScope(scope.EntityID, scope.Dimensions), iface)
-	scope.Label = iface
+	scope.Resource.Type = "network-interface"
+	scope.Resource.ID = entity.ID(entity.StableHostIDFromScope(scope.Resource.ID, scope.Dimensions), iface)
+	scope.Resource.Label = iface
 	return scope
 }
 

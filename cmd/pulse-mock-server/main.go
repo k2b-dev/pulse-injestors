@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -29,7 +30,7 @@ func main() {
 	)
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /ingest", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/pulse/ingest", func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer "+c.Token {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -40,8 +41,18 @@ func main() {
 		}
 		defer r.Body.Close()
 		var batch pulse.Batch
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<20)).Decode(&batch); err != nil {
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 5<<20))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&batch); err != nil {
 			http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := decoder.Decode(new(any)); err != io.EOF {
+			http.Error(w, "expected one JSON object", http.StatusBadRequest)
+			return
+		}
+		if len(batch.Metrics) > 500 || len(batch.Events) > 500 || len(batch.States) > 500 {
+			http.Error(w, "collection exceeds 500 signals", http.StatusBadRequest)
 			return
 		}
 		if len(batch.Metrics) == 0 && len(batch.Events) == 0 && len(batch.States) == 0 {

@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"time"
 
 	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
 	"github.com/k2b-dev/pulse-injestors/internal/pulse"
+	"github.com/k2b-dev/pulse-injestors/internal/validation"
 )
 
 type Script struct {
@@ -96,15 +98,24 @@ func runScript(ctx context.Context, scope monitoring.Scope, script Script) (puls
 		return pulse.Batch{}, fmt.Errorf("script %q failed: %w", script.Name, err)
 	}
 	var out output
-	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&out); err != nil {
 		return pulse.Batch{}, fmt.Errorf("script %q invalid json: %w", script.Name, err)
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return pulse.Batch{}, fmt.Errorf("script %q has trailing JSON", script.Name)
 	}
 	batch := pulse.Batch{
 		Metrics: out.Metrics,
 		Events:  out.Events,
 		States:  out.States,
 	}
-	return monitoring.Inject(batch, scope, merge(script.Dimensions, merge(out.Dimensions, map[string]string{"script": script.Name}))), nil
+	batch = monitoring.Inject(batch, scope, merge(script.Dimensions, merge(out.Dimensions, map[string]string{"script": script.Name})))
+	if err := validation.Batch(batch); err != nil {
+		return pulse.Batch{}, fmt.Errorf("script %q invalid telemetry: %w", script.Name, err)
+	}
+	return batch, nil
 }
 
 type limitBuffer struct {

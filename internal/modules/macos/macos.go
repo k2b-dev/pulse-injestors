@@ -442,16 +442,16 @@ func collectDisplays(ctx context.Context, b *monitoring.Builder, scope monitorin
 }
 
 func filesystemScope(scope monitoring.Scope, mount string) monitoring.Scope {
-	scope.EntityType = "filesystem"
-	scope.EntityID = entity.ID("filesystem", entity.StableHostIDFromScope(scope.EntityID, scope.Dimensions), entity.Key(mount, "root"))
-	scope.Label = mount
+	scope.Resource.Type = "filesystem"
+	scope.Resource.ID = entity.ID(entity.StableHostIDFromScope(scope.Resource.ID, scope.Dimensions), entity.Key(mount, "root"))
+	scope.Resource.Label = mount
 	return scope
 }
 
 func homebrewServiceScope(scope monitoring.Scope, service string) monitoring.Scope {
-	scope.EntityType = "service"
-	scope.EntityID = entity.ID("service", entity.StableHostIDFromScope(scope.EntityID, scope.Dimensions), "homebrew", service)
-	scope.Label = service
+	scope.Resource.Type = "service"
+	scope.Resource.ID = entity.ID(entity.StableHostIDFromScope(scope.Resource.ID, scope.Dimensions), "homebrew", service)
+	scope.Resource.Label = service
 	return scope
 }
 

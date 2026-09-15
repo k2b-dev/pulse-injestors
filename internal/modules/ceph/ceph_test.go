@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
+	"github.com/k2b-dev/pulse-injestors/internal/pulse"
 )
 
 func TestParseStatus(t *testing.T) {
@@ -73,23 +74,22 @@ func TestCephUnavailableMarkers(t *testing.T) {
 
 func TestCephScopesUseResourceEntities(t *testing.T) {
 	scope := monitoring.Scope{
-		EntityID:   "host:server-01",
-		EntityType: "host",
+		Resource: pulse.ResourceRef{Type: "host", ID: "server-01"},
 		Dimensions: map[string]string{
 			"host": "server-01",
 		},
 	}
 
 	cluster := cephClusterScope(scope, "abcd-1234")
-	if cluster.EntityType != "ceph-cluster" || cluster.EntityID != "ceph-cluster:abcd-1234" {
+	if cluster.Resource.Type != "ceph-cluster" || cluster.Resource.Key() != "ceph-cluster:abcd-1234" {
 		t.Fatalf("cluster scope = %#v", cluster)
 	}
 	pool := cephPoolScope(cluster, "rbd")
-	if pool.EntityType != "ceph-pool" || pool.EntityID != "ceph-pool:abcd-1234:rbd" {
+	if pool.Resource.Type != "ceph-pool" || pool.Resource.Key() != "ceph-pool:abcd-1234:rbd" {
 		t.Fatalf("pool scope = %#v", pool)
 	}
 	fallback := cephClusterScope(scope, "")
-	if fallback.EntityID != "ceph-cluster:server-01" {
+	if fallback.Resource.Key() != "ceph-cluster:server-01" {
 		t.Fatalf("fallback cluster scope = %#v", fallback)
 	}
 }

@@ -12,9 +12,9 @@ updated: 2026-07-23
 
 The disk health module reports SMART and NVMe health data when host tools are available.
 
-## Entity types
+## Resource types
 
-| Entity type | Entity id | Used for |
+| Resource type | Resource key | Used for |
 |---|---|---|
 | `host` | `host:<host-id>` | SMART/NVMe tool availability and device counts. |
 | `disk` | `disk:<host-id>:<serial-or-device>` | SMART and NVMe states, metrics, and device-level failures for one disk. |

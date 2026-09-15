@@ -22,13 +22,15 @@ The ingestors model data so dashboards can group stable resources without depend
 | Total package updates across hosts | `metric system.packages.updates.total latest every 5m reduce sum since 24h` |
 | CPU per Compose service | `metric docker.compose.service.cpu.usage avg every 5m group by resource since 24h` |
 | Total receive throughput per container | `metric docker.container.network.rx rate every 5m reduce sum group by resource since 24h` |
-| Memory per Proxmox VM | `metric proxmox.resource.memory.used avg every 5m group by resource since 24h entity_type proxmox-vm` |
+| Memory per Proxmox VM | `metric proxmox.resource.memory.used avg every 5m group by resource since 24h resource_type proxmox-vm` |
 | Failed Proxmox tasks | `events proxmox.task.failed count every 1h since 7d` |
 | Availability ratio per endpoint | `metric uptime.check.availability avg every 5m group by resource since 24h` |
 | Check duration per endpoint | `metric uptime.check.duration avg every 5m group by resource since 24h` |
 | TLS certificate lifetime | `metric uptime.tls.certificate.expires_in min every 1h group by resource since 30d` |
 
 `group by resource` returns one series per browsable resource. `reduce` combines multiple metric variants only after Pulse computes each variant correctly. This is useful for summing container interfaces or producing fleet totals.
+
+Compose network and disk throughput use container counters: calculate each container rate before grouping by `host`, `compose_project`, and `compose_service`. Summing raw counters before calculating a rate gives incorrect results when a container restarts.
 
 ## Reference dashboards
 

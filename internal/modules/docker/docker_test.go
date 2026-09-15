@@ -65,8 +65,8 @@ func TestContainerDimsIncludesReadableAndFilterableFacets(t *testing.T) {
 	}
 }
 
-func TestDockerEntityIDs(t *testing.T) {
-	if got := dockerDaemonEntityID("server-01"); got != "docker:server-01" {
+func TestDockerResourceIDs(t *testing.T) {
+	if got := dockerDaemonResourceID("server-01"); got != "server-01" {
 		t.Fatalf("daemon entity = %q", got)
 	}
 	composeContainer := containerSummary{
@@ -78,36 +78,35 @@ func TestDockerEntityIDs(t *testing.T) {
 			"com.docker.compose.container-number": "1",
 		},
 	}
-	if got := containerEntityID("server-01", composeContainer); got != "container:server-01:compose:pulse:api:1" {
+	if got := containerResourceID("server-01", composeContainer); got != "server-01:compose:pulse:api:1" {
 		t.Fatalf("compose container entity = %q", got)
 	}
 	namedContainer := containerSummary{ID: "abcdef1234567890", Names: []string{"/postgres"}}
-	if got := containerEntityID("server-01", namedContainer); got != "container:server-01:name:postgres" {
+	if got := containerResourceID("server-01", namedContainer); got != "server-01:name:postgres" {
 		t.Fatalf("named container entity = %q", got)
 	}
 	unnamedContainer := containerSummary{ID: "fedcba0987654321"}
-	if got := containerEntityID("server-01", unnamedContainer); got != "container:server-01:id:fedcba098765" {
+	if got := containerResourceID("server-01", unnamedContainer); got != "server-01:id:fedcba098765" {
 		t.Fatalf("fallback container entity = %q", got)
 	}
-	if got := composeServiceEntityID("server-01", "my:project", "api/web"); got != "compose:server-01:my_project:api_web" {
+	if got := composeServiceResourceID("server-01", "my:project", "api/web"); got != "server-01:my%3Aproject:api%2Fweb" {
 		t.Fatalf("compose service entity = %q", got)
 	}
 	identity := imageIdentityFrom("server-01", "sha256:abcdef1234567890", []string{"ghcr.io/example/api:latest"}, nil, nil)
-	if got := imageEntityID(identity); got != "image:server-01:ghcr.io_example_api:latest" {
+	if got := imageResourceID(identity); got != "server-01:ghcr.io%2Fexample%2Fapi:latest" {
 		t.Fatalf("image entity = %q", got)
 	}
 	if identity.Label != "ghcr.io/example/api:latest" {
 		t.Fatalf("image label = %q", identity.Label)
 	}
-	if got := composeProjectEntityID("server-01", "my:project"); got != "compose-project:server-01:my_project" {
+	if got := composeProjectResourceID("server-01", "my:project"); got != "server-01:my%3Aproject" {
 		t.Fatalf("compose project entity = %q", got)
 	}
 }
 
 func TestEmitImageInspectUsesImageResourceEntity(t *testing.T) {
 	scope := monitoring.Scope{
-		EntityID:   "host:server-01",
-		EntityType: "host",
+		Resource:   pulse.ResourceRef{Type: "host", ID: "server-01"},
 		Dimensions: map[string]string{"host": "server-01", "collector": "docker"},
 		Timestamp:  time.Unix(0, 0).UTC(),
 	}
@@ -123,8 +122,8 @@ func TestEmitImageInspectUsesImageResourceEntity(t *testing.T) {
 	if state == nil {
 		t.Fatalf("missing image arch state: %#v", batch.States)
 	}
-	if state.EntityType != "docker-image" || state.EntityID != "docker-image:server-01:ghcr.io_example_api:latest" {
-		t.Fatalf("image state entity = %s %s", state.EntityType, state.EntityID)
+	if state.Resource.Type != "docker-image" || state.Resource.Key() != "docker-image:server-01:ghcr.io%2Fexample%2Fapi:latest" {
+		t.Fatalf("image state entity = %s %s", state.Resource.Type, state.Resource.Key())
 	}
 	if state.Resource == nil || state.Resource.Label != "ghcr.io/example/api:latest" {
 		t.Fatalf("image resource = %#v", state.Resource)
@@ -139,8 +138,7 @@ func TestEmitImageInspectUsesImageResourceEntity(t *testing.T) {
 
 func TestEmitMountsUsesContainerResourceWithMountDimensions(t *testing.T) {
 	scope := monitoring.Scope{
-		EntityID:   "host:server-01",
-		EntityType: "host",
+		Resource:   pulse.ResourceRef{Type: "host", ID: "server-01"},
 		Dimensions: map[string]string{"host": "server-01", "collector": "docker"},
 		Timestamp:  time.Unix(0, 0).UTC(),
 	}
@@ -161,8 +159,8 @@ func TestEmitMountsUsesContainerResourceWithMountDimensions(t *testing.T) {
 	if state == nil {
 		t.Fatalf("missing mount state: %#v", batch.States)
 	}
-	if state.EntityType != "docker-container" || state.EntityID != "docker-container:server-01:compose:pulse:db:1" {
-		t.Fatalf("mount state entity = %s %s", state.EntityType, state.EntityID)
+	if state.Resource.Type != "docker-container" || state.Resource.Key() != "docker-container:server-01:compose:pulse:db:1" {
+		t.Fatalf("mount state entity = %s %s", state.Resource.Type, state.Resource.Key())
 	}
 	if state.Dimensions["mount_destination"] != "/var/lib/postgresql/data" || state.Dimensions["volume"] != "pulse_db" {
 		t.Fatalf("mount dims = %v", state.Dimensions)
@@ -177,8 +175,7 @@ func TestEmitMountsUsesContainerResourceWithMountDimensions(t *testing.T) {
 
 func TestEmitNetworksUsesContainerResourceWithNetworkDimensions(t *testing.T) {
 	scope := monitoring.Scope{
-		EntityID:   "host:server-01",
-		EntityType: "host",
+		Resource:   pulse.ResourceRef{Type: "host", ID: "server-01"},
 		Dimensions: map[string]string{"host": "server-01", "collector": "docker"},
 		Timestamp:  time.Unix(0, 0).UTC(),
 	}
@@ -207,8 +204,8 @@ func TestEmitNetworksUsesContainerResourceWithNetworkDimensions(t *testing.T) {
 	if state == nil {
 		t.Fatalf("missing network state: %#v", batch.States)
 	}
-	if state.EntityType != "docker-container" || state.EntityID != "docker-container:server-01:name:api" {
-		t.Fatalf("network state entity = %s %s", state.EntityType, state.EntityID)
+	if state.Resource.Type != "docker-container" || state.Resource.Key() != "docker-container:server-01:name:api" {
+		t.Fatalf("network state entity = %s %s", state.Resource.Type, state.Resource.Key())
 	}
 	if state.Dimensions["network"] != "pulse_default" {
 		t.Fatalf("network dims = %v", state.Dimensions)
@@ -220,8 +217,7 @@ func TestEmitNetworksUsesContainerResourceWithNetworkDimensions(t *testing.T) {
 
 func TestEmitContainerSummaryUsesResourceEntities(t *testing.T) {
 	scope := monitoring.Scope{
-		EntityID:   "host:server-01",
-		EntityType: "host",
+		Resource:   pulse.ResourceRef{Type: "host", ID: "server-01"},
 		Dimensions: map[string]string{"host": "server-01"},
 		Timestamp:  time.Unix(0, 0).UTC(),
 	}
@@ -265,18 +261,18 @@ func TestEmitContainerSummaryUsesResourceEntities(t *testing.T) {
 
 func TestImageIdentityPrefersTagThenDigestThenImageID(t *testing.T) {
 	tag := imageIdentityFrom("server-01", "sha256:abcdef1234567890", []string{"postgres:15-alpine"}, nil, nil)
-	if tag.Label != "postgres:15-alpine" || tag.EntityID != "image:server-01:library_postgres:15-alpine" {
+	if tag.Label != "postgres:15-alpine" || tag.ResourceID != "server-01:library%2Fpostgres:15-alpine" {
 		t.Fatalf("tag identity = %#v", tag)
 	}
 	if tag.Repository != "library/postgres" || tag.Tag != "15-alpine" {
 		t.Fatalf("tag dims source = %#v", tag)
 	}
 	digest := imageIdentityFrom("server-01", "sha256:abcdef1234567890", nil, nil, []string{"ghcr.io/example/api@sha256:1234567890abcdef"})
-	if digest.Label != "ghcr.io/example/api@sha256:1234567890ab" || digest.EntityID != "image:server-01:ghcr.io_example_api:sha256_1234567890ab" {
+	if digest.Label != "ghcr.io/example/api@sha256:1234567890ab" || digest.ResourceID != "server-01:ghcr.io%2Fexample%2Fapi:sha256%3A1234567890ab" {
 		t.Fatalf("digest identity = %#v", digest)
 	}
 	fallback := imageIdentityFrom("server-01", "sha256:abcdef1234567890", nil, nil, nil)
-	if fallback.Label != "abcdef123456" || fallback.EntityID != "image:server-01:abcdef123456" {
+	if fallback.Label != "abcdef123456" || fallback.ResourceID != "server-01:abcdef123456" {
 		t.Fatalf("fallback identity = %#v", fallback)
 	}
 }
@@ -406,7 +402,7 @@ func TestParseBearerChallenge(t *testing.T) {
 func countMetricEntity(metrics []pulse.Metric, name, entityType, entityID string) int {
 	count := 0
 	for _, metric := range metrics {
-		if metric.Name == name && metric.EntityType == entityType && metric.EntityID == entityID {
+		if metric.Name == name && metric.Resource.Type == entityType && metric.Resource.Key() == entityID {
 			count++
 		}
 	}
@@ -416,7 +412,7 @@ func countMetricEntity(metrics []pulse.Metric, name, entityType, entityID string
 func countStateEntity(states []pulse.State, key, entityType, entityID string) int {
 	count := 0
 	for _, state := range states {
-		if state.Key == key && state.EntityType == entityType && state.EntityID == entityID {
+		if state.Key == key && state.Resource.Type == entityType && state.Resource.Key() == entityID {
 			count++
 		}
 	}
@@ -430,4 +426,24 @@ func findState(states []pulse.State, key string) *pulse.State {
 		}
 	}
 	return nil
+}
+
+func TestComposeSummaryDoesNotAggregateCumulativeCounters(t *testing.T) {
+	scope := monitoring.Scope{Resource: pulse.ResourceRef{Type: "host", ID: "server"}}
+	b := monitoring.NewBuilder(containerScope(scope, "server", containerSummary{Names: []string{"/api"}}))
+	dims := map[string]string{"compose_project": "app", "compose_service": "api"}
+	for _, name := range []string{"network.rx", "network.tx", "blockio.read", "blockio.write"} {
+		b.Metric("docker.container."+name, "counter", 10, "bytes", dims)
+	}
+	b.Metric("docker.container.memory.used", "gauge", 20, "bytes", dims)
+	batch := b.Batch()
+	emitComposeUsageSummary(&batch, scope, "server")
+	if len(batch.Metrics) != 6 {
+		t.Fatalf("unexpected aggregate count: %d", len(batch.Metrics))
+	}
+	for _, metric := range batch.Metrics {
+		if metric.Resource.Type == "docker-compose-service" && metric.Type != "gauge" {
+			t.Fatalf("unsafe aggregate: %#v", metric)
+		}
+	}
 }

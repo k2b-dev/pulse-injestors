@@ -6,13 +6,13 @@ import (
 
 	"github.com/k2b-dev/pulse-injestors/internal/modules/filesystem"
 	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
+	"github.com/k2b-dev/pulse-injestors/internal/pulse"
 )
 
 func TestEmitUsageParsesByteMetrics(t *testing.T) {
 	builder := monitoring.NewBuilder(monitoring.Scope{
-		EntityID:   "host",
-		EntityType: "host",
-		Timestamp:  time.Unix(0, 0).UTC(),
+		Resource:  pulse.ResourceRef{Type: "host", ID: "host"},
+		Timestamp: time.Unix(0, 0).UTC(),
 	})
 	emitUsage(builder, filesystem.Mount{Point: "/data", Source: "/dev/sdb"}, []byte(`
 Overall:
@@ -46,14 +46,13 @@ Overall:
 
 func TestBtrfsScopeUsesResourceEntity(t *testing.T) {
 	scope := btrfsScope(monitoring.Scope{
-		EntityID:   "host:server-01",
-		EntityType: "host",
+		Resource: pulse.ResourceRef{Type: "host", ID: "server-01"},
 		Dimensions: map[string]string{
 			"host": "server-01",
 		},
 	}, filesystem.Mount{Point: "/data"})
 
-	if scope.EntityType != "filesystem" || scope.EntityID != "filesystem:server-01:data" {
+	if scope.Resource.Type != "filesystem" || scope.Resource.Key() != "filesystem:server-01:%2Fdata" {
 		t.Fatalf("scope = %#v", scope)
 	}
 }

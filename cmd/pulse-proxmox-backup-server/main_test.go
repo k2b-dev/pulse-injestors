@@ -6,19 +6,19 @@ import (
 	"testing"
 )
 
-func TestLoadConfigNormalizesHostEntityID(t *testing.T) {
+func TestLoadConfigPreservesExplicitResourceID(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(cfgPath, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := loadConfig(cli{Config: cfgPath, EntityID: "host:pbs-01", Local: true})
+	cfg, err := loadConfig(cli{Config: cfgPath, ResourceID: "host:pbs-01", Local: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Entity.ID != "pbs-01" {
-		t.Fatalf("entity id = %q", cfg.Entity.ID)
+	if cfg.Resource.ID != "host:pbs-01" {
+		t.Fatalf("resource id = %q", cfg.Resource.ID)
 	}
-	if cfg.Entity.Type != "host" {
-		t.Fatalf("entity type = %q", cfg.Entity.Type)
+	if cfg.Resource.Type != "host" {
+		t.Fatalf("resource type = %q", cfg.Resource.Type)
 	}
 }

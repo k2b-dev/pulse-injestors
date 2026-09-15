@@ -12,9 +12,9 @@ updated: 2026-07-23
 
 The thermal module reads host temperature sensors from sysfs.
 
-## Entity types
+## Resource types
 
-| Entity type | Entity id | Used for |
+| Resource type | Resource key | Used for |
 |---|---|---|
 | `host` | `host:<host-id>` | Temperature availability and all sensor series. |
 

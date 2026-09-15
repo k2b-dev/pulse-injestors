@@ -24,8 +24,10 @@ The installer creates a minimal TOML config and protects it with mode `0600`.
 [pulse]
 ingest_url = "https://pulse.example.com/api/pulse/ingest"
 ingest_token = "replace-me"
+spool_dir = "/var/lib/pulse/pulse-linux"
+spool_max_bytes = 67108864
 
-[entity]
+[resource]
 id = "server-01"
 label = "Server 01"
 
@@ -43,9 +45,51 @@ max_retries = 3
 initial_backoff_ms = 500
 ```
 
-`entity.id` must remain stable across reinstalls, reboots, container recreation, and host renaming when historical continuity matters. `entity.label` is the human-readable name shown in Pulse.
+`resource.id` must remain stable across reinstalls, reboots, container recreation, and host renaming when historical continuity matters. `resource.label` is the human-readable name shown in Pulse.
 
 Use global dimensions only for bounded deployment labels such as `environment`, `region`, `site`, or `role`. Do not put runtime IDs, paths, IP addresses, image digests, or request IDs in global dimensions.
+
+## Persistent delivery
+
+Set `pulse.spool_dir` to a private writable directory and `pulse.spool_max_bytes`
+to a positive disk budget. The native installer and example configurations use
+64 MiB. Allow additional filesystem space for atomic rewrites and metadata. This is a disk limit, not a guaranteed outage duration: measure your
+payload size and multiply it by the number of collections to retain.
+
+The directory must survive process and container restarts. Use the named volume
+in the maintained Docker Compose file. On macOS, use an absolute path under the
+account's `Library/Application Support/Pulse` directory; TOML does not expand `~`.
+Leave `spool_dir` empty only when losing data after exhausted retries is acceptable.
+
+Requests retain their original body and idempotency key across retries. Network
+errors, 408, 429 and server failures use bounded retries; redirects are rejected.
+Delivery resumes on the next invocation or scheduled collection. Queued data
+expires after 23 hours, leaving a margin inside Pulse's 24-hour deduplication
+window; expiry is reported as data loss. Your base must retain raw data for at
+least the delivery window.
+
+When the byte budget is full, existing data remains queued and the new collection
+is refused with an error. Permanent payload failures are retained for inspection
+and do not block later batches. Stop the sender before inspecting rejected queue
+files: they can contain sensitive telemetry. Correct the producer, then remove
+only the rejected files you intend to discard. Do not edit and replay a partially
+accepted delivery.
+
+A spool belongs to one endpoint and source token. Before rotating a token, drain
+the old queue. If that is impossible, preserve it and configure a new directory;
+old queued data cannot automatically be reassigned to another source.
+
+`PULSE_SPOOL_DIR` and `PULSE_SPOOL_MAX_BYTES` override these settings. Removing an
+ingestor does not delete its delivery data.
+
+## Collection budget
+
+`runner.interval_seconds` also bounds a collection cycle. Each collector is
+additionally limited by `collector_timeout_seconds`. When the cycle expires,
+remaining collectors are skipped and available observations can be queued for a
+later delivery. Collection and replay share the cycle deadline; filesystem writes
+still complete to preserve collected data. Size expensive modules and HTTP retry
+budgets so the normal cycle finishes comfortably within 60 seconds.
 
 ## Credentials
 
@@ -74,8 +118,8 @@ All binaries accept `--config`. Without it, Linux binaries try `/etc/pulse/inges
 |---|---|
 | `PULSE_INGEST_URL` | Complete Pulse source ingest URL. |
 | `PULSE_INGEST_TOKEN` | Bearer token. Prefer a protected config or installer token file. |
-| `PULSE_ENTITY_ID` | Stable system identifier. |
-| `PULSE_ENTITY_LABEL` | Human-readable system label. |
+| `PULSE_RESOURCE_ID` | Stable system identifier. |
+| `PULSE_RESOURCE_LABEL` | Human-readable system label. |
 | `PULSE_DIMENSIONS` | Comma-separated global `key=value` dimensions. |
 | `PULSE_INTERVAL_SECONDS` | Interval used by `run` mode and the Docker scheduler. |
 | `PULSE_COLLECTOR_TIMEOUT_SECONDS` | Overall timeout per collector. |

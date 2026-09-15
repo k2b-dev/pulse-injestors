@@ -40,8 +40,8 @@ Edit `pulse-docker.toml` and set:
 
 - `[pulse].ingest_url`;
 - `[pulse].ingest_token`;
-- `[entity].id` to the stable physical host or Docker VM ID;
-- `[entity].label` to the name users should see in Pulse.
+- `[resource].id` to the stable physical host or Docker VM ID;
+- `[resource].label` to the name users should see in Pulse.
 
 Validate collection without sending:
 
@@ -73,21 +73,25 @@ services:
     image: ghcr.io/k2b-dev/pulse-docker:latest
     container_name: pulse-docker
     restart: unless-stopped
-    command: ["schedule"]
+    command: ["run"]
     environment:
       PULSE_INTERVAL_SECONDS: ${PULSE_INTERVAL_SECONDS:-60}
     read_only: true
     security_opt:
       - no-new-privileges:true
     volumes:
+      - pulse-outbox:/var/lib/pulse/pulse-docker
       - ./pulse-docker.toml:/etc/pulse/ingestor.toml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/host/root:ro
+
+volumes:
+  pulse-outbox:
 ```
 
-Create an optional `.env` file to change the scheduler interval:
+Create an optional `.env` file to change the collection interval:
 
 ```dotenv
 PULSE_INTERVAL_SECONDS=60
@@ -101,8 +105,10 @@ The Pulse token remains in the mode-`0600` TOML file and is not exposed as a con
 [pulse]
 ingest_url = "https://pulse.example.com/api/pulse/ingest"
 ingest_token = "replace-me"
+spool_dir = "/var/lib/pulse/pulse-docker"
+spool_max_bytes = 67108864
 
-[entity]
+[resource]
 id = "server-01"
 label = "Server 01"
 

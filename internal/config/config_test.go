@@ -1,14 +1,18 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestResolveOverlayBeatsFile(t *testing.T) {
 	cfg, err := Resolve(Config{
 		Pulse: PulseConfig{
-			IngestURL:   "https://file.example/ingest",
+			IngestURL:   "https://file.example/api/pulse/ingest",
 			IngestToken: "file-token",
 		},
-		Entity: EntityConfig{ID: "file-node", Label: "File node", Type: "host"},
+		Resource: ResourceConfig{ID: "file-node", Label: "File node", Type: "host"},
 		Dimensions: map[string]string{
 			"environment": "staging",
 		},
@@ -17,11 +21,11 @@ func TestResolveOverlayBeatsFile(t *testing.T) {
 		Docker: DockerConfig{RegistryTimeoutSeconds: 12},
 		Linux:  LinuxConfig{Profile: "server", SystemdUnits: []string{"ssh.service"}, PackageTimeoutSeconds: 11, DiskHealthTimeoutSeconds: 12},
 	}, Overlay{
-		IngestURL:                     "https://env.example/ingest",
+		IngestURL:                     "https://env.example/api/pulse/ingest",
 		IngestToken:                   "env-token",
-		EntityID:                      "env-node",
-		EntityLabel:                   "Environment node",
-		EntityType:                    "container",
+		ResourceID:                    "env-node",
+		ResourceLabel:                 "Environment node",
+		ResourceType:                  "container",
 		Dimensions:                    map[string]string{"environment": "production", "region": "eu-central"},
 		TimeoutSeconds:                9,
 		IntervalSeconds:               60,
@@ -36,14 +40,14 @@ func TestResolveOverlayBeatsFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Pulse.IngestURL != "https://env.example/ingest" {
+	if cfg.Pulse.IngestURL != "https://env.example/api/pulse/ingest" {
 		t.Fatalf("ingest url = %q", cfg.Pulse.IngestURL)
 	}
 	if cfg.Pulse.IngestToken != "env-token" {
 		t.Fatalf("ingest token = %q", cfg.Pulse.IngestToken)
 	}
-	if cfg.Entity.ID != "env-node" || cfg.Entity.Label != "Environment node" || cfg.Entity.Type != "container" {
-		t.Fatalf("entity = %#v", cfg.Entity)
+	if cfg.Resource.ID != "env-node" || cfg.Resource.Label != "Environment node" || cfg.Resource.Type != "container" {
+		t.Fatalf("entity = %#v", cfg.Resource)
 	}
 	if cfg.Dimensions["environment"] != "production" || cfg.Dimensions["region"] != "eu-central" {
 		t.Fatalf("dimensions = %#v", cfg.Dimensions)
@@ -82,24 +86,24 @@ func TestParseDimensions(t *testing.T) {
 }
 
 func TestResolveRequiresPulseEndpointAndToken(t *testing.T) {
-	_, err := Resolve(Config{}, Overlay{EntityID: "node"})
+	_, err := Resolve(Config{}, Overlay{ResourceID: "node"})
 	if err == nil {
 		t.Fatal("expected error")
 	}
 }
 
 func TestResolveAllowsMissingPulseForLocalMode(t *testing.T) {
-	cfg, err := Resolve(Config{}, Overlay{EntityID: "node", AllowMissingPulse: true})
+	cfg, err := Resolve(Config{}, Overlay{ResourceID: "node", AllowMissingPulse: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Entity.ID != "node" {
-		t.Fatalf("entity id = %q", cfg.Entity.ID)
+	if cfg.Resource.ID != "node" {
+		t.Fatalf("resource id = %q", cfg.Resource.ID)
 	}
 }
 
 func TestResolveMacOSSystemProfilerDefaultsEnabled(t *testing.T) {
-	cfg, err := Resolve(Config{}, Overlay{EntityID: "node", AllowMissingPulse: true})
+	cfg, err := Resolve(Config{}, Overlay{ResourceID: "node", AllowMissingPulse: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,9 +118,9 @@ func TestResolveMacOSSystemProfilerDefaultsEnabled(t *testing.T) {
 func TestResolveMacOSSystemProfilerCanBeDisabled(t *testing.T) {
 	enabled := false
 	cfg, err := Resolve(Config{
-		Pulse:  PulseConfig{IngestURL: "https://example.com/ingest", IngestToken: "token"},
-		Entity: EntityConfig{ID: "node"},
-		MacOS:  MacOSConfig{EnableSystemProfiler: &enabled, SystemProfilerTimeoutSeconds: 12},
+		Pulse:    PulseConfig{IngestURL: "https://example.com/api/pulse/ingest", IngestToken: "token"},
+		Resource: ResourceConfig{ID: "node"},
+		MacOS:    MacOSConfig{EnableSystemProfiler: &enabled, SystemProfilerTimeoutSeconds: 12},
 	}, Overlay{
 		DisableSystemProfiler:        true,
 		SystemProfilerTimeoutSeconds: 15,
@@ -136,9 +140,9 @@ func TestResolveProxmoxOverlay(t *testing.T) {
 	enableCephAPI := true
 	enableLocalCeph := true
 	cfg, err := Resolve(Config{
-		Pulse:   PulseConfig{IngestURL: "https://example.com/ingest", IngestToken: "token"},
-		Entity:  EntityConfig{ID: "node"},
-		Proxmox: ProxmoxConfig{PveshPath: "/usr/sbin/pvesh", TimeoutSeconds: 11},
+		Pulse:    PulseConfig{IngestURL: "https://example.com/api/pulse/ingest", IngestToken: "token"},
+		Resource: ResourceConfig{ID: "node"},
+		Proxmox:  ProxmoxConfig{PveshPath: "/usr/sbin/pvesh", TimeoutSeconds: 11},
 	}, Overlay{
 		ProxmoxPveshPath:       "/custom/pvesh",
 		ProxmoxTimeoutSeconds:  12,
@@ -160,8 +164,8 @@ func TestResolveProxmoxOverlayCanDisableCeph(t *testing.T) {
 	enabled := true
 	disabled := false
 	cfg, err := Resolve(Config{
-		Pulse:  PulseConfig{IngestURL: "https://example.com/ingest", IngestToken: "token"},
-		Entity: EntityConfig{ID: "node"},
+		Pulse:    PulseConfig{IngestURL: "https://example.com/api/pulse/ingest", IngestToken: "token"},
+		Resource: ResourceConfig{ID: "node"},
 		Proxmox: ProxmoxConfig{
 			EnableCephAPI:   &enabled,
 			EnableLocalCeph: &enabled,
@@ -180,8 +184,8 @@ func TestResolveProxmoxOverlayCanDisableCeph(t *testing.T) {
 
 func TestResolvePBSOverlay(t *testing.T) {
 	cfg, err := Resolve(Config{
-		Pulse: PulseConfig{IngestURL: "https://example.com/ingest", IngestToken: "token"},
-		Entity: EntityConfig{
+		Pulse: PulseConfig{IngestURL: "https://example.com/api/pulse/ingest", IngestToken: "token"},
+		Resource: ResourceConfig{
 			ID: "node",
 		},
 		PBS: PBSConfig{CommandPath: "/usr/sbin/proxmox-backup-debug", TimeoutSeconds: 11},
@@ -203,8 +207,8 @@ func TestResolvePBSOverlay(t *testing.T) {
 func TestResolveMergesHostZfsFlag(t *testing.T) {
 	enabled := false
 	cfg, err := Resolve(Config{
-		Pulse: PulseConfig{IngestURL: "https://example.com/ingest", IngestToken: "token"},
-		Entity: EntityConfig{
+		Pulse: PulseConfig{IngestURL: "https://example.com/api/pulse/ingest", IngestToken: "token"},
+		Resource: ResourceConfig{
 			ID: "node",
 		},
 		Host: HostConfig{EnableZfs: &enabled},
@@ -219,8 +223,8 @@ func TestResolveMergesHostZfsFlag(t *testing.T) {
 
 func TestResolveHostCephDefaultsEnabled(t *testing.T) {
 	cfg, err := Resolve(Config{
-		Pulse: PulseConfig{IngestURL: "https://example.com/ingest", IngestToken: "token"},
-		Entity: EntityConfig{
+		Pulse: PulseConfig{IngestURL: "https://example.com/api/pulse/ingest", IngestToken: "token"},
+		Resource: ResourceConfig{
 			ID: "node",
 		},
 	}, Overlay{})
@@ -235,8 +239,8 @@ func TestResolveHostCephDefaultsEnabled(t *testing.T) {
 func TestResolveMergesHostCephFlag(t *testing.T) {
 	enabled := false
 	cfg, err := Resolve(Config{
-		Pulse: PulseConfig{IngestURL: "https://example.com/ingest", IngestToken: "token"},
-		Entity: EntityConfig{
+		Pulse: PulseConfig{IngestURL: "https://example.com/api/pulse/ingest", IngestToken: "token"},
+		Resource: ResourceConfig{
 			ID: "node",
 		},
 		Host: HostConfig{EnableCeph: &enabled},
@@ -251,8 +255,8 @@ func TestResolveMergesHostCephFlag(t *testing.T) {
 
 func TestResolveProxmoxCephDefaultsEnabled(t *testing.T) {
 	cfg, err := Resolve(Config{
-		Pulse: PulseConfig{IngestURL: "https://example.com/ingest", IngestToken: "token"},
-		Entity: EntityConfig{
+		Pulse: PulseConfig{IngestURL: "https://example.com/api/pulse/ingest", IngestToken: "token"},
+		Resource: ResourceConfig{
 			ID: "node",
 		},
 	}, Overlay{})
@@ -267,8 +271,8 @@ func TestResolveProxmoxCephDefaultsEnabled(t *testing.T) {
 func TestResolveMergesProxmoxCephOptOut(t *testing.T) {
 	enabled := false
 	cfg, err := Resolve(Config{
-		Pulse: PulseConfig{IngestURL: "https://example.com/ingest", IngestToken: "token"},
-		Entity: EntityConfig{
+		Pulse: PulseConfig{IngestURL: "https://example.com/api/pulse/ingest", IngestToken: "token"},
+		Resource: ResourceConfig{
 			ID: "node",
 		},
 		Proxmox: ProxmoxConfig{EnableCephAPI: &enabled, EnableLocalCeph: &enabled},
@@ -294,7 +298,7 @@ func TestResolveUptimeDefaultsAndTargets(t *testing.T) {
 			}},
 		},
 	}, Overlay{
-		EntityID:          "probe-01",
+		ResourceID:        "probe-01",
 		AllowMissingPulse: true,
 		UptimeConcurrency: 8,
 	})
@@ -314,7 +318,7 @@ func TestResolveUptimeDefaultsAndTargets(t *testing.T) {
 
 func TestResolveUptimeDefaultsCanBeDisabled(t *testing.T) {
 	cfg, err := Resolve(Config{}, Overlay{
-		EntityID:              "probe-01",
+		ResourceID:            "probe-01",
 		AllowMissingPulse:     true,
 		UptimeDisableDefaults: true,
 	})
@@ -342,9 +346,32 @@ func TestResolveRejectsInvalidUptimeTargets(t *testing.T) {
 	for _, target := range tests {
 		_, err := Resolve(Config{
 			Uptime: UptimeConfig{Targets: []UptimeTargetConfig{target}},
-		}, Overlay{EntityID: "probe-01", AllowMissingPulse: true})
+		}, Overlay{ResourceID: "probe-01", AllowMissingPulse: true})
 		if err == nil {
 			t.Fatalf("expected target %#v to fail", target)
+		}
+	}
+}
+
+func TestSpoolRequiresExplicitByteBudget(t *testing.T) {
+	_, err := Resolve(Config{Pulse: PulseConfig{SpoolDir: "/tmp/private-spool"}}, Overlay{AllowMissingPulse: true})
+	if err == nil {
+		t.Fatal("spool without byte budget accepted")
+	}
+	cfg, err := Resolve(Config{}, Overlay{AllowMissingPulse: true, SpoolDir: "/tmp/private-spool", SpoolMaxBytes: 1024})
+	if err != nil || cfg.Pulse.SpoolMaxBytes != 1024 {
+		t.Fatalf("spool config: %#v %v", cfg.Pulse, err)
+	}
+}
+
+func TestLoadFileRejectsLegacyAndUnknownConfig(t *testing.T) {
+	for _, data := range []string{"[entity]\nid = \"old\"\n", "[pulse]\nunknown = true\n"} {
+		path := filepath.Join(t.TempDir(), "config.toml")
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadFile(path, true); err == nil {
+			t.Fatal("unknown config accepted")
 		}
 	}
 }

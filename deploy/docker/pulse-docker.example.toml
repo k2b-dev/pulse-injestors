@@ -1,8 +1,10 @@
 [pulse]
 ingest_url = "https://pulse.example.com/api/pulse/ingest"
 ingest_token = "replace-me"
+spool_dir = "/var/lib/pulse/pulse-docker"
+spool_max_bytes = 67108864
 
-[entity]
+[resource]
 # Use a stable identifier for the physical host or Docker VM.
 id = "server-01"
 label = "Server 01"

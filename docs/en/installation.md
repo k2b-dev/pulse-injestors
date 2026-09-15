@@ -69,8 +69,8 @@ curl -fsSL \
 sudo env \
   PULSE_INGEST_URL="https://pulse.example.com/api/pulse/ingest" \
   PULSE_INGEST_TOKEN_FILE="/run/secrets/pulse-token" \
-  PULSE_ENTITY_ID="server-01" \
-  PULSE_ENTITY_LABEL="Server 01" \
+  PULSE_RESOURCE_ID="server-01" \
+  PULSE_RESOURCE_LABEL="Server 01" \
   PULSE_INTERVAL_SECONDS=60 \
   PULSE_DIMENSIONS="environment=production,region=eu-central" \
   sh /tmp/pulse-install.sh \

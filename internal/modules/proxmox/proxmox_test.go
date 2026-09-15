@@ -58,9 +58,8 @@ func TestCollectorEmitsVersionClusterAndResources(t *testing.T) {
 		Timeout:       time.Second,
 		EnableCephAPI: true,
 	}.Collect(context.Background(), monitoring.Scope{
-		EntityID:   "pve",
-		EntityType: "proxmox-node",
-		Timestamp:  time.Unix(0, 0).UTC(),
+		Resource:  pulse.ResourceRef{Type: "proxmox-node", ID: "pve"},
+		Timestamp: time.Unix(0, 0).UTC(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -155,9 +154,8 @@ func TestCollectorFallsBackForStandaloneNode(t *testing.T) {
 		Runner:    runner,
 		Timeout:   time.Second,
 	}.Collect(context.Background(), monitoring.Scope{
-		EntityID:   "pve1",
-		EntityType: "proxmox-node",
-		Timestamp:  time.Unix(0, 0).UTC(),
+		Resource:  pulse.ResourceRef{Type: "proxmox-node", ID: "pve1"},
+		Timestamp: time.Unix(0, 0).UTC(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -175,7 +173,7 @@ func TestCollectorFallsBackForStandaloneNode(t *testing.T) {
 		t.Fatalf("missing node memory metric: %#v", batch.Metrics)
 	}
 	for _, state := range batch.States {
-		if state.EntityType == "proxmox-cluster" {
+		if state.Resource.Type == "proxmox-cluster" {
 			t.Fatalf("standalone node created a cluster resource: %#v", state.Resource)
 		}
 	}
@@ -186,9 +184,8 @@ func TestCollectorGracefullyReportsMissingCommand(t *testing.T) {
 		PveshPath: "pulse-test-missing-pvesh",
 		Timeout:   time.Second,
 	}.Collect(context.Background(), monitoring.Scope{
-		EntityID:   "pve",
-		EntityType: "proxmox-node",
-		Timestamp:  time.Unix(0, 0).UTC(),
+		Resource:  pulse.ResourceRef{Type: "proxmox-node", ID: "pve"},
+		Timestamp: time.Unix(0, 0).UTC(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -214,9 +211,8 @@ func TestCollectorGracefullyReportsMissingCephAPI(t *testing.T) {
 		Timeout:       time.Second,
 		EnableCephAPI: true,
 	}.Collect(context.Background(), monitoring.Scope{
-		EntityID:   "pve",
-		EntityType: "proxmox-node",
-		Timestamp:  time.Unix(0, 0).UTC(),
+		Resource:  pulse.ResourceRef{Type: "proxmox-node", ID: "pve"},
+		Timestamp: time.Unix(0, 0).UTC(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -256,9 +252,8 @@ func TestCollectorQuietlyReportsUnavailableCephAPI(t *testing.T) {
 		Timeout:       time.Second,
 		EnableCephAPI: true,
 	}.Collect(context.Background(), monitoring.Scope{
-		EntityID:   "pve",
-		EntityType: "proxmox-node",
-		Timestamp:  time.Unix(0, 0).UTC(),
+		Resource:  pulse.ResourceRef{Type: "proxmox-node", ID: "pve"},
+		Timestamp: time.Unix(0, 0).UTC(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -338,7 +333,7 @@ func countMetric(metrics []pulse.Metric, name string) int {
 func countMetricEntity(metrics []pulse.Metric, name, entityType, entityID string) int {
 	count := 0
 	for _, metric := range metrics {
-		if metric.Name == name && metric.EntityType == entityType && metric.EntityID == entityID {
+		if metric.Name == name && metric.Resource.Type == entityType && metric.Resource.Key() == entityID {
 			count++
 		}
 	}
@@ -347,7 +342,7 @@ func countMetricEntity(metrics []pulse.Metric, name, entityType, entityID string
 
 func hasMetricDimension(metrics []pulse.Metric, name, entityType, entityID, dimension string) bool {
 	for _, metric := range metrics {
-		if metric.Name != name || metric.EntityType != entityType || metric.EntityID != entityID {
+		if metric.Name != name || metric.Resource.Type != entityType || metric.Resource.Key() != entityID {
 			continue
 		}
 		if _, ok := metric.Dimensions[dimension]; ok {
@@ -379,7 +374,7 @@ func hasStateValue(states []pulse.State, key string, value any) bool {
 func countStateEntity(states []pulse.State, key, entityType, entityID string) int {
 	count := 0
 	for _, state := range states {
-		if state.Key == key && state.EntityType == entityType && state.EntityID == entityID {
+		if state.Key == key && state.Resource.Type == entityType && state.Resource.Key() == entityID {
 			count++
 		}
 	}

@@ -12,9 +12,9 @@ updated: 2026-07-23
 
 The packages module reports available package updates from supported Linux package managers.
 
-## Entity types
+## Resource types
 
-- `host`: package update data for the monitored host. Example entity id: `host:server-01`.
+- `host`: package update data for the monitored host. Example resource key: `host:server-01`.
 
 ## Metrics
 

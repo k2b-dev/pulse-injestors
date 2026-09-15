@@ -123,19 +123,19 @@ func collectDF(ctx context.Context, b *monitoring.Builder, scope monitoring.Scop
 }
 
 func cephClusterScope(scope monitoring.Scope, fsid string) monitoring.Scope {
-	scope.EntityType = "ceph-cluster"
-	host := entity.StableHostIDFromScope(scope.EntityID, scope.Dimensions)
+	scope.Resource.Type = "ceph-cluster"
+	host := entity.StableHostIDFromScope(scope.Resource.ID, scope.Dimensions)
 	key := entity.Key(fsid, host)
-	scope.EntityID = entity.ID("ceph-cluster", key)
-	scope.Label = "Ceph " + key
+	scope.Resource.ID = entity.ID(key)
+	scope.Resource.Label = "Ceph " + key
 	return scope
 }
 
 func cephPoolScope(scope monitoring.Scope, pool string) monitoring.Scope {
-	scope.EntityType = "ceph-pool"
-	cluster := strings.TrimPrefix(scope.EntityID, "ceph-cluster:")
-	scope.EntityID = entity.ID("ceph-pool", entity.Key(cluster, entity.StableHostIDFromScope(scope.EntityID, scope.Dimensions)), pool)
-	scope.Label = pool
+	scope.Resource.Type = "ceph-pool"
+	cluster := scope.Resource.ID
+	scope.Resource.ID = entity.ID(entity.Key(cluster, entity.StableHostIDFromScope(scope.Resource.ID, scope.Dimensions)), pool)
+	scope.Resource.Label = pool
 	return scope
 }
 

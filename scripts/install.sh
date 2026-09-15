@@ -38,10 +38,12 @@ Docker uses the separate Compose deployment and is not supported here.
 Unattended generated configuration:
   PULSE_INGEST_URL
   PULSE_INGEST_TOKEN_FILE (recommended) or PULSE_INGEST_TOKEN
-  PULSE_ENTITY_ID
-  PULSE_ENTITY_LABEL (optional; defaults to entity id)
+  PULSE_RESOURCE_ID
+  PULSE_RESOURCE_LABEL (optional; defaults to resource id)
   PULSE_INTERVAL_SECONDS (optional; platform default)
   PULSE_DIMENSIONS (optional comma-separated key=value pairs)
+  PULSE_SPOOL_DIR (optional; private persistent delivery directory)
+  PULSE_SPOOL_MAX_BYTES (optional; default 67108864, a 64 MiB disk budget)
 
 Installer testing and mirrors:
   PULSE_RELEASE_BASE
@@ -437,8 +439,8 @@ else
     else
         INGEST_URL=${PULSE_INGEST_URL:-}
         INGEST_TOKEN=${PULSE_INGEST_TOKEN:-}
-        ENTITY_ID=${PULSE_ENTITY_ID:-}
-        ENTITY_LABEL=${PULSE_ENTITY_LABEL:-}
+        RESOURCE_ID=${PULSE_RESOURCE_ID:-}
+        RESOURCE_LABEL=${PULSE_RESOURCE_LABEL:-}
         DIMENSIONS=${PULSE_DIMENSIONS:-}
 
         if [ -n "${PULSE_INGEST_TOKEN_FILE:-}" ]; then
@@ -453,8 +455,8 @@ else
                 INGEST_TOKEN=$(prompt_secret)
             fi
             hostname_default=$(hostname 2>/dev/null || true)
-            ENTITY_ID=$(prompt_value "Stable entity id" "${ENTITY_ID:-$hostname_default}")
-            ENTITY_LABEL=$(prompt_value "Entity label" "${ENTITY_LABEL:-$ENTITY_ID}")
+            RESOURCE_ID=$(prompt_value "Stable resource id" "${RESOURCE_ID:-$hostname_default}")
+            RESOURCE_LABEL=$(prompt_value "Resource label" "${RESOURCE_LABEL:-$RESOURCE_ID}")
             INTERVAL=$(prompt_value "Collection interval in seconds" "$INTERVAL")
             DIMENSIONS=$(prompt_value "Global dimensions (key=value,...; optional)" "$DIMENSIONS")
         fi
@@ -465,18 +467,29 @@ else
             *) die "Pulse ingest URL must start with http:// or https://" ;;
         esac
         [ -n "$INGEST_TOKEN" ] || die "a Pulse ingest token or token file is required"
-        [ -n "$ENTITY_ID" ] || die "PULSE_ENTITY_ID is required"
-        [ -n "$ENTITY_LABEL" ] || ENTITY_LABEL=$ENTITY_ID
+        [ -n "$RESOURCE_ID" ] || die "PULSE_RESOURCE_ID is required"
+        [ -n "$RESOURCE_LABEL" ] || RESOURCE_LABEL=$RESOURCE_ID
         printf '%s\n' "$INTERVAL" | grep -Eq '^[1-9][0-9]*$' ||
             die "collection interval must be a positive integer"
+
+        if [ "$OS" = "darwin" ]; then
+            SPOOL_DIR=${PULSE_SPOOL_DIR:-"$HOME/Library/Application Support/Pulse/${BINARY}-outbox"}
+        else
+            SPOOL_DIR=${PULSE_SPOOL_DIR:-"/var/lib/pulse/${BINARY}"}
+        fi
+        SPOOL_MAX_BYTES=${PULSE_SPOOL_MAX_BYTES:-67108864}
+        printf '%s\n' "$SPOOL_MAX_BYTES" | grep -Eq '^[1-9][0-9]*$' ||
+            die "spool byte budget must be a positive integer"
 
         {
             printf '[pulse]\n'
             printf 'ingest_url = "%s"\n' "$(toml_escape "$INGEST_URL")"
-            printf 'ingest_token = "%s"\n\n' "$(toml_escape "$INGEST_TOKEN")"
-            printf '[entity]\n'
-            printf 'id = "%s"\n' "$(toml_escape "$ENTITY_ID")"
-            printf 'label = "%s"\n' "$(toml_escape "$ENTITY_LABEL")"
+            printf 'ingest_token = "%s"\n' "$(toml_escape "$INGEST_TOKEN")"
+            printf 'spool_dir = "%s"\n' "$(toml_escape "$SPOOL_DIR")"
+            printf 'spool_max_bytes = %s\n\n' "$SPOOL_MAX_BYTES"
+            printf '[resource]\n'
+            printf 'id = "%s"\n' "$(toml_escape "$RESOURCE_ID")"
+            printf 'label = "%s"\n' "$(toml_escape "$RESOURCE_LABEL")"
             printf '\n[dimensions]\n'
             write_dimensions "$DIMENSIONS"
             printf '\n[runner]\n'

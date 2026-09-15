@@ -55,9 +55,8 @@ func TestParseSocketsCountsProtocolFamilyAndState(t *testing.T) {
 
 func TestCollectorGracefullyReportsMissingProc(t *testing.T) {
 	batch, err := Collector{ProcRoot: filepath.Join(t.TempDir(), "missing")}.Collect(context.Background(), monitoring.Scope{
-		EntityID:   "host",
-		EntityType: "host",
-		Timestamp:  time.Unix(0, 0).UTC(),
+		Resource:  pulse.ResourceRef{Type: "host", ID: "host"},
+		Timestamp: time.Unix(0, 0).UTC(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -88,9 +87,8 @@ func TestCollectorEmitsRuntimeMetricsFromFixtures(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "net", "udp"), "sl local_address rem_address st\n0: 0:0 0:0 07\n")
 
 	batch, err := Collector{ProcRoot: root}.Collect(context.Background(), monitoring.Scope{
-		EntityID:   "host",
-		EntityType: "host",
-		Timestamp:  time.Unix(0, 0).UTC(),
+		Resource:  pulse.ResourceRef{Type: "host", ID: "host"},
+		Timestamp: time.Unix(0, 0).UTC(),
 	})
 	if err != nil {
 		t.Fatal(err)

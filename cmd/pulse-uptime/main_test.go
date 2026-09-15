@@ -22,15 +22,15 @@ expected_status = 200
 		t.Fatal(err)
 	}
 	cfg, err := loadConfig(cli{
-		Config:   cfgPath,
-		EntityID: "host:office:probe",
-		Local:    true,
+		Config:     cfgPath,
+		ResourceID: "host:office:probe",
+		Local:      true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Entity.ID != "office_probe" || cfg.Entity.Type != "uptime-probe" {
-		t.Fatalf("entity = %#v", cfg.Entity)
+	if cfg.Resource.ID != "host:office:probe" || cfg.Resource.Type != "uptime-probe" {
+		t.Fatalf("resource = %#v", cfg.Resource)
 	}
 	targets, err := configuredTargets(cfg)
 	if err != nil {
@@ -42,7 +42,7 @@ expected_status = 200
 }
 
 func TestConfiguredTargetsUsesBuiltInProfile(t *testing.T) {
-	cfg, err := loadConfig(cli{EntityID: "office", Local: true})
+	cfg, err := loadConfig(cli{ResourceID: "office", Local: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestConfiguredTargetsUsesBuiltInProfile(t *testing.T) {
 }
 
 func TestConfiguredTargetsRejectsEmptyProfile(t *testing.T) {
-	cfg, err := loadConfig(cli{EntityID: "office", Local: true, DisableDefaults: true})
+	cfg, err := loadConfig(cli{ResourceID: "office", Local: true, DisableDefaults: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ address = "192.0.2.1"
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := loadConfig(cli{Config: cfgPath, EntityID: "office", Local: true})
+	cfg, err := loadConfig(cli{Config: cfgPath, ResourceID: "office", Local: true})
 	if err != nil {
 		t.Fatal(err)
 	}

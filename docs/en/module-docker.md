@@ -28,6 +28,10 @@ Image identity prefers `repository:tag`, then a shortened repository digest, the
 
 Mounts and network attachments are not separate resources. They are parts of a container and use bounded `mount_*` or `network` dimensions on the `docker-container` resource.
 
+Compose throughput is calculated from container counters in Pulse. Aggregate
+CPU and memory gauges remain available; raw network and disk counters are not
+summed across replaceable containers.
+
 ## Metrics
 
 ### Docker daemon
@@ -93,10 +97,6 @@ Emitted once per detected Compose service. Usage values are sums across its curr
 | `docker.compose.service.memory.used` | gauge | bytes | `host`, `compose_project`, `compose_service` | `268435456` | Sum of memory used across service containers. |
 | `docker.compose.service.memory.limit` | gauge | bytes | `host`, `compose_project`, `compose_service` | `2147483648` | Sum of memory limits across service containers. |
 | `docker.compose.service.pids.current` | gauge | | `host`, `compose_project`, `compose_service` | `34` | Sum of current processes across service containers. |
-| `docker.compose.service.network.rx` | counter | bytes | `host`, `compose_project`, `compose_service` | `22345678` | Sum of received bytes across service containers and interfaces. |
-| `docker.compose.service.network.tx` | counter | bytes | `host`, `compose_project`, `compose_service` | `97654321` | Sum of transmitted bytes across service containers and interfaces. |
-| `docker.compose.service.blockio.read` | counter | bytes | `host`, `compose_project`, `compose_service` | `209715200` | Sum of block I/O bytes read across service containers. |
-| `docker.compose.service.blockio.write` | counter | bytes | `host`, `compose_project`, `compose_service` | `104857600` | Sum of block I/O bytes written across service containers. |
 
 ### Docker image
 

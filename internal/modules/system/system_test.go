@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
+	"github.com/k2b-dev/pulse-injestors/internal/pulse"
 )
 
 func TestCollectorReadsSystemStats(t *testing.T) {
@@ -26,7 +27,7 @@ func TestCollectorReadsSystemStats(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 		_ = os.WriteFile(filepath.Join(proc, "stat"), []byte("cpu 200 0 200 200 0 0 0 0 0 0\n"), 0o644)
 	}()
-	batch, err := Collector{ProcRoot: proc, CPUSampleTime: 10 * time.Millisecond}.Collect(context.Background(), monitoring.Scope{EntityID: "x"})
+	batch, err := Collector{ProcRoot: proc, CPUSampleTime: 10 * time.Millisecond}.Collect(context.Background(), monitoring.Scope{Resource: pulse.ResourceRef{Type: "host", ID: "x"}})
 	if err != nil {
 		t.Fatal(err)
 	}

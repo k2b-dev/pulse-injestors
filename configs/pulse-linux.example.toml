@@ -1,8 +1,11 @@
 [pulse]
-ingest_url = "https://pulse.example.com/ingest/source"
+ingest_url = "https://pulse.example.com/api/pulse/ingest"
 ingest_token = "replace-me"
+# Explicit 64 MiB disk budget; size for measured output and tolerated outage.
+spool_dir = "/var/lib/pulse/pulse-linux"
+spool_max_bytes = 67108864
 
-[entity]
+[resource]
 id = "linux-host-1"
 label = "linux-host-1"
 type = "host"
