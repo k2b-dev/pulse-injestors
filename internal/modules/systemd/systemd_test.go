@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
+	"github.com/k2b-dev/pulse-injestors/internal/pulse"
 )
 
 func TestCleanUnits(t *testing.T) {
@@ -15,14 +16,13 @@ func TestCleanUnits(t *testing.T) {
 
 func TestUnitScopeUsesResourceEntity(t *testing.T) {
 	scope := unitScope(monitoring.Scope{
-		EntityID:   "host:server-01",
-		EntityType: "host",
+		Resource: pulse.ResourceRef{Type: "host", ID: "server-01"},
 		Dimensions: map[string]string{
 			"host": "server-01",
 		},
 	}, "docker.service")
 
-	if scope.EntityType != "service" || scope.EntityID != "service:server-01:systemd:docker.service" {
+	if scope.Resource.Type != "service" || scope.Resource.Key() != "service:server-01:systemd:docker.service" {
 		t.Fatalf("scope = %#v", scope)
 	}
 }

@@ -12,9 +12,9 @@ updated: 2026-07-23
 
 The filesystem module reports mounted filesystems and their capacity.
 
-## Entity types
+## Resource types
 
-| Entity type | Entity id | Used for |
+| Resource type | Resource key | Used for |
 |---|---|---|
 | `host` | `host:<host-id>` | Filesystem availability and collector-level failures. |
 | `filesystem` | `filesystem:<host-id>:<mount-key>` | Capacity, inode, and readonly signals for one mounted filesystem. |

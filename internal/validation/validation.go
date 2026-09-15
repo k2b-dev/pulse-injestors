@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"math"
 	"regexp"
-	"sort"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/k2b-dev/pulse-injestors/internal/pulse"
 )
 
-var metricNamePattern = regexp.MustCompile(`^[a-z0-9]+(\.[a-z0-9_]+)+$`)
+var resourceTypePattern = regexp.MustCompile(`^[a-z][a-z0-9._-]*$`)
 
 const (
 	dimensionKeyLimit       = 32
@@ -44,12 +44,16 @@ func (e ErrorList) Error() string {
 func Batch(batch pulse.Batch) error {
 	var errs ErrorList
 	seen := map[string]int{}
+	definitions := map[string]string{}
 	for i, metric := range batch.Metrics {
-		if metric.Name == "" || !metricNamePattern.MatchString(metric.Name) {
+		if strings.TrimSpace(metric.Name) == "" {
 			errs = append(errs, fmt.Errorf("metric %d has invalid name %q", i, metric.Name))
 		}
-		if metric.Type != "gauge" && metric.Type != "counter" && metric.Type != "histogram" && metric.Type != "summary" {
+		if metric.Type != "gauge" && metric.Type != "counter" {
 			errs = append(errs, fmt.Errorf("metric %d has invalid type %q", i, metric.Type))
+		}
+		if metric.Unit != "" && strings.TrimSpace(metric.Unit) == "" {
+			errs = append(errs, fmt.Errorf("metric %d has blank unit", i))
 		}
 		if math.IsNaN(metric.Value) || math.IsInf(metric.Value, 0) {
 			errs = append(errs, fmt.Errorf("metric %d has non-finite value", i))
@@ -57,7 +61,7 @@ func Batch(batch pulse.Batch) error {
 		if metric.Timestamp.IsZero() {
 			errs = append(errs, fmt.Errorf("metric %d has zero timestamp", i))
 		}
-		validateSignalIdentity(&errs, "metric", i, metric.EntityID, metric.EntityType, metric.Resource)
+		validateSignalIdentity(&errs, "metric", i, metric.Resource)
 		validateDimensions(&errs, "metric", i, metric.Dimensions)
 		if metric.Type == "counter" && metric.Value < 0 {
 			errs = append(errs, fmt.Errorf("metric %d counter is negative", i))
@@ -70,6 +74,12 @@ func Batch(batch pulse.Batch) error {
 				errs = append(errs, fmt.Errorf("metric %d percent exceeds 100", i))
 			}
 		}
+		definition := metric.Type + "\x00" + strings.TrimSpace(metric.Unit)
+		name := strings.TrimSpace(metric.Name)
+		if previous, ok := definitions[name]; ok && previous != definition {
+			errs = append(errs, fmt.Errorf("metric %d conflicts with immutable definition for %q", i, name))
+		}
+		definitions[name] = definition
 		key := metricKey(metric)
 		seen[key]++
 		if seen[key] > 1 {
@@ -77,20 +87,28 @@ func Batch(batch pulse.Batch) error {
 		}
 	}
 	for i, event := range batch.Events {
-		if event.Kind == "" {
+		if strings.TrimSpace(event.Kind) == "" {
 			errs = append(errs, fmt.Errorf("event %d missing kind", i))
 		}
 		if event.Timestamp.IsZero() {
 			errs = append(errs, fmt.Errorf("event %d has zero timestamp", i))
 		}
-		validateSignalIdentity(&errs, "event", i, event.EntityID, event.EntityType, event.Resource)
+		validateSignalIdentity(&errs, "event", i, event.Resource)
+		if event.Value != nil && (math.IsNaN(*event.Value) || math.IsInf(*event.Value, 0)) {
+			errs = append(errs, fmt.Errorf("event %d has non-finite value", i))
+		}
+		for _, id := range []string{event.ActorID, event.SessionID, event.CorrelationID} {
+			if id != "" && strings.TrimSpace(id) == "" {
+				errs = append(errs, fmt.Errorf("event %d has blank identity", i))
+			}
+		}
 		validateDimensions(&errs, "event", i, event.Dimensions)
 		validateJSONField(&errs, "event", i, "attributes", event.Attributes, eventAttributeKeyLimit, eventAttributesMaxBytes, eventAttributesMaxDepth)
 		validateJSONField(&errs, "event", i, "sensitive", event.Sensitive, eventSensitiveKeyLimit, eventSensitiveMaxBytes, eventSensitiveMaxDepth)
 		validateJSONField(&errs, "event", i, "payload", event.Payload, 0, eventPayloadMaxBytes, eventPayloadMaxDepth)
 	}
 	for i, state := range batch.States {
-		if state.Key == "" {
+		if strings.TrimSpace(state.Key) == "" {
 			errs = append(errs, fmt.Errorf("state %d missing key", i))
 		}
 		if !validStateValue(state.Value) {
@@ -99,7 +117,7 @@ func Batch(batch pulse.Batch) error {
 		if state.Timestamp.IsZero() {
 			errs = append(errs, fmt.Errorf("state %d has zero timestamp", i))
 		}
-		validateSignalIdentity(&errs, "state", i, state.EntityID, state.EntityType, state.Resource)
+		validateSignalIdentity(&errs, "state", i, state.Resource)
 		validateDimensions(&errs, "state", i, state.Dimensions)
 	}
 	if len(errs) > 0 {
@@ -124,19 +142,18 @@ func validStateValue(value any) bool {
 	}
 }
 
-func validateSignalIdentity(errs *ErrorList, kind string, index int, entityID, entityType string, resource *pulse.ResourceRef) {
+func charLength(value string) int { return len(utf16.Encode([]rune(value))) }
+
+func validateSignalIdentity(errs *ErrorList, kind string, index int, resource *pulse.ResourceRef) {
 	if resource == nil {
-		*errs = append(*errs, fmt.Errorf("%s %d missing resource", kind, index))
 		return
 	}
-	if resource.Type == "" || resource.ID == "" || resource.Label == "" {
-		*errs = append(*errs, fmt.Errorf("%s %d has incomplete resource", kind, index))
+	typ, id := strings.TrimSpace(resource.Type), strings.TrimSpace(resource.ID)
+	if !resourceTypePattern.MatchString(typ) || id == "" || (resource.Label != "" && strings.TrimSpace(resource.Label) == "") {
+		*errs = append(*errs, fmt.Errorf("%s %d has invalid resource", kind, index))
 	}
-	if len(resource.Type) > resourceTypeMaxLength || len(resource.ID) > resourceIDMaxLength || len(resource.Label) > resourceLabelMaxLength {
+	if charLength(typ) > resourceTypeMaxLength || charLength(id) > resourceIDMaxLength || charLength(strings.TrimSpace(resource.Label)) > resourceLabelMaxLength || charLength(typ+":"+id) > 505 {
 		*errs = append(*errs, fmt.Errorf("%s %d resource exceeds Pulse limits", kind, index))
-	}
-	if entityID != resource.Key() || entityType != resource.Type {
-		*errs = append(*errs, fmt.Errorf("%s %d entity and resource identities differ", kind, index))
 	}
 }
 
@@ -145,10 +162,10 @@ func validateDimensions(errs *ErrorList, kind string, index int, dimensions map[
 		*errs = append(*errs, fmt.Errorf("%s %d dimensions exceed %d keys", kind, index, dimensionKeyLimit))
 	}
 	for key, value := range dimensions {
-		if strings.TrimSpace(key) == "" || len(key) > dimensionKeyMaxLength {
+		if strings.TrimSpace(key) == "" || charLength(key) > dimensionKeyMaxLength {
 			*errs = append(*errs, fmt.Errorf("%s %d has invalid dimension key %q", kind, index, key))
 		}
-		if len(value) > dimensionValueMaxLength {
+		if charLength(value) > dimensionValueMaxLength {
 			*errs = append(*errs, fmt.Errorf("%s %d dimension %q exceeds %d characters", kind, index, key, dimensionValueMaxLength))
 		}
 	}
@@ -159,7 +176,10 @@ func validateJSONField(errs *ErrorList, kind string, index int, field string, va
 		*errs = append(*errs, fmt.Errorf("%s %d %s exceed %d keys", kind, index, field, keyLimit))
 	}
 	for key := range value {
-		if strings.TrimSpace(key) == "" || len(key) > eventFieldKeyMaxLength {
+		if field == "payload" {
+			break
+		}
+		if strings.TrimSpace(key) == "" || charLength(key) > eventFieldKeyMaxLength {
 			*errs = append(*errs, fmt.Errorf("%s %d has invalid %s key %q", kind, index, field, key))
 		}
 	}
@@ -171,7 +191,9 @@ func validateJSONField(errs *ErrorList, kind string, index int, field string, va
 	if len(encoded) > byteLimit {
 		*errs = append(*errs, fmt.Errorf("%s %d %s exceed %d bytes", kind, index, field, byteLimit))
 	}
-	if jsonDepth(value, 0) > depthLimit {
+	var decoded any
+	_ = json.Unmarshal(encoded, &decoded)
+	if jsonDepth(decoded, 0) > depthLimit {
 		*errs = append(*errs, fmt.Errorf("%s %d %s exceed %d nested levels", kind, index, field, depthLimit))
 	}
 }
@@ -200,18 +222,14 @@ func shouldCapPercent(name string) bool {
 }
 
 func metricKey(metric pulse.Metric) string {
-	dims := make([]string, 0, len(metric.Dimensions))
-	for k, v := range metric.Dimensions {
-		dims = append(dims, k+"="+v)
+	resource := ""
+	if metric.Resource != nil {
+		resource = strings.TrimSpace(metric.Resource.Type) + ":" + strings.TrimSpace(metric.Resource.ID)
 	}
-	sort.Strings(dims)
-	return strings.Join([]string{
-		metric.Name,
-		metric.Type,
-		metric.Unit,
-		metric.Timestamp.Format("2006-01-02T15:04:05.000000000Z07:00"),
-		metric.EntityID,
-		metric.EntityType,
-		strings.Join(dims, ","),
-	}, "|")
+	dims := metric.Dimensions
+	if dims == nil {
+		dims = map[string]string{}
+	}
+	encoded, _ := json.Marshal([]any{strings.TrimSpace(metric.Name), metric.Timestamp.UnixMilli(), resource, dims})
+	return string(encoded)
 }

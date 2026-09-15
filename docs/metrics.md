@@ -1,6 +1,6 @@
 # Telemetry contract
 
-Pulse ingestors emit the Pulse V1 batch format. The complete signal catalog is maintained in the Fibel module pages under [`docs/en`](en/modules.md).
+Pulse ingestors emit the current Pulse resource batch format. The complete signal catalog is maintained in the Fibel module pages under [`docs/en`](en/modules.md).
 
 ## Signal model
 
@@ -21,13 +21,11 @@ Every built-in signal carries an explicit resource:
     "type": "docker-container",
     "id": "server-01:compose:pulse:api:1",
     "label": "pulse-api-1"
-  },
-  "entityType": "docker-container",
-  "entityId": "docker-container:server-01:compose:pulse:api:1"
+  }
 }
 ```
 
-`entityType` and `entityId` mirror the canonical resource key used by Pulse queries. Resource labels are human-readable; stable technical identity remains in the resource ID.
+Only `resource` identifies a signal. Resource labels are human-readable; stable technical identity remains in the resource ID. Removed identity fields are rejected.
 
 ## Resource conventions
 

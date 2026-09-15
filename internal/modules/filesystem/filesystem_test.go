@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
+	"github.com/k2b-dev/pulse-injestors/internal/pulse"
 )
 
 func TestReadMounts(t *testing.T) {
@@ -28,14 +29,13 @@ func TestReadMounts(t *testing.T) {
 
 func TestFilesystemScopeUsesResourceEntity(t *testing.T) {
 	scope := filesystemScope(monitoring.Scope{
-		EntityID:   "host:server-01",
-		EntityType: "host",
+		Resource: pulse.ResourceRef{Type: "host", ID: "server-01"},
 		Dimensions: map[string]string{
 			"host": "server-01",
 		},
 	}, Mount{Point: "/var/lib/docker"})
 
-	if scope.EntityType != "filesystem" || scope.EntityID != "filesystem:server-01:var_lib_docker" {
+	if scope.Resource.Type != "filesystem" || scope.Resource.Key() != "filesystem:server-01:%2Fvar%2Flib%2Fdocker" {
 		t.Fatalf("scope = %#v", scope)
 	}
 }

@@ -20,13 +20,13 @@ The PBS module collects Proxmox Backup Server data locally through `proxmox-back
 | `pbs-datastore` | `pbs-datastore:<host-id>:<datastore>` | Per-datastore usage, estimated-full, snapshot count, and latest snapshot signals. |
 | `pbs-job` | `pbs-job:<host-id>:<kind>:<job>` | Job state, last-run, next-run, and job-failure signals. |
 
-`host:<host-id>` is used by Linux host modules in the `pulse-proxmox-backup-server` binary. The PBS module itself emits only the entity types above.
+`host:<host-id>` is used by Linux host modules in the `pulse-proxmox-backup-server` binary. The PBS module itself emits only the resource types above.
 
 ## Scope notes
 
 - Datastore usage and snapshot signals are emitted once per datastore on `pbs-datastore`.
 - Job signals are emitted once per job on `pbs-job`.
-- Task aggregate signals stay on `proxmox-backup-server`; individual recent tasks are reported as events on that server entity.
+- Task aggregate signals stay on `proxmox-backup-server`; individual recent tasks are reported as events on that server resource.
 - `pbs.datastore.snapshots.failed` is scoped to the datastore that failed.
 
 ## Metrics

@@ -273,9 +273,9 @@ func runPing(ctx context.Context, address string) error {
 }
 
 func endpointScope(scope monitoring.Scope, target Target) monitoring.Scope {
-	scope.EntityType = "uptime-endpoint"
-	scope.EntityID = entity.ID("uptime-endpoint", probeID(scope), target.ID)
-	scope.Label = target.Label
+	scope.Resource.Type = "uptime-endpoint"
+	scope.Resource.ID = entity.ID(probeID(scope), target.ID)
+	scope.Resource.Label = target.Label
 	return scope
 }
 
@@ -283,7 +283,7 @@ func probeID(scope monitoring.Scope) string {
 	if value := scope.Dimensions["probe"]; value != "" {
 		return entity.Key(value, "probe")
 	}
-	value := strings.TrimPrefix(scope.EntityID, "uptime-probe:")
+	value := scope.Resource.ID
 	return entity.Key(value, "probe")
 }
 

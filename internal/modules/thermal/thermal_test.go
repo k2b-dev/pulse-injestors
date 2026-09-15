@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
+	"github.com/k2b-dev/pulse-injestors/internal/pulse"
 )
 
 func TestThermalSensorsRemainOnHostResource(t *testing.T) {
@@ -23,8 +24,7 @@ func TestThermalSensorsRemainOnHostResource(t *testing.T) {
 	}
 
 	batch, err := Collector{SysRoot: sys}.Collect(context.Background(), monitoring.Scope{
-		EntityID:   "host:server-01",
-		EntityType: "host",
+		Resource: pulse.ResourceRef{Type: "host", ID: "server-01"},
 		Dimensions: map[string]string{
 			"host": "server-01",
 		},
@@ -36,8 +36,8 @@ func TestThermalSensorsRemainOnHostResource(t *testing.T) {
 		t.Fatalf("metrics = %d", len(batch.Metrics))
 	}
 	metric := batch.Metrics[0]
-	if metric.EntityType != "host" || metric.EntityID != "host:server-01" {
-		t.Fatalf("metric entity = %s %s", metric.EntityType, metric.EntityID)
+	if metric.Resource.Type != "host" || metric.Resource.Key() != "host:server-01" {
+		t.Fatalf("metric entity = %s %s", metric.Resource.Type, metric.Resource.Key())
 	}
 	if metric.Resource == nil || metric.Resource.Label != "server-01" {
 		t.Fatalf("resource = %#v", metric.Resource)

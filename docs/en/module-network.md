@@ -12,9 +12,9 @@ updated: 2026-06-11
 
 The network module reads Linux interface counters from procfs.
 
-## Entity types
+## Resource types
 
-| Entity type | Entity id | Used for |
+| Resource type | Resource key | Used for |
 |---|---|---|
 | `host` | `host:<host-id>` | Network availability. |
 | `network-interface` | `network-interface:<host-id>:<interface>` | Counter metrics for one network interface. |

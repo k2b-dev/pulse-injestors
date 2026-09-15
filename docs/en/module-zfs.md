@@ -12,9 +12,9 @@ updated: 2026-07-23
 
 The ZFS module collects pool, dataset, and snapshot data through ZFS tools.
 
-## Entity types
+## Resource types
 
-| Entity type | Entity id | Used for |
+| Resource type | Resource key | Used for |
 |---|---|---|
 | `host` | `host:<host-id>` | ZFS tool availability and aggregate pool, dataset, and snapshot counts. |
 | `zfs-pool` | `zfs-pool:<host-id>:<pool>` | Pool health, capacity, allocation, free-space, fragmentation, and scan signals. |

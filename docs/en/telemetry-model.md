@@ -10,7 +10,9 @@ updated: 2026-07-23
 
 # Telemetry model
 
-Every ingestor uses the Pulse V1 telemetry model.
+Every ingestor sends the current Pulse resource contract to `POST /api/pulse/ingest`. Configure one HTTP source token per independently managed sender. Removed identity fields and unknown script or TOML fields are rejected.
+
+Metrics support `gauge` and nonnegative `counter` values. A metric name has one immutable type and unit within a Pulse base. Changing a definition requires a new signal name. Counter rates are calculated per series before aggregation.
 
 ## Signal types
 
@@ -27,9 +29,11 @@ Every resource has a stable `type`, `id`, and human-readable `label`. The canoni
 
 - `host:server-01`
 - `docker-container:server-01:compose:pulse:api:1`
-- `filesystem:server-01:var_lib_docker`
+- `filesystem:server-01:%2Fvar%2Flib%2Fdocker`
 - `proxmox-vm:lab:100`
 - `uptime-endpoint:office-berlin:pulse-api`
+
+IDs composed of multiple parts percent-encode separators inside each part. For example, `/var/lib` and `/var_lib` remain different filesystem resources. Supply the raw stable host ID in configuration, without a type prefix; it is not parsed as a legacy key.
 
 Labels are display values such as `server-01`, `app-core`, `/var/lib/docker`, or `postgres`. Runtime IDs, hashes, and paths do not replace a useful label.
 

@@ -12,9 +12,9 @@ updated: 2026-07-23
 
 The Btrfs module detects Btrfs mounts and collects filesystem usage with `btrfs filesystem usage`.
 
-## Entity types
+## Resource types
 
-| Entity type | Entity id | Used for |
+| Resource type | Resource key | Used for |
 |---|---|---|
 | `host` | `host:<host-id>` | Btrfs availability and aggregate filesystem counts. |
 | `filesystem` | `filesystem:<host-id>:<mount-key>` | Presence, usage availability, and usage metrics for one Btrfs mount. |

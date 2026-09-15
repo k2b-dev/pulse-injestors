@@ -47,9 +47,8 @@ func TestCollectorEmitsDatastoresJobsAndTasks(t *testing.T) {
 		Runner:      runner,
 		Timeout:     time.Second,
 	}.Collect(context.Background(), monitoring.Scope{
-		EntityID:   "pbs",
-		EntityType: "proxmox-backup-server",
-		Timestamp:  time.Unix(0, 0).UTC(),
+		Resource:  pulse.ResourceRef{Type: "proxmox-backup-server", ID: "pbs"},
+		Timestamp: time.Unix(0, 0).UTC(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -103,9 +102,8 @@ func TestCollectorGracefullyReportsMissingCommand(t *testing.T) {
 		CommandPath: "pulse-test-missing-proxmox-backup-debug",
 		Timeout:     time.Second,
 	}.Collect(context.Background(), monitoring.Scope{
-		EntityID:   "pbs",
-		EntityType: "proxmox-backup-server",
-		Timestamp:  time.Unix(0, 0).UTC(),
+		Resource:  pulse.ResourceRef{Type: "proxmox-backup-server", ID: "pbs"},
+		Timestamp: time.Unix(0, 0).UTC(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -161,7 +159,7 @@ func countMetric(metrics []pulse.Metric, name string) int {
 func countMetricEntity(metrics []pulse.Metric, name, entityType, entityID string) int {
 	count := 0
 	for _, metric := range metrics {
-		if metric.Name == name && metric.EntityType == entityType && metric.EntityID == entityID {
+		if metric.Name == name && metric.Resource.Type == entityType && metric.Resource.Key() == entityID {
 			count++
 		}
 	}
@@ -181,7 +179,7 @@ func countEvent(events []pulse.Event, kind string) int {
 func countEventEntity(events []pulse.Event, kind, entityType, entityID string) int {
 	count := 0
 	for _, event := range events {
-		if event.Kind == kind && event.EntityType == entityType && event.EntityID == entityID {
+		if event.Kind == kind && event.Resource.Type == entityType && event.Resource.Key() == entityID {
 			count++
 		}
 	}
@@ -191,7 +189,7 @@ func countEventEntity(events []pulse.Event, kind, entityType, entityID string) i
 func countStateEntity(states []pulse.State, key, entityType, entityID string) int {
 	count := 0
 	for _, state := range states {
-		if state.Key == key && state.EntityType == entityType && state.EntityID == entityID {
+		if state.Key == key && state.Resource.Type == entityType && state.Resource.Key() == entityID {
 			count++
 		}
 	}

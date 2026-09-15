@@ -12,9 +12,9 @@ updated: 2026-07-23
 
 The systemd module reports states for configured systemd units.
 
-## Entity types
+## Resource types
 
-| Entity type | Entity id | Used for |
+| Resource type | Resource key | Used for |
 |---|---|---|
 | `host` | `host:<host-id>` | systemd availability and configured-unit state. |
 | `service` | `service:<host-id>:systemd:<unit>` | State and events for one configured systemd unit. |

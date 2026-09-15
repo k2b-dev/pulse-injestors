@@ -392,16 +392,16 @@ func emitUsage(b *monitoring.Builder, prefix string, used, max float64, dims map
 }
 
 func nodeScope(scope monitoring.Scope, node, clusterID string) monitoring.Scope {
-	scope.EntityType = "proxmox-node"
-	scope.EntityID = entity.ID("proxmox-node", clusterNamespace(scope, clusterID), node)
-	scope.Label = node
+	scope.Resource.Type = "proxmox-node"
+	scope.Resource.ID = entity.ID(clusterNamespace(scope, clusterID), node)
+	scope.Resource.Label = node
 	return scope
 }
 
 func proxmoxClusterScope(scope monitoring.Scope, clusterID string) monitoring.Scope {
-	scope.EntityType = "proxmox-cluster"
-	scope.EntityID = entity.ID("proxmox-cluster", clusterNamespace(scope, clusterID))
-	scope.Label = clusterID
+	scope.Resource.Type = "proxmox-cluster"
+	scope.Resource.ID = entity.ID(clusterNamespace(scope, clusterID))
+	scope.Resource.Label = clusterID
 	return scope
 }
 
@@ -418,14 +418,14 @@ func proxmoxResourceScope(scope monitoring.Scope, row Resource, clusterID string
 	case "node":
 		return nodeScope(scope, vmid, clusterID), true
 	case "qemu":
-		scope.EntityType = "proxmox-vm"
-		scope.EntityID = entity.ID("proxmox-vm", clusterNamespace(scope, clusterID), vmid)
-		scope.Label = label
+		scope.Resource.Type = "proxmox-vm"
+		scope.Resource.ID = entity.ID(clusterNamespace(scope, clusterID), vmid)
+		scope.Resource.Label = label
 		return scope, true
 	case "lxc":
-		scope.EntityType = "proxmox-container"
-		scope.EntityID = entity.ID("proxmox-container", clusterNamespace(scope, clusterID), vmid)
-		scope.Label = label
+		scope.Resource.Type = "proxmox-container"
+		scope.Resource.ID = entity.ID(clusterNamespace(scope, clusterID), vmid)
+		scope.Resource.Label = label
 		return scope, true
 	default:
 		return monitoring.Scope{}, false
@@ -449,7 +449,7 @@ func resourceVMID(id string) string {
 }
 
 func stableHostFromScope(scope monitoring.Scope) string {
-	return entity.StableHostIDFromScope(scope.EntityID, scope.Dimensions)
+	return entity.StableHostIDFromScope(scope.Resource.ID, scope.Dimensions)
 }
 
 func clusterNamespace(scope monitoring.Scope, clusterID string) string {
@@ -460,9 +460,9 @@ func clusterNamespace(scope monitoring.Scope, clusterID string) string {
 }
 
 func backupJobScope(scope monitoring.Scope, clusterID, job string) monitoring.Scope {
-	scope.EntityType = "proxmox-backup-job"
-	scope.EntityID = entity.ID("proxmox-backup-job", clusterNamespace(scope, clusterID), entity.Key(job, "unknown"))
-	scope.Label = labelValue(job, "unknown")
+	scope.Resource.Type = "proxmox-backup-job"
+	scope.Resource.ID = entity.ID(clusterNamespace(scope, clusterID), entity.Key(job, "unknown"))
+	scope.Resource.Label = labelValue(job, "unknown")
 	return scope
 }
 
@@ -474,29 +474,29 @@ func backupGuestScope(scope monitoring.Scope, clusterID, typ, vmid, guest string
 	label := labelValue(guest, vmid)
 	switch typ {
 	case "qemu":
-		scope.EntityType = "proxmox-vm"
-		scope.EntityID = entity.ID("proxmox-vm", clusterNamespace(scope, clusterID), vmid)
-		scope.Label = label
+		scope.Resource.Type = "proxmox-vm"
+		scope.Resource.ID = entity.ID(clusterNamespace(scope, clusterID), vmid)
+		scope.Resource.Label = label
 	case "lxc":
-		scope.EntityType = "proxmox-container"
-		scope.EntityID = entity.ID("proxmox-container", clusterNamespace(scope, clusterID), vmid)
-		scope.Label = label
+		scope.Resource.Type = "proxmox-container"
+		scope.Resource.ID = entity.ID(clusterNamespace(scope, clusterID), vmid)
+		scope.Resource.Label = label
 	}
 	return scope
 }
 
 func cephClusterScope(scope monitoring.Scope, clusterID string) monitoring.Scope {
-	scope.EntityType = "ceph-cluster"
+	scope.Resource.Type = "ceph-cluster"
 	namespace := clusterNamespace(scope, clusterID)
-	scope.EntityID = entity.ID("ceph-cluster", namespace)
-	scope.Label = "Ceph " + namespace
+	scope.Resource.ID = entity.ID(namespace)
+	scope.Resource.Label = "Ceph " + namespace
 	return scope
 }
 
 func cephPoolScope(scope monitoring.Scope, clusterID, pool string) monitoring.Scope {
-	scope.EntityType = "ceph-pool"
-	scope.EntityID = entity.ID("ceph-pool", clusterNamespace(scope, clusterID), entity.Key(pool, "unknown"))
-	scope.Label = labelValue(pool, "unknown")
+	scope.Resource.Type = "ceph-pool"
+	scope.Resource.ID = entity.ID(clusterNamespace(scope, clusterID), entity.Key(pool, "unknown"))
+	scope.Resource.Label = labelValue(pool, "unknown")
 	return scope
 }
 

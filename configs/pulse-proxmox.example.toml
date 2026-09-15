@@ -1,9 +1,12 @@
 [pulse]
-ingest_url = "https://pulse.example.com/ingest/source"
+ingest_url = "https://pulse.example.com/api/pulse/ingest"
 ingest_token = "replace-me"
+# Explicit 64 MiB disk budget; size for measured output and tolerated outage.
+spool_dir = "/var/lib/pulse/pulse-proxmox"
+spool_max_bytes = 67108864
 
-[entity]
-# Stable host id. Proxmox, Ceph, and host-resource entity ids are derived from it.
+[resource]
+# Stable host id. Proxmox, Ceph, and host-resource resource IDs are derived from it.
 id = "pve-node-1"
 label = "pve-node-1"
 type = "host"

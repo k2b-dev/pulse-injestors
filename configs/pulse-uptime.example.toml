@@ -1,8 +1,11 @@
 [pulse]
 ingest_url = "https://pulse.example.com/api/pulse/ingest"
 ingest_token = "replace-me"
+# Explicit 64 MiB disk budget; size for measured output and tolerated outage.
+spool_dir = "/var/lib/pulse/pulse-uptime"
+spool_max_bytes = 67108864
 
-[entity]
+[resource]
 id = "office-berlin"
 label = "Berlin office"
 

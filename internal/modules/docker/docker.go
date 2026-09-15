@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/k2b-dev/pulse-injestors/internal/entity"
 	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
 	"github.com/k2b-dev/pulse-injestors/internal/pulse"
 )
@@ -63,7 +64,7 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 	if stableHostID == "" {
 		stableHostID = stableHostIDFromScope(scope)
 	}
-	daemonScope := withEntityLabel(scope, "docker-daemon", dockerDaemonEntityID(stableHostID), "Docker on "+stableHostID)
+	daemonScope := withResourceLabel(scope, "docker-daemon", dockerDaemonResourceID(stableHostID), "Docker on "+stableHostID)
 	b := monitoring.NewBuilder(daemonScope)
 
 	version, err := api.version(ctx)
@@ -484,13 +485,7 @@ func DaemonStableID(ctx context.Context, socket string, timeout time.Duration) (
 	return "", fmt.Errorf("docker daemon did not report an ID or name")
 }
 
-func NormalizeStableHostID(value string) string {
-	value = strings.TrimSpace(value)
-	for _, prefix := range []string{"host:", "docker:"} {
-		value = strings.TrimPrefix(value, prefix)
-	}
-	return entityComponent(value)
-}
+func NormalizeStableHostID(value string) string { return strings.TrimSpace(value) }
 
 func stableHostIDFromScope(scope monitoring.Scope) string {
 	if scope.Dimensions != nil {
@@ -498,82 +493,74 @@ func stableHostIDFromScope(scope monitoring.Scope) string {
 			return host
 		}
 	}
-	return NormalizeStableHostID(scope.EntityID)
+	return NormalizeStableHostID(scope.Resource.ID)
 }
 
-func hostEntityID(stableHostID string) string {
-	return "host:" + entityComponent(stableHostID)
+func hostResourceID(stableHostID string) string {
+	return entityComponent(stableHostID)
 }
 
-func dockerDaemonEntityID(stableHostID string) string {
-	return "docker:" + entityComponent(stableHostID)
+func dockerDaemonResourceID(stableHostID string) string {
+	return entityComponent(stableHostID)
 }
 
-func containerEntityID(stableHostID string, container containerSummary) string {
+func containerResourceID(stableHostID string, container containerSummary) string {
 	project := container.Labels["com.docker.compose.project"]
 	service := container.Labels["com.docker.compose.service"]
 	number := container.Labels["com.docker.compose.container-number"]
 	if project != "" && service != "" && number != "" {
-		return "container:" + entityComponent(stableHostID) + ":compose:" + entityComponent(project) + ":" + entityComponent(service) + ":" + entityComponent(number)
+		return entityComponent(stableHostID) + ":compose:" + entityComponent(project) + ":" + entityComponent(service) + ":" + entityComponent(number)
 	}
 	if name := containerName(container); name != "" {
 		if project != "" && service != "" {
-			return "container:" + entityComponent(stableHostID) + ":compose:" + entityComponent(project) + ":" + entityComponent(service) + ":name:" + entityComponent(name)
+			return entityComponent(stableHostID) + ":compose:" + entityComponent(project) + ":" + entityComponent(service) + ":name:" + entityComponent(name)
 		}
-		return "container:" + entityComponent(stableHostID) + ":name:" + entityComponent(name)
+		return entityComponent(stableHostID) + ":name:" + entityComponent(name)
 	}
-	return "container:" + entityComponent(stableHostID) + ":id:" + entityComponent(shortID(container.ID))
+	return entityComponent(stableHostID) + ":id:" + entityComponent(shortID(container.ID))
 }
 
-func composeServiceEntityID(stableHostID, project, service string) string {
-	return "compose:" + entityComponent(stableHostID) + ":" + entityComponent(project) + ":" + entityComponent(service)
+func composeServiceResourceID(stableHostID, project, service string) string {
+	return entityComponent(stableHostID) + ":" + entityComponent(project) + ":" + entityComponent(service)
 }
 
-func composeProjectEntityID(stableHostID, project string) string {
-	return "compose-project:" + entityComponent(stableHostID) + ":" + entityComponent(project)
+func composeProjectResourceID(stableHostID, project string) string {
+	return entityComponent(stableHostID) + ":" + entityComponent(project)
 }
 
-func imageEntityID(identity imageIdentity) string {
-	return identity.EntityID
+func imageResourceID(identity imageIdentity) string {
+	return identity.ResourceID
 }
 
-func entityComponent(value string) string {
-	value = strings.TrimSpace(value)
-	value = strings.TrimPrefix(value, "/")
-	if value == "" {
-		return ""
-	}
-	replacer := strings.NewReplacer(":", "_", "/", "_", " ", "_", "\t", "_", "\n", "_")
-	return replacer.Replace(value)
-}
+func entityComponent(value string) string { return entity.ID(value) }
 
-func withEntity(scope monitoring.Scope, entityType, entityID string) monitoring.Scope {
-	scope.EntityType = entityType
-	scope.EntityID = entityID
+func withResource(scope monitoring.Scope, resourceType, resourceID string) monitoring.Scope {
+	scope.Resource.Type = resourceType
+	scope.Resource.ID = resourceID
 	return scope
 }
 
-func withEntityLabel(scope monitoring.Scope, entityType, entityID, label string) monitoring.Scope {
-	scope = withEntity(scope, entityType, entityID)
-	scope.Label = label
+func withResourceLabel(scope monitoring.Scope, resourceType, resourceID, label string) monitoring.Scope {
+	scope = withResource(scope, resourceType, resourceID)
+	scope.Resource.Label = label
 	return scope
 }
 
 func containerScope(scope monitoring.Scope, stableHostID string, container containerSummary) monitoring.Scope {
 	label := containerLabel(container)
-	return withEntityLabel(scope, "docker-container", containerEntityID(stableHostID, container), label)
+	return withResourceLabel(scope, "docker-container", containerResourceID(stableHostID, container), label)
 }
 
 func composeServiceScope(scope monitoring.Scope, stableHostID, project, service string) monitoring.Scope {
-	return withEntityLabel(scope, "docker-compose-service", composeServiceEntityID(stableHostID, project, service), project+"/"+service)
+	return withResourceLabel(scope, "docker-compose-service", composeServiceResourceID(stableHostID, project, service), project+"/"+service)
 }
 
 func composeProjectScope(scope monitoring.Scope, stableHostID, project string) monitoring.Scope {
-	return withEntityLabel(scope, "docker-compose-project", composeProjectEntityID(stableHostID, project), project)
+	return withResourceLabel(scope, "docker-compose-project", composeProjectResourceID(stableHostID, project), project)
 }
 
 func imageScope(scope monitoring.Scope, identity imageIdentity) monitoring.Scope {
-	return withEntityLabel(scope, "docker-image", imageEntityID(identity), identity.Label)
+	return withResourceLabel(scope, "docker-image", imageResourceID(identity), identity.Label)
 }
 
 func addComposeDims(dims map[string]string, labels map[string]string) {
@@ -679,14 +666,10 @@ func emitContainerSummary(batch *pulse.Batch, scope monitoring.Scope, stableHost
 
 func emitComposeUsageSummary(batch *pulse.Batch, scope monitoring.Scope, stableHostID string) {
 	names := map[string]string{
-		"docker.container.cpu.usage":     "docker.compose.service.cpu.usage",
-		"docker.container.memory.used":   "docker.compose.service.memory.used",
-		"docker.container.memory.limit":  "docker.compose.service.memory.limit",
-		"docker.container.pids.current":  "docker.compose.service.pids.current",
-		"docker.container.network.rx":    "docker.compose.service.network.rx",
-		"docker.container.network.tx":    "docker.compose.service.network.tx",
-		"docker.container.blockio.read":  "docker.compose.service.blockio.read",
-		"docker.container.blockio.write": "docker.compose.service.blockio.write",
+		"docker.container.cpu.usage":    "docker.compose.service.cpu.usage",
+		"docker.container.memory.used":  "docker.compose.service.memory.used",
+		"docker.container.memory.limit": "docker.compose.service.memory.limit",
+		"docker.container.pids.current": "docker.compose.service.pids.current",
 	}
 	type key struct {
 		project string
@@ -994,7 +977,7 @@ func uniqueImageJobs(containers []containerSummary) []imageJob {
 }
 
 type imageIdentity struct {
-	EntityID   string
+	ResourceID string
 	Label      string
 	ImageID    string
 	Repository string
@@ -1009,7 +992,7 @@ func imageIdentityFrom(stableHostID, imageID string, references, repoTags, repoD
 			repository = ref.Registry + "/" + ref.Repository
 		}
 		return imageIdentity{
-			EntityID:   "image:" + entityComponent(stableHostID) + ":" + entityComponent(repository) + ":" + entityComponent(ref.Tag),
+			ResourceID: entityComponent(stableHostID) + ":" + entityComponent(repository) + ":" + entityComponent(ref.Tag),
 			Label:      ref.Original,
 			ImageID:    shortImageID(imageID),
 			Repository: repository,
@@ -1024,7 +1007,7 @@ func imageIdentityFrom(stableHostID, imageID string, references, repoTags, repoD
 		}
 		shortDigest := shortDigest(digest)
 		return imageIdentity{
-			EntityID:   "image:" + entityComponent(stableHostID) + ":" + entityComponent(repository) + ":" + entityComponent(shortDigest),
+			ResourceID: entityComponent(stableHostID) + ":" + entityComponent(repository) + ":" + entityComponent(shortDigest),
 			Label:      repository + "@" + shortDigest,
 			ImageID:    shortImageID(imageID),
 			Repository: repository,
@@ -1036,9 +1019,9 @@ func imageIdentityFrom(stableHostID, imageID string, references, repoTags, repoD
 		short = "unknown"
 	}
 	return imageIdentity{
-		EntityID: "image:" + entityComponent(stableHostID) + ":" + entityComponent(short),
-		Label:    short,
-		ImageID:  shortImageID(imageID),
+		ResourceID: entityComponent(stableHostID) + ":" + entityComponent(short),
+		Label:      short,
+		ImageID:    shortImageID(imageID),
 	}
 }
 

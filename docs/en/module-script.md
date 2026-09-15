@@ -14,7 +14,7 @@ The script module runs configured commands that emit Pulse JSON fragments.
 
 ## Resources
 
-Scripts may emit an explicit `resource` object with `type`, `id`, and `label`. Legacy `entityType` and `entityId` fields are normalized into the same resource contract. If a signal omits a resource, the runner injects the current ingestor resource.
+Scripts may emit an explicit `resource` object with `type`, `id`, and `label`. Unknown JSON fields, including removed identity fields, are rejected. If a signal omits a resource, the runner injects the current ingestor resource.
 
 ## Metrics
 
@@ -40,7 +40,7 @@ Scripts may emit an explicit `resource` object with `type`, `id`, and `label`. L
 
 | Name | Example | Applies to | Meaning |
 |---|---|---|---|
-| `host` | `server-01` | injected signals | Stable host id from configuration when the script omits entity fields. |
+| `host` | `server-01` | injected signals | Stable host id from configuration when the script omits `resource`. |
 | `script` | `custom-labels` | `script.ok`, `script.failed` | Configured script name. |
 | configured dimensions | `role=primary` | script output | Static dimensions from `[script.dimensions]`. |
 | `operation` | `execute` | failure events | Bounded script operation that failed. |

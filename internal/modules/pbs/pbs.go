@@ -465,16 +465,16 @@ func emitUsage(b *monitoring.Builder, prefix string, used, max float64, dims map
 }
 
 func datastoreScope(scope monitoring.Scope, datastore string) monitoring.Scope {
-	scope.EntityType = "pbs-datastore"
-	scope.EntityID = entity.ID("pbs-datastore", stableHostFromScope(scope), datastore)
-	scope.Label = datastore
+	scope.Resource.Type = "pbs-datastore"
+	scope.Resource.ID = entity.ID(stableHostFromScope(scope), datastore)
+	scope.Resource.Label = datastore
 	return scope
 }
 
 func jobScope(scope monitoring.Scope, kind, job string) monitoring.Scope {
-	scope.EntityType = "pbs-job"
-	scope.EntityID = entity.ID("pbs-job", stableHostFromScope(scope), entity.Key(kind, "unknown"), entity.Key(job, "unknown"))
-	scope.Label = labelValue(job, "unknown")
+	scope.Resource.Type = "pbs-job"
+	scope.Resource.ID = entity.ID(stableHostFromScope(scope), entity.Key(kind, "unknown"), entity.Key(job, "unknown"))
+	scope.Resource.Label = labelValue(job, "unknown")
 	return scope
 }
 
@@ -489,7 +489,7 @@ func labelValue(value, fallback string) string {
 }
 
 func stableHostFromScope(scope monitoring.Scope) string {
-	return entity.StableHostIDFromScope(scope.EntityID, scope.Dimensions)
+	return entity.StableHostIDFromScope(scope.Resource.ID, scope.Dimensions)
 }
 
 func emitError(b *monitoring.Builder, kind, operation string, dims map[string]string, err error) {

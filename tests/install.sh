@@ -84,8 +84,8 @@ PULSE_COSIGN_BIN="$TMP/cosign" \
 PULSE_INSTALL_TEST_CALLS="$calls" \
 PULSE_INGEST_URL="https://pulse.example.test/api/pulse/ingest" \
 PULSE_INGEST_TOKEN_FILE="$token_file" \
-PULSE_ENTITY_ID="macbook-test" \
-PULSE_ENTITY_LABEL="Test MacBook" \
+PULSE_RESOURCE_ID="macbook-test" \
+PULSE_RESOURCE_LABEL="Test MacBook" \
 PULSE_INTERVAL_SECONDS=300 \
 PULSE_DIMENSIONS="environment=test,site=lab" \
 sh "$ROOT/scripts/install.sh" \
@@ -105,6 +105,9 @@ fi
 test "$config_mode" = "600"
 grep -Fq 'ingest_url = "https://pulse.example.test/api/pulse/ingest"' "$config"
 grep -Fq 'ingest_token = "secret-token"' "$config"
+grep -Fq '[resource]' "$config"
+grep -Fq 'spool_max_bytes = 67108864' "$config"
+grep -Fq 'spool_dir = "' "$config"
 grep -Fq 'id = "macbook-test"' "$config"
 grep -Fq 'label = "Test MacBook"' "$config"
 grep -Fq '"environment" = "test"' "$config"

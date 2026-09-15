@@ -153,16 +153,16 @@ func collectSnapshots(ctx context.Context, b *monitoring.Builder, scope monitori
 }
 
 func poolScope(scope monitoring.Scope, pool string) monitoring.Scope {
-	scope.EntityType = "zfs-pool"
-	scope.EntityID = entity.ID("zfs-pool", entity.StableHostIDFromScope(scope.EntityID, scope.Dimensions), pool)
-	scope.Label = pool
+	scope.Resource.Type = "zfs-pool"
+	scope.Resource.ID = entity.ID(entity.StableHostIDFromScope(scope.Resource.ID, scope.Dimensions), pool)
+	scope.Resource.Label = pool
 	return scope
 }
 
 func datasetScope(scope monitoring.Scope, dataset string) monitoring.Scope {
-	scope.EntityType = "zfs-dataset"
-	scope.EntityID = entity.ID("zfs-dataset", entity.StableHostIDFromScope(scope.EntityID, scope.Dimensions), dataset)
-	scope.Label = dataset
+	scope.Resource.Type = "zfs-dataset"
+	scope.Resource.ID = entity.ID(entity.StableHostIDFromScope(scope.Resource.ID, scope.Dimensions), dataset)
+	scope.Resource.Label = dataset
 	return scope
 }
 

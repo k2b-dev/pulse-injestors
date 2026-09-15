@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
+	"github.com/k2b-dev/pulse-injestors/internal/pulse"
 )
 
 func TestKeyValueLines(t *testing.T) {
@@ -36,9 +37,8 @@ func TestParseHomebrewServices(t *testing.T) {
 
 func TestEmitBatteryHealth(t *testing.T) {
 	builder := monitoring.NewBuilder(monitoring.Scope{
-		EntityID:   "mac",
-		EntityType: "macos-device",
-		Timestamp:  time.Unix(0, 0).UTC(),
+		Resource:  pulse.ResourceRef{Type: "macos-device", ID: "mac"},
+		Timestamp: time.Unix(0, 0).UTC(),
 	})
 	emitBatteryHealth(builder, map[string]int64{
 		"AppleRawMaxCapacity": 8000,
@@ -71,25 +71,24 @@ func TestIoregNumbersParsesSignedValues(t *testing.T) {
 
 func TestMacOSResourceScopes(t *testing.T) {
 	scope := monitoring.Scope{
-		EntityID:   "host:macbook-01",
-		EntityType: "host",
+		Resource: pulse.ResourceRef{Type: "host", ID: "macbook-01"},
 		Dimensions: map[string]string{
 			"host": "macbook-01",
 		},
 	}
 
 	filesystem := filesystemScope(scope, "/System/Volumes/Data")
-	if filesystem.EntityType != "filesystem" || filesystem.EntityID != "filesystem:macbook-01:System_Volumes_Data" {
+	if filesystem.Resource.Type != "filesystem" || filesystem.Resource.Key() != "filesystem:macbook-01:%2FSystem%2FVolumes%2FData" {
 		t.Fatalf("filesystem scope = %#v", filesystem)
 	}
-	if filesystem.Label != "/System/Volumes/Data" {
-		t.Fatalf("filesystem label = %q", filesystem.Label)
+	if filesystem.Resource.Label != "/System/Volumes/Data" {
+		t.Fatalf("filesystem label = %q", filesystem.Resource.Label)
 	}
 	service := homebrewServiceScope(scope, "postgresql@17")
-	if service.EntityType != "service" || service.EntityID != "service:macbook-01:homebrew:postgresql@17" {
+	if service.Resource.Type != "service" || service.Resource.Key() != "service:macbook-01:homebrew:postgresql@17" {
 		t.Fatalf("service scope = %#v", service)
 	}
-	if service.Label != "postgresql@17" {
-		t.Fatalf("service label = %q", service.Label)
+	if service.Resource.Label != "postgresql@17" {
+		t.Fatalf("service label = %q", service.Resource.Label)
 	}
 }

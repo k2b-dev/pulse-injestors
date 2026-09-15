@@ -1,7 +1,6 @@
 package pulse
 
 import (
-	"strings"
 	"time"
 )
 
@@ -24,30 +23,12 @@ func (r ResourceRef) Key() string {
 	return r.Type + ":" + r.ID
 }
 
-func ResourceFromEntity(entityType, entityID, label string) *ResourceRef {
-	entityType = strings.TrimSpace(entityType)
-	entityID = strings.TrimSpace(entityID)
-	if entityType == "" || entityID == "" {
-		return nil
-	}
-	id := entityID
-	if _, rest, ok := strings.Cut(entityID, ":"); ok && rest != "" {
-		id = rest
-	}
-	if label == "" {
-		label = id
-	}
-	return &ResourceRef{Type: entityType, ID: id, Label: label}
-}
-
 type Metric struct {
 	Name       string            `json:"name"`
 	Type       string            `json:"type"`
 	Value      float64           `json:"value"`
 	Unit       string            `json:"unit,omitempty"`
 	Timestamp  time.Time         `json:"ts"`
-	EntityID   string            `json:"entityId,omitempty"`
-	EntityType string            `json:"entityType,omitempty"`
 	Resource   *ResourceRef      `json:"resource,omitempty"`
 	Dimensions map[string]string `json:"dimensions,omitempty"`
 }
@@ -56,8 +37,6 @@ type Event struct {
 	Kind          string            `json:"kind"`
 	Timestamp     time.Time         `json:"ts"`
 	Value         *float64          `json:"value,omitempty"`
-	EntityID      string            `json:"entityId,omitempty"`
-	EntityType    string            `json:"entityType,omitempty"`
 	Resource      *ResourceRef      `json:"resource,omitempty"`
 	Dimensions    map[string]string `json:"dimensions,omitempty"`
 	Attributes    map[string]any    `json:"attributes,omitempty"`
@@ -72,8 +51,6 @@ type State struct {
 	Key        string            `json:"key"`
 	Value      any               `json:"value"`
 	Timestamp  time.Time         `json:"ts"`
-	EntityID   string            `json:"entityId,omitempty"`
-	EntityType string            `json:"entityType,omitempty"`
 	Resource   *ResourceRef      `json:"resource,omitempty"`
 	Dimensions map[string]string `json:"dimensions,omitempty"`
 }

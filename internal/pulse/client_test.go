@@ -18,7 +18,7 @@ func TestClientPostsBatchWithBearerToken(t *testing.T) {
 		if r.Header.Get("Content-Type") != "application/json" {
 			t.Fatalf("content-type = %q", r.Header.Get("Content-Type"))
 		}
-		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"metrics":0,"events":0,"states":0}`))
 	}))
 	defer srv.Close()
 
@@ -53,7 +53,7 @@ func TestClientRetriesServerErrors(t *testing.T) {
 			http.Error(w, "temporary", http.StatusBadGateway)
 			return
 		}
-		w.WriteHeader(http.StatusNoContent)
+		_, _ = w.Write([]byte(`{"metrics":0,"events":0,"states":0}`))
 	}))
 	defer srv.Close()
 
@@ -86,7 +86,7 @@ func TestClientSplitsLargeBatches(t *testing.T) {
 			t.Fatalf("too many total items: %d", batchItems(batch))
 		}
 		sizes = append(sizes, batch)
-		w.WriteHeader(http.StatusNoContent)
+		_, _ = w.Write([]byte(`{"metrics":0,"events":0,"states":0}`))
 	}))
 	defer srv.Close()
 
@@ -124,7 +124,7 @@ func TestClientUsesStableIdempotencyKeyAcrossRetries(t *testing.T) {
 			http.Error(w, "temporary", http.StatusServiceUnavailable)
 			return
 		}
-		w.WriteHeader(http.StatusNoContent)
+		_, _ = w.Write([]byte(`{"metrics":0,"events":0,"states":0}`))
 	}))
 	defer srv.Close()
 
@@ -147,5 +147,25 @@ func TestSplitBatchHonorsByteLimit(t *testing.T) {
 	}
 	if len(parts) != 2 {
 		t.Fatalf("parts = %d", len(parts))
+	}
+}
+
+func TestClientRejectsRedirectWithoutFollowing(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Path == "/login" {
+			w.WriteHeader(200)
+			return
+		}
+		http.Redirect(w, r, "/login", http.StatusFound)
+	}))
+	defer srv.Close()
+	client := Client{URL: srv.URL, HTTPClient: srv.Client()}
+	if err := client.PostBatch(context.Background(), Batch{}); err == nil {
+		t.Fatal("redirect was acknowledged")
+	}
+	if calls != 1 {
+		t.Fatalf("followed redirect: %d requests", calls)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
+	"github.com/k2b-dev/pulse-injestors/internal/pulse"
 )
 
 func TestParseSmartScan(t *testing.T) {
@@ -58,9 +59,8 @@ ID# ATTRIBUTE_NAME          FLAG     VALUE WORST THRESH TYPE      UPDATED  WHEN_
 
 func TestEmitSmartAttributesAddsCommonMetrics(t *testing.T) {
 	builder := monitoring.NewBuilder(monitoring.Scope{
-		EntityID:   "host",
-		EntityType: "host",
-		Timestamp:  time.Unix(0, 0).UTC(),
+		Resource:  pulse.ResourceRef{Type: "host", ID: "host"},
+		Timestamp: time.Unix(0, 0).UTC(),
 	})
 	emitSmartAttributes(builder, map[string]string{"device": "/dev/sda"}, []byte(`
 ID# ATTRIBUTE_NAME          FLAG     VALUE WORST THRESH TYPE      UPDATED  WHEN_FAILED RAW_VALUE
@@ -103,9 +103,8 @@ func TestJSONNumber(t *testing.T) {
 
 func TestEmitNVMeSmartAddsCelsiusTemperature(t *testing.T) {
 	builder := monitoring.NewBuilder(monitoring.Scope{
-		EntityID:   "host",
-		EntityType: "host",
-		Timestamp:  time.Unix(0, 0).UTC(),
+		Resource:  pulse.ResourceRef{Type: "host", ID: "host"},
+		Timestamp: time.Unix(0, 0).UTC(),
 	})
 	emitNVMeSmart(builder, map[string]string{"device": "/dev/nvme0n1"}, []byte(`{"critical_warning":0,"temperature":300}`))
 
@@ -123,17 +122,16 @@ func TestEmitNVMeSmartAddsCelsiusTemperature(t *testing.T) {
 
 func TestDiskScopeUsesResourceEntity(t *testing.T) {
 	scope := diskScope(monitoring.Scope{
-		EntityID:   "host:server-01",
-		EntityType: "host",
+		Resource: pulse.ResourceRef{Type: "host", ID: "server-01"},
 		Dimensions: map[string]string{
 			"host": "server-01",
 		},
 	}, "/dev/nvme0n1", "S7ABC123456", diskLabel("/dev/nvme0n1", "Samsung SSD 990 PRO", "S7ABC123456"))
 
-	if scope.EntityType != "disk" || scope.EntityID != "disk:server-01:S7ABC123456" {
+	if scope.Resource.Type != "disk" || scope.Resource.Key() != "disk:server-01:S7ABC123456" {
 		t.Fatalf("scope = %#v", scope)
 	}
-	if scope.Label != "Samsung SSD 990 PRO (S7ABC123)" {
-		t.Fatalf("label = %q", scope.Label)
+	if scope.Resource.Label != "Samsung SSD 990 PRO (S7ABC123)" {
+		t.Fatalf("label = %q", scope.Resource.Label)
 	}
 }

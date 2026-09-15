@@ -47,9 +47,9 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 }
 
 func unitScope(scope monitoring.Scope, unit string) monitoring.Scope {
-	scope.EntityType = "service"
-	scope.EntityID = entity.ID("service", entity.StableHostIDFromScope(scope.EntityID, scope.Dimensions), "systemd", unit)
-	scope.Label = unit
+	scope.Resource.Type = "service"
+	scope.Resource.ID = entity.ID(entity.StableHostIDFromScope(scope.Resource.ID, scope.Dimensions), "systemd", unit)
+	scope.Resource.Label = unit
 	return scope
 }
 

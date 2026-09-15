@@ -12,9 +12,9 @@ updated: 2026-06-11
 
 The system module collects core host metrics from procfs.
 
-## Entity types
+## Resource types
 
-- `host`: CPU, memory, swap, load, and uptime data for the monitored host. Example entity id: `host:server-01`.
+- `host`: CPU, memory, swap, load, and uptime data for the monitored host. Example resource key: `host:server-01`.
 
 ## Metrics
 

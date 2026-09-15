@@ -12,9 +12,9 @@ updated: 2026-07-23
 
 The uptime module checks a bounded list of named endpoints from one probe. Target failures remain normal telemetry so one unavailable endpoint does not break the other checks.
 
-## Entity types
+## Resource types
 
-| Entity type | Entity id | Label | Used for |
+| Resource type | Resource key | Label | Used for |
 |---|---|---|---|
 | `uptime-probe` | `uptime-probe:<probe-id>` | Configured probe label | Shared runner health for one installation. |
 | `uptime-endpoint` | `uptime-endpoint:<probe-id>:<target-id>` | Configured target label | Metrics and states for one logical endpoint. |

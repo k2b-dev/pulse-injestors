@@ -5,10 +5,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -19,6 +21,8 @@ type Client struct {
 	MaxRetries     int
 	InitialBackoff time.Duration
 	Logger         *slog.Logger
+	SpoolDir       string
+	SpoolMaxBytes  int64
 }
 
 const (
@@ -31,6 +35,9 @@ func (c Client) PostBatch(ctx context.Context, batch Batch) error {
 	if c.HTTPClient == nil {
 		c.HTTPClient = http.DefaultClient
 	}
+	httpClient := *c.HTTPClient
+	httpClient.CheckRedirect = func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }
+	c.HTTPClient = &httpClient
 	if c.InitialBackoff <= 0 {
 		c.InitialBackoff = 500 * time.Millisecond
 	}
@@ -42,6 +49,9 @@ func (c Client) PostBatch(ctx context.Context, batch Batch) error {
 	parts, err := splitBatch(batch, maxItemsPerIngestCollection, maxItemsPerIngestPayload, maxBytesPerIngestPayload)
 	if err != nil {
 		return err
+	}
+	if c.SpoolDir != "" {
+		return c.deliverQueued(ctx, parts, log)
 	}
 	for i, part := range parts {
 		if err := c.postBatch(ctx, part, log); err != nil {
@@ -56,6 +66,10 @@ func (c Client) postBatch(ctx context.Context, batch Batch, log *slog.Logger) er
 	if err != nil {
 		return fmt.Errorf("encode pulse batch: %w", err)
 	}
+	return c.postBody(ctx, body, log)
+}
+
+func (c Client) postBody(ctx context.Context, body []byte, log *slog.Logger) error {
 	var lastErr error
 	for attempt := 0; attempt <= c.MaxRetries; attempt++ {
 		err := c.postOnce(ctx, body, idempotencyKey(body))
@@ -69,7 +83,17 @@ func (c Client) postBatch(ctx context.Context, batch Batch, log *slog.Logger) er
 		if !isRetryable(err) || attempt == c.MaxRetries {
 			break
 		}
-		backoff := c.InitialBackoff << attempt
+		backoff := c.InitialBackoff
+		for n := 0; n < attempt && backoff < 30*time.Second; n++ {
+			backoff *= 2
+		}
+		if backoff > 30*time.Second {
+			backoff = 30 * time.Second
+		}
+		var retry retryableError
+		if errors.As(err, &retry) && retry.after > backoff {
+			backoff = retry.after
+		}
 		log.Warn("pulse batch send failed; retrying", "attempt", attempt+1, "backoff", backoff, "err", err)
 		timer := time.NewTimer(backoff)
 		select {
@@ -185,7 +209,7 @@ func idempotencyKey(body []byte) string {
 func (c Client) postOnce(ctx context.Context, body []byte, key string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("create pulse request: %w", err)
+		return errors.New("invalid pulse request configuration")
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	req.Header.Set("Content-Type", "application/json")
@@ -193,24 +217,40 @@ func (c Client) postOnce(ctx context.Context, body []byte, key string) error {
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return retryableError{err: fmt.Errorf("send pulse request: %w", err)}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return retryableError{err: errors.New("pulse request transport failed")}
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		_, _ = io.Copy(io.Discard, resp.Body)
+		var counts struct {
+			Metrics *uint64 `json:"metrics"`
+			Events  *uint64 `json:"events"`
+			States  *uint64 `json:"states"`
+		}
+		decoder := json.NewDecoder(io.LimitReader(resp.Body, 4097))
+		if err := decoder.Decode(&counts); err != nil || counts.Metrics == nil || counts.Events == nil || counts.States == nil {
+			return retryableError{err: errors.New("pulse ingest returned an invalid acknowledgement; delivery is uncertain")}
+		}
+		if err := decoder.Decode(new(any)); err != io.EOF {
+			return retryableError{err: errors.New("pulse ingest returned an invalid acknowledgement; delivery is uncertain")}
+		}
 		return nil
 	}
-	msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	err = fmt.Errorf("pulse ingest returned HTTP %d: %s", resp.StatusCode, string(bytes.TrimSpace(msg)))
-	if resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
-		return retryableError{err: err}
+
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	err = httpStatusError{code: resp.StatusCode}
+	if resp.StatusCode == http.StatusConflict || resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+		return retryableError{err: err, after: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())}
 	}
 	return err
 }
 
 type retryableError struct {
-	err error
+	after time.Duration
+	err   error
 }
 
 func (e retryableError) Error() string {
@@ -225,3 +265,20 @@ func isRetryable(err error) bool {
 	_, ok := err.(retryableError)
 	return ok
 }
+
+func parseRetryAfter(value string, now time.Time) time.Duration {
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds >= 0 {
+		if seconds > int64((24*time.Hour)/time.Second) {
+			return 24 * time.Hour
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	if when, err := http.ParseTime(value); err == nil && when.After(now) {
+		return min(when.Sub(now), 24*time.Hour)
+	}
+	return 0
+}
+
+type httpStatusError struct{ code int }
+
+func (e httpStatusError) Error() string { return fmt.Sprintf("pulse ingest returned HTTP %d", e.code) }

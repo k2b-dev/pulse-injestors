@@ -34,7 +34,7 @@ curl -fsSL \
 
 The installer writes `/etc/pulse/ingestor.toml`, validates host and Proxmox collection, sends the first batch, and enables `pulse-proxmox.timer`.
 
-Use a stable entity ID unique to the physical node. In a cluster, each node uses its own host ID while cluster and guest resources are derived consistently from Proxmox data.
+Use a stable resource ID unique to the physical node. In a cluster, each node uses its own host ID while cluster and guest resources are derived consistently from Proxmox data.
 
 ## Enroll unattended
 
