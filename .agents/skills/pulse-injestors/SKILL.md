@@ -9,7 +9,7 @@ Use this skill for code, docs, and packaging work in `pulse-injestors`.
 
 ## Project model
 
-Pulse ingestors are Go one-shot collectors. Each binary collects telemetry and sends one JSON batch to a configured Pulse HTTP ingest endpoint.
+Pulse ingestors are Go collectors with one-shot and bounded scheduled modes. Each binary collects telemetry and sends one JSON batch to a configured Pulse HTTP ingest endpoint.
 
 Current binaries:
 
@@ -33,7 +33,7 @@ Shared logic lives in:
 
 - Keep binaries specialized. Do not turn them into one large multi-target CLI unless explicitly requested.
 - Keep collectors graceful-fail. Optional modules should be auto-enabled by default where a binary supports them. Missing tools, unsupported OS features, and expected absent services should emit concise availability states without collector failure events. Permission, timeout, parsing, and unexpected command failures should remain visible as events.
-- Keep collectors one-shot friendly. Scheduling belongs to cron, systemd timers, launchd, or the Docker wrapper.
+- Keep collectors one-shot friendly. Native scheduling belongs to cron, systemd timers, or launchd. Docker executes the native `run` mode directly so signals reach the collector process and intervals do not add collection time.
 - Do not log secrets. Token values must not appear in logs, events, or docs examples except as placeholders.
 - Prefer existing module patterns over new abstractions.
 - Use stable dot-notation signal names.
@@ -102,3 +102,20 @@ User-facing ingestor pages must lead with requirements, installation, enrollment
 - The documentation container always exposes the public read-only Fibel MCP endpoint. Its assistant is enabled only when `FIBEL_AI_MODEL` and valid provider configuration are present.
 - Both published images are multi-architecture, include SBOM/provenance attestations, and are signed by the repository workflow identity.
 - Package-manager-specific distribution is not available.
+
+## Current Pulse compatibility
+
+Use only resource objects internally and on the wire. Configuration uses
+`[resource]`, `--resource-id`, and `PULSE_RESOURCE_ID`; there are no legacy
+aliases. Unknown TOML and script JSON fields fail explicitly. Resource ID
+components escape delimiters rather than replacing them with underscores.
+
+Before a release, run `PULSE_CLOUD_CHECKOUT=/absolute/cloud bun run check:pulse`
+with the target Cloud checkout and its dependencies installed. This exercises
+mocked collectors through the actual HTTP client and current Pulse schema, then
+compiles every example dashboard. Go tests alone do not prove Cloud compatibility.
+
+Enable a bounded persistent spool for production. Keep its private directory on
+durable storage, bind it to one source, and document the configured disk budget.
+Calculate rates on individual container counters before grouping; never emit
+summed cumulative counters for changing Compose membership.

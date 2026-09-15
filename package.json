@@ -5,7 +5,8 @@
     "docs:dev": "fibel dev --config fibel.config.ts",
     "docs:build": "fibel build --config fibel.config.ts",
     "docs:check": "bun run scripts/check-docs.ts",
-    "docs:start": "bun run scripts/serve-docs.ts"
+    "docs:start": "bun run scripts/serve-docs.ts",
+    "check:pulse": "bun run scripts/check-pulse-contract.ts"
   },
   "type": "module",
   "dependencies": {

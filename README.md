@@ -81,3 +81,26 @@ go run ./cmd/pulse-uptime --local --pretty once
 ```
 
 The canonical telemetry contract is summarized in [docs/metrics.md](docs/metrics.md).
+
+## Verify against the target Cloud release
+
+This release uses the current Pulse resource contract without legacy aliases.
+Configuration uses `[resource]` and `PULSE_RESOURCE_ID`; ingest uses
+`POST /api/pulse/ingest`. Deploy it with the matching Cloud version.
+
+```sh
+go test -race ./...
+go vet ./...
+PULSE_CLOUD_CHECKOUT=/absolute/path/to/cloud bun run check:pulse
+```
+
+The contract check requires the target Cloud checkout with its dependencies
+installed and its supported Bun version. It runs mocked collector fixtures
+through the HTTP client, validates the wire payloads with Pulse's current
+schema, and compiles all dashboard examples. It does not access live servers.
+
+Production examples enable a private, bounded delivery spool. See
+[configuration](docs/en/configuration.md) for disk budgets, expiry, token
+rotation and recovery. Measure the complete selected collector profile before
+choosing capacity: one rich Proxmox fixture already emits 52 metrics per cycle,
+without the additional host modules or a full guest fleet.

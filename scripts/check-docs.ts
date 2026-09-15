@@ -88,6 +88,8 @@ if (failures.length > 0) {
 }
 
 console.log(`Checked ${checked.size} documentation routes.`);
+// The in-process MCP plugin keeps timers alive and exposes no disposal API.
+process.exit(0);
 
 function enqueue(value: string, from = "/") {
   if (
