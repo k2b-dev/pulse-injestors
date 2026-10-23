@@ -90,3 +90,10 @@ func TestCephScopesUseResourceEntities(t *testing.T) {
 		t.Fatalf("fallback cluster scope = %#v", fallback)
 	}
 }
+
+func TestModernOSDMap(t *testing.T) {
+	status, err := parseStatus([]byte(`{"osdmap":{"num_osds":12,"num_up_osds":11,"num_in_osds":10}}`))
+	if err != nil || status.OSDsTotal != 12 || status.OSDsUp != 11 || status.OSDsIn != 10 {
+		t.Fatalf("%+v %v", status, err)
+	}
+}

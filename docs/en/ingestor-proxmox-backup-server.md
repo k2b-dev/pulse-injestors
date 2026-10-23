@@ -3,14 +3,18 @@ title: Proxmox Backup Server ingestor
 navTitle: Proxmox Backup Server
 section: Ingestors
 order: 150
-description: Enroll a local PBS host and monitor its system, datastores, snapshots, jobs, and tasks.
+description: Enroll a local PBS host and monitor datastores, snapshots, jobs, and tasks.
 tags: [pbs, ingestor]
 updated: 2026-10-23
 ---
 
 # Proxmox Backup Server ingestor
 
-`pulse-proxmox-backup-server` runs locally on a Proxmox Backup Server. It combines Linux host telemetry with local `proxmox-backup-debug` data for datastores, snapshots, jobs, and tasks.
+`pulse-proxmox-backup-server` runs locally on a Proxmox Backup Server. It reads local `proxmox-backup-debug` data for datastores, snapshots, jobs, and tasks.
+
+## Run pulse-linux too
+
+Install [pulse-linux](/en/ingestor-linux) separately on the same host with `[linux] profile = "pbs"`. It supplies host CPU, RAM, disks, SMART, packages and systemd signals. The Proxmox installer does not auto-install it. Keep a separate config, token and spool for each ingestor.
 
 ## Requirements
 
@@ -20,7 +24,7 @@ updated: 2026-10-23
 - `curl`, `tar`, and Cosign;
 - a Pulse ingest URL and token.
 
-The default service runs as root so it can inspect PBS and the underlying host storage.
+The default service runs as root so it can read the local PBS API.
 
 ## Enroll interactively
 
@@ -72,27 +76,23 @@ curl -fsSL \
 ## Main settings
 
 ```toml
-[linux]
-profile = "pbs"
-systemd_units = []
-package_timeout_seconds = 20
-disk_health_timeout_seconds = 20
-
 [pbs]
 command_path = "proxmox-backup-debug"
 timeout_seconds = 10
+list_timeout_seconds = 60
 ```
 
 ## Collected data
 
-- Linux CPU, memory, load, filesystems, network, packages, services, disks, temperature, Btrfs, ZFS, and Ceph;
 - PBS version and availability;
 - datastore used, total, available, and usage percentage;
 - estimated full time when PBS exposes it;
 - snapshot totals, types, and latest snapshot age;
-- garbage collection, prune, sync, and verify jobs;
+- datastore garbage collection, prune, sync, verify, and tape jobs;
 - recent tasks, task statuses, and failure events.
 
-Datastores and jobs are separate resources so administrators can browse their current state directly. Task users and UPIDs use actor and correlation fields instead of high-cardinality dimensions.
+Datastores, jobs and backup groups are separate resources so administrators can browse their current state directly. Task users and UPIDs use actor and correlation fields instead of high-cardinality dimensions.
 
 See the [PBS module](/en/module-pbs) and [host modules](/en/modules) for exhaustive signal tables.
+
+The `pbs` Linux profile watches `proxmox-backup.service` and `proxmox-backup-proxy.service`. Datastore capacity runs every 300 seconds, jobs and backup groups every 900 seconds, and versions every 86400 seconds. Each backup group exposes its newest snapshot age in the root or a nested namespace on each datastore, including an S3-backed datastore when exposed by PBS. Compare groups on both PBS hosts to check the second copy.

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"github.com/k2b-dev/pulse-injestors/internal/entity"
 	"os"
 	"path/filepath"
@@ -223,7 +224,7 @@ func TestResolveMergesHostZfsFlag(t *testing.T) {
 	}
 }
 
-func TestResolveHostCephDefaultsEnabled(t *testing.T) {
+func TestResolveHostCephDefaultsDisabled(t *testing.T) {
 	cfg, err := Resolve(Config{
 		Pulse: PulseConfig{IngestURL: "https://example.com/api/pulse/ingest", IngestToken: "token"},
 		Resource: ResourceConfig{
@@ -233,8 +234,8 @@ func TestResolveHostCephDefaultsEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.CephEnabled() {
-		t.Fatal("expected ceph enabled by default")
+	if cfg.CephEnabled() {
+		t.Fatal("expected ceph disabled by default")
 	}
 }
 
@@ -513,5 +514,37 @@ func TestReservedHostDimension(t *testing.T) {
 	}
 	if got := entity.StableHostIDFromScope(cfg.Resource.ID, cfg.Dimensions); got != "resource-host" {
 		t.Fatalf("host identity = %q", got)
+	}
+}
+
+func TestProxmoxPBSListTimeouts(t *testing.T) {
+	cfg, err := Resolve(Config{}, Overlay{AllowMissingPulse: true})
+	if err != nil || cfg.Proxmox.ListTimeoutSeconds != 60 || cfg.PBS.ListTimeoutSeconds != 60 {
+		t.Fatal(cfg.Proxmox, cfg.PBS, err)
+	}
+	for _, section := range []string{"proxmox", "pbs"} {
+		for _, value := range []int{-1, 0, 45} {
+			file := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(file, []byte(fmt.Sprintf("[%s]\nlist_timeout_seconds = %d\n", section, value)), 0600); err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := LoadFile(file, true)
+			if value <= 0 {
+				if err == nil {
+					t.Fatalf("accepted %s %d", section, value)
+				}
+				continue
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			resolved, err := Resolve(loaded, Overlay{AllowMissingPulse: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if section == "proxmox" && resolved.Proxmox.ListTimeoutSeconds != value || section == "pbs" && resolved.PBS.ListTimeoutSeconds != value {
+				t.Fatal(resolved.Proxmox, resolved.PBS)
+			}
+		}
 	}
 }

@@ -5,180 +5,125 @@ section: Modules
 order: 440
 description: Local Proxmox VE collection through pvesh.
 tags: [proxmox, ceph, modules, reference]
-updated: 2026-07-23
+updated: 2026-10-23
 ---
 
-# Proxmox module
+# Proxmox VE module
 
-The Proxmox module collects local Proxmox VE data through `pvesh`. It supports clustered and standalone nodes.
+`pulse-proxmox` reads local PVE 9 API data with `pvesh`. Run **pulse-linux too** on every node for host CPU, RAM, disks, SMART, packages and systemd; use its `proxmox-node` profile.
 
-## Resources
+## Election and resources
 
-| Resource type | Resource key | Label | Scope |
-|---|---|---|---|
-| `proxmox-node` | `proxmox-node:<cluster-or-host>:<node>` | Proxmox node name | One Proxmox node and local collector aggregates. |
-| `proxmox-cluster` | `proxmox-cluster:<cluster>` | Cluster name | Real cluster quorum and node totals. Not emitted on standalone hosts. |
-| `proxmox-vm` | `proxmox-vm:<cluster-or-host>:<vmid>` | VM name, then VMID | One QEMU virtual machine. |
-| `proxmox-container` | `proxmox-container:<cluster-or-host>:<vmid>` | container name, then VMID | One LXC container. |
-| `proxmox-backup-job` | `proxmox-backup-job:<cluster-or-host>:<job>` | backup job ID | One Proxmox backup job. |
-| `ceph-cluster` | `ceph-cluster:<fsid-or-cluster>` | `Ceph <fsid>` | Ceph cluster returned by the Proxmox API. |
-| `ceph-pool` | `ceph-pool:<fsid-or-cluster>:<pool>` | pool name | One Ceph pool. |
+Each collection phase reads `/cluster/status`. In a real cluster, a node can report cluster-wide data only when its local view has quorum (`quorate=1`). Among online nodes in that view, the node with the lowest positive `nodeid` reports cluster-wide data. If any online candidate lacks a positive ID, all candidates are compared by name instead. Equal IDs also use name order. The API's `local=1` identifies this node; the configured stable host ID is the fallback. An offline local node cannot win against an online node. A standalone node is elected without creating a synthetic cluster resource. A failed status query stops that phase rather than assuming standalone operation.
 
-The cluster name namespaces nodes, guests, and backup jobs in a cluster. The configured host ID is the namespace on a standalone installation. The Ceph FSID namespaces Ceph resources when available.
+Election is checked again on every due phase. The next health cycle after a leader disappears transfers cluster health and guest states to the next online candidate; capacity and backup data follow their normal cadences. During a 3/2 partition of a five-node cluster, only the quorate side elects a reporter. Nodes without quorum continue reporting local node health and local storage; they do not report cluster-wide data. Standalone nodes do not require cluster quorum.
+
+| Resource | ID components | Scope |
+|---|---|---|
+| `proxmox-node` | cluster name + node; host ID + node when standalone | Each node reports only its own availability, quorum, status and version. |
+| `proxmox-cluster` | cluster name | Elected node reports quorum, counts and tasks. |
+| `proxmox-guest` | cluster name + VMID; host ID + VMID when standalone | All non-template QEMU/LXC guests, including stopped guests. Label is the guest name. |
+| `proxmox-storage` | cluster + storage for shared; cluster + node + storage for local | Only the elected node reports shared storage. Each node reports its own local storage. |
+| `proxmox-backup-job` | cluster + job ID | Elected node reports backup job configuration. |
+
+Availability failures use the last successfully discovered node and cluster identity. Before the first successful query, the node resource uses the stable host ID for both ID components.
+
+IDs escape delimiters using the shared resource contract. Guest node placement is a state, never a metric dimension, so live migration preserves the guest's series. Templates are skipped entirely; no template state is emitted. Guest metrics include zero values. CPU is the API's fraction of allocated vCPU capacity multiplied by 100. Counter resets can accompany a restart or migration; calculate rates per guest with reset handling.
+
+States are sent on change and refreshed after six hours when checked again. The cadences below describe collection; `once` runs all phases. The runner interval remains the minimum scheduling resolution. User-configured dimensions apply in addition to those listed. API text in states and error attributes is limited to 500 Unicode characters.
 
 ## Metrics
 
-### Nodes and cluster
-
-Node usage is emitted on each `proxmox-node`. Node totals are emitted on `proxmox-cluster` for a real cluster and on the local node for a standalone installation.
-
-| Name | Type | Unit | Dimensions | Example | Meaning |
-|---|---|---:|---|---:|---|
-| `proxmox.nodes.total` | gauge | | — | `3` | Proxmox nodes visible locally. |
-| `proxmox.nodes.online` | gauge | | — | `3` | Visible Proxmox nodes currently online. |
-| `proxmox.node.cpu.usage` | gauge | percent | `node` | `14.2` | Current CPU usage for one node. |
-| `proxmox.node.cpu.cores` | gauge | | `node` | `16` | CPU core count for one node. |
-| `proxmox.node.memory.used` | gauge | bytes | `node` | `8589934592` | Used memory for one node. |
-| `proxmox.node.memory.total` | gauge | bytes | `node` | `34359738368` | Total memory for one node. |
-| `proxmox.node.memory.usage` | gauge | percent | `node` | `25` | Used memory percentage for one node. |
-| `proxmox.node.disk.used` | gauge | bytes | `node` | `214748364800` | Used root disk bytes for one node. |
-| `proxmox.node.disk.total` | gauge | bytes | `node` | `536870912000` | Total root disk bytes for one node. |
-| `proxmox.node.disk.usage` | gauge | percent | `node` | `40` | Root disk used percentage for one node. |
-| `proxmox.node.uptime` | gauge | seconds | `node` | `86400` | Uptime for one node. |
-
-### Guests and cluster resources
-
-Guest rows are emitted on `proxmox-vm` or `proxmox-container`. Other Proxmox resource types remain on the local node aggregate.
-
-| Name | Type | Unit | Dimensions | Example | Meaning |
-|---|---|---:|---|---:|---|
-| `proxmox.resource.cpu.usage` | gauge | percent | `type`, `node`, optional `vmid` | `42.3` | Current CPU usage for one Proxmox resource. |
-| `proxmox.resource.cpu.cores` | gauge | | `type`, `node`, optional `vmid` | `4` | CPU core count for one Proxmox resource. |
-| `proxmox.resource.memory.used` | gauge | bytes | `type`, `node`, optional `vmid` | `2147483648` | Used memory for one Proxmox resource. |
-| `proxmox.resource.memory.total` | gauge | bytes | `type`, `node`, optional `vmid` | `4294967296` | Total memory for one Proxmox resource. |
-| `proxmox.resource.memory.usage` | gauge | percent | `type`, `node`, optional `vmid` | `50` | Used memory percentage for one Proxmox resource. |
-| `proxmox.resource.disk.used` | gauge | bytes | `type`, `node`, optional `vmid` | `32212254720` | Used disk bytes for one Proxmox resource. |
-| `proxmox.resource.disk.total` | gauge | bytes | `type`, `node`, optional `vmid` | `68719476736` | Total disk bytes for one Proxmox resource. |
-| `proxmox.resource.disk.usage` | gauge | percent | `type`, `node`, optional `vmid` | `46.9` | Used disk percentage for one Proxmox resource. |
-| `proxmox.resource.uptime` | gauge | seconds | `type`, `node`, optional `vmid` | `7200` | Uptime for one Proxmox resource. |
-| `proxmox.resources.by_type` | gauge | | `type` | `12` | Resources of one Proxmox type. |
-| `proxmox.resources.by_status` | gauge | | `type`, `status` | `10` | Resources of one type and status. |
-
-### Tasks and backup
-
-Aggregate task and backup metrics are emitted on the local `proxmox-node`.
-
-| Name | Type | Unit | Dimensions | Example | Meaning |
-|---|---|---:|---|---:|---|
-| `proxmox.tasks.recent` | gauge | | — | `50` | Recent tasks returned by Proxmox. |
-| `proxmox.tasks.by_status` | gauge | | `status` | `45` | Recent tasks in one normalized status class. |
-| `proxmox.tasks.by_type_status` | gauge | | `type`, `status` | `8` | Recent tasks for one task type and status class. |
-| `proxmox.backup.tasks.recent` | gauge | | — | `6` | Recent `vzdump` tasks. |
-| `proxmox.backup.tasks.success` | gauge | | — | `5` | Recent successful `vzdump` tasks. |
-| `proxmox.backup.tasks.failed` | gauge | | — | `1` | Recent failed `vzdump` tasks. |
-| `proxmox.backup.last_success.age` | gauge | seconds | — | `43200` | Age of the latest successful backup task. |
-| `proxmox.backup.jobs.total` | gauge | | — | `4` | Configured backup jobs. |
-| `proxmox.backup.jobs.enabled` | gauge | | — | `3` | Enabled backup jobs. |
-| `proxmox.backup.jobs.disabled` | gauge | | — | `1` | Disabled backup jobs. |
-| `proxmox.backup.guests.not_backed_up` | gauge | | — | `2` | Guests not covered by a backup job. |
-
-### Ceph
-
-Ceph cluster metrics are emitted on `ceph-cluster`; pool metrics are emitted on `ceph-pool`. Signal names match the standalone [Ceph module](/en/module-ceph).
-
-| Name | Type | Unit | Dimensions | Example | Meaning |
-|---|---|---:|---|---:|---|
-| `system.ceph.osds.total` | gauge | | — | `6` | Total Ceph OSDs. |
-| `system.ceph.osds.up` | gauge | | — | `6` | Ceph OSDs currently up. |
-| `system.ceph.osds.in` | gauge | | — | `6` | Ceph OSDs currently in. |
-| `system.ceph.pgs.total` | gauge | | — | `64` | Total placement groups. |
-| `system.ceph.pgs.by_state` | gauge | | `state` | `64` | Placement groups in one state. |
-| `system.ceph.bytes.used` | gauge | bytes | — | `1099511627776` | Used Ceph cluster bytes. |
-| `system.ceph.bytes.total` | gauge | bytes | — | `4398046511104` | Total Ceph cluster bytes. |
-| `system.ceph.bytes.available` | gauge | bytes | — | `3298534883328` | Available Ceph cluster bytes. |
-| `system.ceph.pools` | gauge | | — | `4` | Ceph pools returned by Proxmox. |
-| `system.ceph.pool.bytes.used` | gauge | bytes | `pool` | `214748364800` | Used bytes for one Ceph pool. |
-| `system.ceph.pool.bytes.available` | gauge | bytes | `pool` | `1073741824000` | Available bytes for one Ceph pool. |
-| `system.ceph.pool.objects` | gauge | — | `pool` | `145223` | Object count for one Ceph pool. |
+| Signal | Type | Unit | Dimensions | Cadence | Example | Meaning |
+|---|---|---|---|---|---|---|
+| `proxmox.nodes.total` | gauge | — | — | 60 s | 5 | Nodes returned by the local cluster view. |
+| `proxmox.nodes.online` | gauge | — | — | 60 s | 5 | Nodes currently online. |
+| `proxmox.guest.cpu.usage` | gauge | percent | — | 300 s | 0 | Guest CPU use as a percentage of allocated vCPUs. |
+| `proxmox.guest.memory.used` | gauge | bytes | — | 300 s | 0 | Guest memory in use. |
+| `proxmox.guest.memory.max` | gauge | bytes | — | 300 s | 0 | Configured guest memory limit. |
+| `proxmox.guest.uptime` | gauge | seconds | — | 300 s | 0 | Guest uptime; zero for a stopped guest. |
+| `proxmox.guest.disk.read` | counter | bytes | — | 300 s | 0 | Cumulative guest disk bytes read. |
+| `proxmox.guest.disk.write` | counter | bytes | — | 300 s | 0 | Cumulative guest disk bytes written. |
+| `proxmox.guest.net.in` | counter | bytes | — | 300 s | 0 | Cumulative guest network bytes received. |
+| `proxmox.guest.net.out` | counter | bytes | — | 300 s | 0 | Cumulative guest network bytes sent. |
+| `proxmox.storage.bytes.used` | gauge | bytes | — | 300 s | 0 | Used Proxmox storage bytes. Only enabled, active storages emit capacity. |
+| `proxmox.storage.bytes.total` | gauge | bytes | — | 300 s | 0 | Total Proxmox storage bytes. Only enabled, active storages emit capacity. |
+| `proxmox.storage.bytes.available` | gauge | bytes | — | 300 s | 0 | Available Proxmox storage bytes. Only enabled, active storages emit capacity. |
+| `proxmox.tasks.recent` | gauge | — | — | 60 s | 0 | Tasks in the API recent-task window. |
+| `proxmox.tasks.by_status` | gauge | — | `status` | 60 s | 0 | Recent tasks by normalized status: running, ok, error or unknown. |
+| `proxmox.tasks.by_type_status` | gauge | — | `type`, `status` | 60 s | 0 | Recent tasks by task type and normalized status. |
+| `proxmox.backup.tasks.recent` | gauge | — | — | 60 s | 0 | Recent vzdump tasks. |
+| `proxmox.backup.tasks.success` | gauge | — | — | 60 s | 0 | Recent successful vzdump tasks. |
+| `proxmox.backup.tasks.failed` | gauge | — | — | 60 s | 0 | Recent failed vzdump tasks. |
+| `proxmox.backup.last_success.age` | gauge | seconds | `storage` | 900 s | 3600 | Age of the newest backup ctime for this guest on this PBS storage. Absent if no backup exists. |
 
 ## States
 
-### Proxmox and resources
+| Signal | Type | Unit | Dimensions | Cadence | Example | Meaning |
+|---|---|---|---|---|---|---|
+| `proxmox.available` | state boolean | — | — | each due phase | true | Local command and cluster-status query are available. |
+| `proxmox.node.online` | state boolean | — | — | 60 s | true | Local node online flag. |
+| `proxmox.node.quorate` | state boolean | — | — | 60 s | true | Quorum in this node's local cluster view; true for a standalone node. |
+| `proxmox.node.status` | state string | — | — | 60 s | online | Local status: online or offline. |
+| `proxmox.cluster.elected` | state boolean | — | — | 60 s | true | Whether this node is elected. |
+| `proxmox.version` | state string | — | — | 86400 s | 9.0 | Local PVE version. |
+| `proxmox.release` | state string | — | — | 86400 s | 9.0 | Local PVE release. |
+| `proxmox.repoid` | state string | — | — | 86400 s | abc123 | Local PVE repoid. |
+| `proxmox.cluster.name` | state string | — | — | 60 s | lab | Real cluster name. |
+| `proxmox.cluster.quorate` | state boolean | — | — | 60 s | true | Whether the cluster has quorum. |
+| `proxmox.guest.status` | state string | — | — | 60 s; also 300 s | running | Raw guest status, including running, stopped or paused. |
+| `proxmox.guest.node` | state string | — | — | 60 s; also 300 s | node-a | Current guest node. |
+| `proxmox.guest.ha.state` | state string | — | — | 60 s | started | HA service state, only for managed non-template guests; the API display sentence is never emitted. |
+| `proxmox.storage.active` | state boolean | — | — | 300 s | true | Whether Proxmox storage is active. |
+| `proxmox.storage.enabled` | state boolean | — | — | 300 s | true | Whether Proxmox storage is enabled. |
+| `proxmox.backup.guest.covered` | state boolean | — | — | 900 s | true | At least one enabled job selects this guest; not proof that a backup succeeded. |
+| `proxmox.backup.guest.jobs` | state string | — | — | 900 s | hourly,nightly | Sorted comma-separated selecting job IDs, limited to 500 characters; empty when uncovered. |
+| `proxmox.backup.last_success.time` | state string | — | `storage` | 900 s | 2026-10-23T10:00:00Z | Newest backup UTC timestamp on this storage; empty if none. |
+| `proxmox.backup.job.enabled` | state boolean | — | — | 900 s | true | Backup job enabled. |
+| `proxmox.backup.job.schedule` | state string | — | — | 900 s | hourly | Backup job schedule. |
+| `proxmox.backup.job.storage` | state string | — | — | 900 s | pbs-main | Backup job storage. |
+| `proxmox.ceph.api.enabled` | state boolean | — | — | 60 s | true | Ceph API collection is enabled on the elected node. |
 
-| Key | Resource | Value type | Dimensions | Example | Meaning |
-|---|---|---|---|---|---|
-| `proxmox.available` | local `proxmox-node` | boolean | — | `true` | Whether local Proxmox collection is available. |
-| `proxmox.version` | local `proxmox-node` | string | — | `8.2.4` | Proxmox VE version. |
-| `proxmox.release` | local `proxmox-node` | string | — | `8.2` | Proxmox release. |
-| `proxmox.repoid` | local `proxmox-node` | string | — | `abcd1234` | Proxmox repository ID. |
-| `proxmox.cluster.name` | `proxmox-cluster` | string | — | `lab` | Real Proxmox cluster name. |
-| `proxmox.cluster.quorate` | `proxmox-cluster` | boolean | — | `true` | Whether the real cluster is quorate. |
-| `proxmox.node.online` | `proxmox-node` | boolean | `node` | `true` | Whether one node is online. |
-| `proxmox.node.ip` | `proxmox-node` | string | `node` | `10.0.0.11` | Node IP from cluster status. |
-| `proxmox.node.status` | `proxmox-node` | string | `node` | `online` | Raw node status. |
-| `proxmox.resource.present` | guest or local node | boolean | `type`, `node`, optional `vmid` | `true` | Proxmox resource exists. |
-| `proxmox.resource.status` | guest or local node | string | `type`, `node`, optional `vmid` | `running` | Raw resource status. |
-| `proxmox.resource.name` | guest or local node | string | `type`, `node`, optional `vmid` | `postgres` | Resource display name returned by Proxmox. |
-| `proxmox.backup.last_success.time` | local `proxmox-node` | string | — | `2026-06-11T00:00:00Z` | Latest successful backup timestamp. |
-| `proxmox.backup.job.present` | `proxmox-backup-job` | boolean | `job` | `true` | Backup job exists. |
-| `proxmox.backup.job.enabled` | `proxmox-backup-job` | boolean | `job` | `true` | Backup job is enabled. |
-| `proxmox.backup.job.schedule` | `proxmox-backup-job` | string | `job` | `daily` | Backup job schedule. |
-| `proxmox.backup.job.storage` | `proxmox-backup-job` | string | `job` | `pbs-main` | Backup target storage. |
-| `proxmox.backup.job.mode` | `proxmox-backup-job` | string | `job` | `snapshot` | Backup mode. |
-| `proxmox.backup.guest.covered` | guest | boolean | `vmid`, `guest`, `type`, `node` | `false` | Guest is listed as not covered by backup jobs. |
-| `proxmox.ceph.api.enabled` | local `proxmox-node` | boolean | — | `true` | Whether Proxmox Ceph API collection is enabled. |
+## Backup coverage and copies
 
-### Ceph
+Enabled jobs select guests through `all`, VMID lists or pools. `exclude` always wins, and a job's optional `node` restriction applies to the guest's current placement. Coverage is independent of freshness: intentionally excluded guests are uncovered, not failed. Set alert expectations to match your backup policy and per-guest schedules.
 
-| Key | Resource | Value type | Dimensions | Example | Meaning |
-|---|---|---|---|---|---|
-| `system.ceph.available` | local node or `ceph-cluster` | boolean | — | `true` | Whether Proxmox returned Ceph status. |
-| `system.ceph.present` | `ceph-cluster` | boolean | — | `true` | Ceph cluster was identified. |
-| `system.ceph.fsid` | `ceph-cluster` | string | — | `45f4536f-...` | Ceph cluster FSID. |
-| `system.ceph.health.status` | `ceph-cluster` | string | — | `HEALTH_OK` | Raw Ceph health status. |
-| `system.ceph.health.healthy` | `ceph-cluster` | boolean | — | `true` | Whether Ceph health is `HEALTH_OK`. |
-| `system.ceph.pool.present` | `ceph-pool` | boolean | `pool` | `true` | Ceph pool exists. |
+A storage whose `nodes=` restriction excludes the elected node is not reported by that node. Shared storage capacity and backup freshness therefore require visibility on the elected node.
+
+For each active, enabled PBS storage visible on the elected node, the collector lists backup content and takes the newest `ctime` per VMID. Storage-specific age and time distinguish copies exposed as PVE storages. Empty time means no backup exists on that successfully queried storage; query failures emit an event and do not invent a result. For a second PBS or offsite datastore not exposed to PVE, compare the corresponding `pbs-backup-group` on the destination PBS. A successful sync job alone is not proof that every guest was copied. See the [PBS module](/en/module-pbs).
+
+## Ceph
+
+Only the elected node uses the PVE Ceph API. All Ceph signals, units, dimensions and resources are listed in the [Ceph module](/en/module-ceph). The local Ceph CLI is not run by this binary. After a successful Ceph query, an availability failure updates the same `ceph-cluster` resource using the cached FSID. Before the first success, availability remains on the reporting cluster or standalone node.
 
 ## Events
 
-Command errors use `attributes.error`. Failed task context uses structured identity and attribute fields.
+All events have no unit. Command failures carry `attributes.error`; task failures carry `status`, `taskId`, `startTime` and `endTime` where available. Task users are `actorId`, and UPIDs are `correlationId`. Each task event kind is deduplicated by UPID while the task remains in the current task list. At most ten new events of each kind are emitted per health cycle, after removing duplicates; remaining failures can be emitted on later cycles. The seen set is pruned to the current task list. A restart, election handover or task that leaves and re-enters the list can repeat a failure.
 
-| Kind | Dimensions | Attributes | Identities | Trigger |
-|---|---|---|---|---|
-| `proxmox.config.failed` | `operation=configure` | `error` | | Invalid local `pvesh` configuration. |
-| `proxmox.version.failed` | `operation=version` | `error` | | Version query failed. |
-| `proxmox.cluster.status.failed` | `operation=cluster_status` | `error` | | Cluster status failed; standalone fallback is attempted. |
-| `proxmox.nodes.failed` | `operation=nodes` | `error` | | Standalone node query failed. |
-| `proxmox.cluster.resources.failed` | `operation=cluster_resources` | `error` | | Cluster resource query failed. |
-| `proxmox.cluster.tasks.failed` | `operation=cluster_tasks` | `error` | | Recent task query failed. |
-| `proxmox.task.failed` | optional `node`, `type`, `status` | `status`, `taskId`, `startTime`, `endTime` | `actorId=user`, `correlationId=UPID` | Recent task has an error status. |
-| `proxmox.backup.failed` | optional `node`, `type`, `status` | `status`, `taskId`, `startTime`, `endTime` | `actorId=user`, `correlationId=UPID` | Recent `vzdump` task has an error status. |
-| `proxmox.backup.jobs.failed` | `operation=backup_jobs` | `error` | | Backup job list failed. |
-| `proxmox.backup.coverage.failed` | `operation=backup_coverage` | `error` | | Backup coverage query failed. |
-| `proxmox.ceph.status.failed` | `operation=ceph_status` | `error` | | Unexpected Ceph status query failure. |
-| `proxmox.ceph.pools.failed` | `operation=ceph_pools` | `error` | | Ceph pool query failed on all candidate nodes. |
+| Signal | Type | Unit | Dimensions | Cadence | Example | Meaning |
+|---|---|---|---|---|---|---|
+| `proxmox.config.failed` | event | — | `operation=configure` | each due phase | error | Invalid command configuration. |
+| `proxmox.cluster.status.failed` | event | — | `operation=cluster_status` | each due phase | error | Cannot read election; phase stops. |
+| `proxmox.version.failed` | event | — | `operation=version` | 86400 s | error | Version query failed. |
+| `proxmox.cluster.resources.failed` | event | — | `operation=cluster_resources` | 60 / 300 / 900 s | error | Guest resource query failed. |
+| `proxmox.cluster.tasks.failed` | event | — | `operation=cluster_tasks` | 60 s | error | Task query failed. |
+| `proxmox.ha.failed` | event | — | `operation=ha` | 60 s | error | HA status query failed. |
+| `proxmox.storage.failed` | event | — | `operation=storage` | 300 / 900 s | error | Storage listing failed. |
+| `proxmox.backup.jobs.failed` | event | — | `operation=backup_jobs` | 900 s | error | Coverage and job configuration query failed. |
+| `proxmox.backup.content.failed` | event | — | `storage`, `operation=backup_content` | 900 s | error | One PBS storage backup listing failed. |
+| `proxmox.ceph.status.failed` | event | — | `operation=ceph_status` | 60 s | error | Unexpected Ceph status failure. |
+| `proxmox.ceph.pools.failed` | event | — | `operation=ceph_pools` | 60 s | error | Ceph pool query failed. |
+| `proxmox.task.failed` | event | — | optional `node`, `type`, `status` | 60 s, on first observation | error | Recent failed task; at most ten new task failures per cycle. |
+| `proxmox.backup.failed` | event | — | optional `node`, `type`, `status` | 60 s, on first observation | error | Recent failed vzdump task; at most ten new failures per cycle. |
 
-## Dimensions
+## Read-only API paths
 
-| Name | Example | Applies to | Meaning |
-|---|---|---|---|
-| `node` | `pve-01` | node, resource, and task signals | Proxmox node name. |
-| `type` | `qemu` | resources and tasks | Proxmox resource or task type. |
-| `status` | `running` | resource and task aggregates | Raw resource status or normalized task status class. |
-| `vmid` | `100` | guest signals | Proxmox VM or container ID. |
-| `guest` | `postgres` | backup coverage | Guest display name. |
-| `job` | `backup-01` | backup job states | Backup job ID. |
-| `pool` | `rbd` | Ceph pool signals | Ceph pool name. |
-| `state` | `active+clean` | Ceph PG metrics | Placement group state. |
-| `operation` | `cluster_resources` | failure events | Bounded collector operation that failed. |
+Commands use `pvesh get <path> --output-format json`; query parameters become CLI flags. Commands parse stdout only, capped at 64 MiB; larger output fails visibly. Command errors include at most 1 KiB of stderr. `[proxmox] timeout_seconds` defaults to 10; storage content lists use `list_timeout_seconds`, which defaults to 60 and must be positive. Both are bounded by `[runner] collector_timeout_seconds`; raise the collector timeout when a whole phase with several lists needs more time.
 
-UPIDs, user IDs, task IDs, timestamps, node IPs, and Ceph FSIDs are identity fields, attributes, or states rather than dimensions.
+- Every phase: `/cluster/status`.
+- Version: `/version`.
+- Elected health: `/cluster/resources`, `/cluster/ha/status/current`, `/cluster/tasks`, `/cluster/ceph/status`, `/nodes/<local>/ceph/pools` (last two only when Ceph API is enabled).
+- Capacity: `/nodes/<local>/storage` on every node; `/cluster/resources` only on the elected node.
+- Elected backups: `/cluster/resources`, `/cluster/backup`, `/nodes/<local>/storage`, and `/nodes/<local>/storage/<storage>/content?content=backup` for each active, enabled PBS storage.
 
-## Requirements
-
-- Runs on a Proxmox VE node.
-- Local `pvesh` access and sufficient permissions.
-
-## Failure behavior
-
-Missing `pvesh` emits `proxmox.available=false`. A standalone host does not emit a synthetic cluster resource. Missing or unconfigured Ceph emits `system.ceph.available=false` without follow-up failure events. Other failures remain scoped and do not stop host modules.
+Missing `pvesh` reports unavailable quietly. Missing or unconfigured Ceph reports unavailable quietly; other API, permission, timeout and JSON errors remain visible as events. No SSH or direct guest connection is used.
