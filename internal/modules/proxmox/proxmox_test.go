@@ -27,7 +27,7 @@ func TestPveshArgs(t *testing.T) {
 func TestCollectorEmitsVersionClusterAndResources(t *testing.T) {
 	runner := &fakeRunner{responses: map[string]string{
 		"get /version --output-format json":        `{"version":"9.0","release":"9.0-1","repoid":"abc"}`,
-		"get /cluster/status --output-format json": `[{"type":"cluster","name":"lab","quorate":1},{"type":"node","name":"pve1","online":1,"ip":"10.0.0.1"},{"type":"node","name":"pve2","online":0}]`,
+		"get /cluster/status --output-format json": `[{"type":"cluster","name":"lab","quorate":1},{"type":"node","name":"pve1","online":1,"local":1,"nodeid":1,"ip":"10.0.0.1"},{"type":"node","name":"pve2","online":0}]`,
 		"get /cluster/resources --output-format json": `[
 			{"id":"node/pve1","type":"node","node":"pve1","status":"online","cpu":0.25,"maxcpu":8,"mem":1024,"maxmem":4096,"disk":2048,"maxdisk":8192,"uptime":99},
 			{"id":"qemu/100","type":"qemu","node":"pve1","name":"vm-100","status":"running","cpu":0.5,"maxcpu":2,"mem":512,"maxmem":1024,"disk":100,"maxdisk":200,"uptime":10},
@@ -42,7 +42,10 @@ func TestCollectorEmitsVersionClusterAndResources(t *testing.T) {
 			{"id":"backup-daily","enabled":1,"schedule":"daily","storage":"pbs","mode":"snapshot"},
 			{"id":"backup-disabled","enabled":0,"schedule":"weekly","storage":"local"}
 		]`,
-		"get /cluster/backup-info/not-backed-up --output-format json": `[{"vmid":102,"name":"ct-102","type":"lxc","node":"pve1"}]`,
+
+		"get /cluster/ha/status/current --output-format json":                       `[{"type":"service","sid":"vm:100","status":"started"}]`,
+		"get /nodes/pve1/storage --output-format json":                              `[{"storage":"pbs","type":"pbs","shared":1,"enabled":1,"active":1,"used":10,"total":100,"avail":90}]`,
+		"get /nodes/pve1/storage/pbs/content --content backup --output-format json": `[{"vmid":100,"ctime":1700000000},{"vmid":100,"ctime":1700000300}]`,
 		"get /cluster/ceph/status --output-format json": `{
 				"fsid":"ceph-fsid-1",
 				"health":{"status":"HEALTH_OK"},
@@ -52,14 +55,14 @@ func TestCollectorEmitsVersionClusterAndResources(t *testing.T) {
 		"get /nodes/pve1/ceph/pools --output-format json": `[{"pool_name":"rbd","bytes_used":10,"max_avail":20,"objects":3}]`,
 	}}
 
-	batch, err := Collector{
+	batch, err := (&Collector{
 		PveshPath:     "pvesh",
 		Runner:        runner,
 		Timeout:       time.Second,
 		EnableCephAPI: true,
-	}.Collect(context.Background(), monitoring.Scope{
+	}).Collect(context.Background(), monitoring.Scope{
 		Resource:  pulse.ResourceRef{Type: "proxmox-node", ID: "pve"},
-		Timestamp: time.Unix(0, 0).UTC(),
+		Timestamp: time.Unix(1700001000, 0).UTC(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -73,26 +76,17 @@ func TestCollectorEmitsVersionClusterAndResources(t *testing.T) {
 	if countMetric(batch.Metrics, "proxmox.nodes.total") != 1 {
 		t.Fatalf("missing node metric: %#v", batch.Metrics)
 	}
-	if countMetric(batch.Metrics, "proxmox.resource.memory.usage") != 2 {
-		t.Fatalf("missing memory usage metrics: %#v", batch.Metrics)
+	if countMetricEntity(batch.Metrics, "proxmox.guest.memory.used", "proxmox-guest", "proxmox-guest:lab:100") != 1 {
+		t.Fatal("missing guest memory")
 	}
-	if countMetricEntity(batch.Metrics, "proxmox.resource.memory.usage", "proxmox-vm", "proxmox-vm:lab:100") != 1 {
-		t.Fatalf("missing vm-scoped memory usage metric: %#v", batch.Metrics)
+	if countMetric(batch.Metrics, "proxmox.node.cpu.usage") != 0 || countMetric(batch.Metrics, "proxmox.resource.memory.usage") != 0 {
+		t.Fatal("host metrics duplicated")
 	}
-	if countMetricEntity(batch.Metrics, "proxmox.resource.memory.usage", "proxmox-node", "proxmox-node:lab:pve1") != 1 {
-		t.Fatalf("missing node-scoped resource memory usage metric: %#v", batch.Metrics)
+	if countState(batch.States, "proxmox.node.online") != 1 {
+		t.Fatal("must only emit local node")
 	}
-	if hasMetricDimension(batch.Metrics, "proxmox.resource.memory.usage", "proxmox-node", "proxmox-node:lab:pve1", "vmid") {
-		t.Fatalf("node resource has vmid dimension: %#v", batch.Metrics)
-	}
-	if countStateEntity(batch.States, "proxmox.resource.present", "proxmox-container", "proxmox-container:lab:101") != 1 {
-		t.Fatalf("missing container-scoped present state: %#v", batch.States)
-	}
-	if countStateEntity(batch.States, "proxmox.node.online", "proxmox-node", "proxmox-node:lab:pve1") != 1 {
-		t.Fatalf("missing node-scoped online state: %#v", batch.States)
-	}
-	if countMetric(batch.Metrics, "proxmox.resources.by_type") != 3 {
-		t.Fatalf("missing type counts: %#v", batch.Metrics)
+	if countStateEntity(batch.States, "proxmox.guest.status", "proxmox-guest", "proxmox-guest:lab:101") != 1 {
+		t.Fatal("missing stopped guest")
 	}
 	if countMetric(batch.Metrics, "system.ceph.osds.total") != 1 {
 		t.Fatalf("missing ceph osd metric: %#v", batch.Metrics)
@@ -111,9 +105,6 @@ func TestCollectorEmitsVersionClusterAndResources(t *testing.T) {
 	}
 	if countMetric(batch.Metrics, "proxmox.backup.last_success.age") != 1 {
 		t.Fatalf("missing backup freshness metric: %#v", batch.Metrics)
-	}
-	if countMetric(batch.Metrics, "proxmox.backup.guests.not_backed_up") != 1 {
-		t.Fatalf("missing backup coverage metric: %#v", batch.Metrics)
 	}
 	if countEvent(batch.Events, "proxmox.backup.failed") != 1 {
 		t.Fatalf("missing backup failed event: %#v", batch.Events)
@@ -134,28 +125,31 @@ func TestCollectorEmitsVersionClusterAndResources(t *testing.T) {
 	if countStateEntity(batch.States, "proxmox.backup.job.enabled", "proxmox-backup-job", "proxmox-backup-job:lab:backup-daily") != 1 {
 		t.Fatalf("missing backup-job scoped enabled state: %#v", batch.States)
 	}
-	if countStateEntity(batch.States, "proxmox.backup.guest.covered", "proxmox-container", "proxmox-container:lab:102") != 1 {
+	if countStateEntity(batch.States, "proxmox.backup.guest.covered", "proxmox-guest", "proxmox-guest:lab:101") != 1 {
 		t.Fatalf("missing guest-scoped backup coverage state: %#v", batch.States)
 	}
 }
 
-func TestCollectorFallsBackForStandaloneNode(t *testing.T) {
+func TestCollectorStandaloneNode(t *testing.T) {
 	runner := &fakeRunner{responses: map[string]string{
-		"get /version --output-format json":                           `{"version":"9.0"}`,
-		"get /nodes --output-format json":                             `[{"node":"pve1","status":"online","cpu":0.2,"maxcpu":4,"mem":100,"maxmem":200,"disk":300,"maxdisk":600,"uptime":60}]`,
-		"get /cluster/resources --output-format json":                 `[]`,
-		"get /cluster/tasks --output-format json":                     `[]`,
-		"get /cluster/backup --output-format json":                    `[]`,
-		"get /cluster/backup-info/not-backed-up --output-format json": `[]`,
+		"get /version --output-format json":           `{"version":"9.0"}`,
+		"get /cluster/status --output-format json":    `[{"type":"node","name":"pve1","local":1,"online":1}]`,
+		"get /cluster/resources --output-format json": `[]`,
+		"get /cluster/tasks --output-format json":     `[]`,
+		"get /cluster/backup --output-format json":    `[]`,
+
+		"get /cluster/ha/status/current --output-format json":                       `[{"type":"service","sid":"vm:100","status":"started"}]`,
+		"get /nodes/pve1/storage --output-format json":                              `[{"storage":"pbs","type":"pbs","shared":1,"enabled":1,"active":1,"used":10,"total":100,"avail":90}]`,
+		"get /nodes/pve1/storage/pbs/content --content backup --output-format json": `[{"vmid":100,"ctime":1700000000},{"vmid":100,"ctime":1700000300}]`,
 	}}
 
-	batch, err := Collector{
+	batch, err := (&Collector{
 		PveshPath: "pvesh",
 		Runner:    runner,
 		Timeout:   time.Second,
-	}.Collect(context.Background(), monitoring.Scope{
+	}).Collect(context.Background(), monitoring.Scope{
 		Resource:  pulse.ResourceRef{Type: "proxmox-node", ID: "pve1"},
-		Timestamp: time.Unix(0, 0).UTC(),
+		Timestamp: time.Unix(1700001000, 0).UTC(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -163,13 +157,13 @@ func TestCollectorFallsBackForStandaloneNode(t *testing.T) {
 	if err := validation.Batch(batch); err != nil {
 		t.Fatal(err)
 	}
-	if countEvent(batch.Events, "proxmox.cluster.status.failed") != 1 {
+	if countEvent(batch.Events, "proxmox.cluster.status.failed") != 0 {
 		t.Fatalf("missing cluster fallback event: %#v", batch.Events)
 	}
 	if countState(batch.States, "proxmox.node.online") != 1 {
 		t.Fatalf("missing node state: %#v", batch.States)
 	}
-	if countMetric(batch.Metrics, "proxmox.node.memory.usage") != 1 {
+	if countMetric(batch.Metrics, "proxmox.node.memory.usage") != 0 {
 		t.Fatalf("missing node memory metric: %#v", batch.Metrics)
 	}
 	for _, state := range batch.States {
@@ -180,12 +174,12 @@ func TestCollectorFallsBackForStandaloneNode(t *testing.T) {
 }
 
 func TestCollectorGracefullyReportsMissingCommand(t *testing.T) {
-	batch, err := Collector{
+	batch, err := (&Collector{
 		PveshPath: "pulse-test-missing-pvesh",
 		Timeout:   time.Second,
-	}.Collect(context.Background(), monitoring.Scope{
+	}).Collect(context.Background(), monitoring.Scope{
 		Resource:  pulse.ResourceRef{Type: "proxmox-node", ID: "pve"},
-		Timestamp: time.Unix(0, 0).UTC(),
+		Timestamp: time.Unix(1700001000, 0).UTC(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -201,18 +195,18 @@ func TestCollectorGracefullyReportsMissingCommand(t *testing.T) {
 func TestCollectorGracefullyReportsMissingCephAPI(t *testing.T) {
 	runner := &fakeRunner{responses: map[string]string{
 		"get /version --output-format json":           `{"version":"9.0"}`,
-		"get /cluster/status --output-format json":    `[{"type":"cluster","name":"lab","quorate":1},{"type":"node","name":"pve1","online":1}]`,
+		"get /cluster/status --output-format json":    `[{"type":"cluster","name":"lab","quorate":1},{"type":"node","name":"pve1","online":1,"local":1,"nodeid":1}]`,
 		"get /cluster/resources --output-format json": `[]`,
 	}}
 
-	batch, err := Collector{
+	batch, err := (&Collector{
 		PveshPath:     "pvesh",
 		Runner:        runner,
 		Timeout:       time.Second,
 		EnableCephAPI: true,
-	}.Collect(context.Background(), monitoring.Scope{
+	}).Collect(context.Background(), monitoring.Scope{
 		Resource:  pulse.ResourceRef{Type: "proxmox-node", ID: "pve"},
-		Timestamp: time.Unix(0, 0).UTC(),
+		Timestamp: time.Unix(1700001000, 0).UTC(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -234,26 +228,29 @@ func TestCollectorGracefullyReportsMissingCephAPI(t *testing.T) {
 func TestCollectorQuietlyReportsUnavailableCephAPI(t *testing.T) {
 	runner := &fakeRunner{
 		responses: map[string]string{
-			"get /version --output-format json":                           `{"version":"9.0"}`,
-			"get /cluster/status --output-format json":                    `[{"type":"cluster","name":"lab","quorate":1},{"type":"node","name":"pve1","online":1}]`,
-			"get /cluster/resources --output-format json":                 `[]`,
-			"get /cluster/tasks --output-format json":                     `[]`,
-			"get /cluster/backup --output-format json":                    `[]`,
-			"get /cluster/backup-info/not-backed-up --output-format json": `[]`,
+			"get /version --output-format json":           `{"version":"9.0"}`,
+			"get /cluster/status --output-format json":    `[{"type":"cluster","name":"lab","quorate":1},{"type":"node","name":"pve1","online":1,"local":1,"nodeid":1}]`,
+			"get /cluster/resources --output-format json": `[]`,
+			"get /cluster/tasks --output-format json":     `[]`,
+			"get /cluster/backup --output-format json":    `[]`,
+
+			"get /cluster/ha/status/current --output-format json":                       `[{"type":"service","sid":"vm:100","status":"started"}]`,
+			"get /nodes/pve1/storage --output-format json":                              `[{"storage":"pbs","type":"pbs","shared":1,"enabled":1,"active":1,"used":10,"total":100,"avail":90}]`,
+			"get /nodes/pve1/storage/pbs/content --content backup --output-format json": `[{"vmid":100,"ctime":1700000000},{"vmid":100,"ctime":1700000300}]`,
 		},
 		errors: map[string]error{
 			"get /cluster/ceph/status --output-format json": fmt.Errorf("exit status 1: ceph is not configured"),
 		},
 	}
 
-	batch, err := Collector{
+	batch, err := (&Collector{
 		PveshPath:     "pvesh",
 		Runner:        runner,
 		Timeout:       time.Second,
 		EnableCephAPI: true,
-	}.Collect(context.Background(), monitoring.Scope{
+	}).Collect(context.Background(), monitoring.Scope{
 		Resource:  pulse.ResourceRef{Type: "proxmox-node", ID: "pve"},
-		Timestamp: time.Unix(0, 0).UTC(),
+		Timestamp: time.Unix(1700001000, 0).UTC(),
 	})
 	if err != nil {
 		t.Fatal(err)

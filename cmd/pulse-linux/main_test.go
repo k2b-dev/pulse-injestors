@@ -77,6 +77,12 @@ func TestCollectorCadences(t *testing.T) {
 		seen[c.Name()] = true
 	}
 	for name := range linuxCadences {
+		if name == "ceph" {
+			if seen[name] {
+				t.Fatal("Ceph enabled by default")
+			}
+			continue
+		}
 		if !seen[name] {
 			t.Fatalf("missing %s", name)
 		}
@@ -108,5 +114,19 @@ func TestLoadConfigValidatesCadenceNames(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestProxmoxAndPBSProfiles(t *testing.T) {
+	for profile, want := range map[string]int{"proxmox-node": 7, "pbs": 2} {
+		units := profileSystemdUnits(profile)
+		if len(units) != want {
+			t.Fatalf("%s: %v", profile, units)
+		}
+		for _, unit := range units {
+			if strings.Contains(unit, "*") {
+				t.Fatal("systemd module does not expand globs")
+			}
+		}
 	}
 }

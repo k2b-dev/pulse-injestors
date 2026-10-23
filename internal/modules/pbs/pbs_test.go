@@ -26,8 +26,12 @@ func TestDebugAPIArgs(t *testing.T) {
 
 func TestCollectorEmitsDatastoresJobsAndTasks(t *testing.T) {
 	runner := &fakeRunner{responses: map[string]string{
-		"api get /version --output-format json":                `{"version":"4.2","release":"4.2-1","repoid":"abc"}`,
-		"api get /status/datastore-usage --output-format json": `[{"store":"main","used":1000,"total":4000,"avail":3000,"estimated-full-date":2000000000}]`,
+		"api get /admin/datastore --output-format json":                              `[{"store":"main"}]`,
+		"api get /tape/backup --output-format json":                                  `[]`,
+		"api get /version --output-format json":                                      `{"version":"4.2","release":"4.2-1","repoid":"abc"}`,
+		"api get /status/datastore-usage --output-format json":                       `[{"store":"main","used":1000,"total":4000,"avail":3000,"estimated-full-date":2000000000}]`,
+		"api get /admin/datastore/main/namespace --max-depth 7 --output-format json": `[]`,
+		"api get /admin/datastore/main/groups --output-format json":                  `[{"backup-type": "vm", "backup-id": "100", "last-backup": 1700000000}, {"backup-type": "ct", "backup-id": "101", "last-backup": 1700000500}]`,
 		"api get /admin/datastore/main/snapshots --output-format json": `[
 			{"backup-type":"vm","backup-id":"100","backup-time":1700000000},
 			{"backup-type":"ct","backup-id":"101","backup-time":1700000500}
@@ -42,13 +46,13 @@ func TestCollectorEmitsDatastoresJobsAndTasks(t *testing.T) {
 		]`,
 	}}
 
-	batch, err := Collector{
+	batch, err := (&Collector{
 		CommandPath: "proxmox-backup-debug",
 		Runner:      runner,
 		Timeout:     time.Second,
-	}.Collect(context.Background(), monitoring.Scope{
+	}).Collect(context.Background(), monitoring.Scope{
 		Resource:  pulse.ResourceRef{Type: "proxmox-backup-server", ID: "pbs"},
-		Timestamp: time.Unix(0, 0).UTC(),
+		Timestamp: time.Unix(1700001000, 0).UTC(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +84,7 @@ func TestCollectorEmitsDatastoresJobsAndTasks(t *testing.T) {
 	if countEvent(batch.Events, "pbs.job.failed") != 1 {
 		t.Fatalf("missing job failure event: %#v", batch.Events)
 	}
-	if countState(batch.States, "pbs.job.enabled") != 4 {
+	if countState(batch.States, "pbs.job.enabled") != 3 {
 		t.Fatalf("missing job states: %#v", batch.States)
 	}
 	if countStateEntity(batch.States, "pbs.job.enabled", "pbs-job", "pbs-job:pbs:sync:sync-main") != 1 {
@@ -98,12 +102,12 @@ func TestCollectorEmitsDatastoresJobsAndTasks(t *testing.T) {
 }
 
 func TestCollectorGracefullyReportsMissingCommand(t *testing.T) {
-	batch, err := Collector{
+	batch, err := (&Collector{
 		CommandPath: "pulse-test-missing-proxmox-backup-debug",
 		Timeout:     time.Second,
-	}.Collect(context.Background(), monitoring.Scope{
+	}).Collect(context.Background(), monitoring.Scope{
 		Resource:  pulse.ResourceRef{Type: "proxmox-backup-server", ID: "pbs"},
-		Timestamp: time.Unix(0, 0).UTC(),
+		Timestamp: time.Unix(1700001000, 0).UTC(),
 	})
 	if err != nil {
 		t.Fatal(err)

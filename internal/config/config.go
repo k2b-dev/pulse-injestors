@@ -104,15 +104,17 @@ type MacOSConfig struct {
 }
 
 type ProxmoxConfig struct {
-	PveshPath       string `toml:"pvesh_path"`
-	TimeoutSeconds  int    `toml:"timeout_seconds"`
-	EnableCephAPI   *bool  `toml:"enable_ceph_api"`
-	EnableLocalCeph *bool  `toml:"enable_local_ceph"`
+	ListTimeoutSeconds int    `toml:"list_timeout_seconds"`
+	PveshPath          string `toml:"pvesh_path"`
+	TimeoutSeconds     int    `toml:"timeout_seconds"`
+	EnableCephAPI      *bool  `toml:"enable_ceph_api"`
+	EnableLocalCeph    *bool  `toml:"enable_local_ceph"`
 }
 
 type PBSConfig struct {
-	CommandPath    string `toml:"command_path"`
-	TimeoutSeconds int    `toml:"timeout_seconds"`
+	ListTimeoutSeconds int    `toml:"list_timeout_seconds"`
+	CommandPath        string `toml:"command_path"`
+	TimeoutSeconds     int    `toml:"timeout_seconds"`
 }
 
 type UptimeConfig struct {
@@ -207,6 +209,12 @@ func LoadFile(path string, explicit bool) (Config, error) {
 	}
 	if len(metadata.Undecoded()) > 0 {
 		return cfg, errors.New("configuration contains unknown fields")
+	}
+	if metadata.IsDefined("proxmox", "list_timeout_seconds") && cfg.Proxmox.ListTimeoutSeconds <= 0 {
+		return cfg, errors.New("proxmox list_timeout_seconds must be positive")
+	}
+	if metadata.IsDefined("pbs", "list_timeout_seconds") && cfg.PBS.ListTimeoutSeconds <= 0 {
+		return cfg, errors.New("pbs list_timeout_seconds must be positive")
 	}
 	return cfg, nil
 }
@@ -305,8 +313,14 @@ func Resolve(file Config, overlay Overlay) (Config, error) {
 	if cfg.Docker.RegistryTimeoutSeconds <= 0 {
 		return cfg, errors.New("docker registry_timeout_seconds must be positive")
 	}
+	if cfg.Proxmox.ListTimeoutSeconds <= 0 {
+		return cfg, errors.New("proxmox list_timeout_seconds must be positive")
+	}
 	if cfg.Proxmox.TimeoutSeconds <= 0 {
 		return cfg, errors.New("proxmox timeout_seconds must be positive")
+	}
+	if cfg.PBS.ListTimeoutSeconds <= 0 {
+		return cfg, errors.New("pbs list_timeout_seconds must be positive")
 	}
 	if cfg.PBS.TimeoutSeconds <= 0 {
 		return cfg, errors.New("pbs timeout_seconds must be positive")
@@ -444,7 +458,7 @@ func (c Config) ZfsEnabled() bool {
 }
 
 func (c Config) CephEnabled() bool {
-	return c.Host.EnableCeph == nil || *c.Host.EnableCeph
+	return c.Host.EnableCeph != nil && *c.Host.EnableCeph
 }
 
 func (c Config) ProxmoxCephAPIEnabled() bool {
@@ -532,12 +546,14 @@ func defaults() Config {
 			SystemProfilerTimeoutSeconds: 10,
 		},
 		Proxmox: ProxmoxConfig{
-			PveshPath:      "pvesh",
-			TimeoutSeconds: 10,
+			ListTimeoutSeconds: 60,
+			PveshPath:          "pvesh",
+			TimeoutSeconds:     10,
 		},
 		PBS: PBSConfig{
-			CommandPath:    "proxmox-backup-debug",
-			TimeoutSeconds: 10,
+			ListTimeoutSeconds: 60,
+			CommandPath:        "proxmox-backup-debug",
+			TimeoutSeconds:     10,
 		},
 		Uptime: UptimeConfig{
 			Concurrency:    4,
@@ -666,6 +682,9 @@ func merge(dst *Config, src Config) {
 	if src.Proxmox.PveshPath != "" {
 		dst.Proxmox.PveshPath = src.Proxmox.PveshPath
 	}
+	if src.Proxmox.ListTimeoutSeconds != 0 {
+		dst.Proxmox.ListTimeoutSeconds = src.Proxmox.ListTimeoutSeconds
+	}
 	if src.Proxmox.TimeoutSeconds != 0 {
 		dst.Proxmox.TimeoutSeconds = src.Proxmox.TimeoutSeconds
 	}
@@ -677,6 +696,9 @@ func merge(dst *Config, src Config) {
 	}
 	if src.PBS.CommandPath != "" {
 		dst.PBS.CommandPath = src.PBS.CommandPath
+	}
+	if src.PBS.ListTimeoutSeconds != 0 {
+		dst.PBS.ListTimeoutSeconds = src.PBS.ListTimeoutSeconds
 	}
 	if src.PBS.TimeoutSeconds != 0 {
 		dst.PBS.TimeoutSeconds = src.PBS.TimeoutSeconds

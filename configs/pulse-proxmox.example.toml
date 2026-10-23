@@ -1,3 +1,5 @@
+# Install pulse-linux separately on this host with [linux] profile = "proxmox-node".
+# Host CPU, RAM, disks, SMART, packages and services come from pulse-linux.
 [pulse]
 ingest_url = "https://pulse.example.com/api/pulse/ingest"
 # One line with the source token, mode 0600. Under systemd the service
@@ -8,14 +10,15 @@ spool_dir = "/var/lib/pulse/pulse-proxmox"
 spool_max_bytes = 67108864
 
 [resource]
-# Stable host id. Proxmox, Ceph, and host-resource resource IDs are derived from it.
+# Stable host ID. The API local-node flag identifies the PVE node.
 id = "pve-node-1"
 label = "pve-node-1"
-type = "host"
+type = "proxmox-node"
 
 [dimensions]
 environment = "production"
 
+# Health 60 s, guests/storage 300 s, backups 900 s, versions 86400 s.
 [runner]
 interval_seconds = 60
 collector_timeout_seconds = 60
@@ -25,24 +28,9 @@ timeout_seconds = 10
 max_retries = 3
 initial_backoff_ms = 500
 
-[host]
-proc_root = "/proc"
-sys_root = "/sys"
-root = "/"
-cpu_sample_ms = 250
-enable_thermal = true
-enable_btrfs = true
-enable_zfs = true
-enable_ceph = true
-
-[linux]
-profile = "proxmox"
-systemd_units = []
-package_timeout_seconds = 20
-disk_health_timeout_seconds = 20
-
 [proxmox]
 pvesh_path = "pvesh"
 timeout_seconds = 10
+# Backup content / namespace / group / snapshot lists. Must be positive.
+list_timeout_seconds = 60
 enable_ceph_api = true
-enable_local_ceph = true

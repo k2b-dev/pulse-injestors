@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"syscall"
@@ -32,20 +33,37 @@ func Output(ctx context.Context, limit int, name string, args ...string) ([]byte
 	}
 	cmd.WaitDelay = time.Second
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
-	stdout, stderr := &limitedBuffer{limit: limit}, &limitedBuffer{limit: 4096}
-	cmd.Stdout, cmd.Stderr = stdout, stderr
-	err := cmd.Run()
+	stderr := &limitedBuffer{limit: 4096}
+	cmd.Stderr = stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	defer stdout.Close()
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	// Read one extra byte to distinguish an exact-limit response from overflow.
+	out, readErr := io.ReadAll(io.LimitReader(stdout, int64(limit)+1))
+	overflow := len(out) > limit
+	if overflow || readErr != nil {
+		_ = cmd.Cancel()
+	}
+	err = cmd.Wait()
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	if stdout.overflow {
-		return nil, fmt.Errorf("%s output exceeds %d bytes", name, limit)
+	if overflow {
+		return nil, fmt.Errorf("%s stdout exceeds %d bytes", name, limit)
+	}
+	if readErr != nil {
+		return nil, readErr
 	}
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
 		exit.Stderr = stderr.buf.Bytes()
 	}
-	return stdout.buf.Bytes(), err
+	return out, err
 }
 
 type limitedBuffer struct {

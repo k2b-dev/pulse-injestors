@@ -183,7 +183,10 @@ func parseStatus(out []byte) (Status, error) {
 		} `json:"health"`
 		QuorumNames []string `json:"quorum_names"`
 		OSDMap      struct {
-			OSDMap struct {
+			NumOSDs   int `json:"num_osds"`
+			NumUpOSDs int `json:"num_up_osds"`
+			NumInOSDs int `json:"num_in_osds"`
+			OSDMap    struct {
 				NumOSDs   int `json:"num_osds"`
 				NumUpOSDs int `json:"num_up_osds"`
 				NumInOSDs int `json:"num_in_osds"`
@@ -215,6 +218,11 @@ func parseStatus(out []byte) (Status, error) {
 		BytesUsed:      raw.PGMap.BytesUsed,
 		BytesTotal:     raw.PGMap.BytesTotal,
 		BytesAvailable: raw.PGMap.BytesAvail,
+	}
+	if raw.OSDMap.NumOSDs > 0 {
+		status.OSDsTotal = raw.OSDMap.NumOSDs
+		status.OSDsUp = raw.OSDMap.NumUpOSDs
+		status.OSDsIn = raw.OSDMap.NumInOSDs
 	}
 	for _, row := range raw.PGMap.PGsByState {
 		if row.StateName != "" {

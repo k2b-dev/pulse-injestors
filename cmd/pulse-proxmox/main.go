@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -15,19 +14,8 @@ import (
 	"github.com/k2b-dev/pulse-injestors/internal/agent"
 	"github.com/k2b-dev/pulse-injestors/internal/config"
 	"github.com/k2b-dev/pulse-injestors/internal/entity"
-	"github.com/k2b-dev/pulse-injestors/internal/modules/btrfs"
-	"github.com/k2b-dev/pulse-injestors/internal/modules/ceph"
-	"github.com/k2b-dev/pulse-injestors/internal/modules/diskhealth"
-	"github.com/k2b-dev/pulse-injestors/internal/modules/filesystem"
-	"github.com/k2b-dev/pulse-injestors/internal/modules/linuxruntime"
-	"github.com/k2b-dev/pulse-injestors/internal/modules/network"
-	"github.com/k2b-dev/pulse-injestors/internal/modules/packages"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/proxmox"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/script"
-	"github.com/k2b-dev/pulse-injestors/internal/modules/system"
-	"github.com/k2b-dev/pulse-injestors/internal/modules/systemd"
-	"github.com/k2b-dev/pulse-injestors/internal/modules/thermal"
-	"github.com/k2b-dev/pulse-injestors/internal/modules/zfs"
 	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
 	"github.com/k2b-dev/pulse-injestors/internal/pulse"
 )
@@ -51,20 +39,9 @@ type cli struct {
 	MaxRetries              int    `name:"max-retries" help:"HTTP retry count for network, 408, 409, 429 and 5xx failures." env:"PULSE_HTTP_MAX_RETRIES"`
 	InitialBackoffMS        int    `name:"initial-backoff-ms" help:"Initial retry backoff in milliseconds." env:"PULSE_HTTP_INITIAL_BACKOFF_MS"`
 
-	ProcRoot    string `name:"proc-root" help:"procfs root to read." env:"PULSE_HOST_PROC_ROOT"`
-	SysRoot     string `name:"sys-root" help:"sysfs root to read." env:"PULSE_HOST_SYS_ROOT"`
-	HostRoot    string `name:"host-root" help:"Host root filesystem." env:"PULSE_HOST_ROOT"`
-	CPUSampleMS int    `name:"cpu-sample-ms" help:"CPU usage sample window in milliseconds." env:"PULSE_HOST_CPU_SAMPLE_MS"`
-
-	LinuxProfile             string `name:"linux-profile" help:"Linux monitoring profile: server, desktop, docker-host." env:"PULSE_LINUX_PROFILE"`
-	SystemdUnits             string `name:"systemd-units" help:"Comma-separated systemd units to monitor." env:"PULSE_LINUX_SYSTEMD_UNITS"`
-	PackageTimeoutSeconds    int    `name:"package-timeout-seconds" help:"Linux package update timeout in seconds." env:"PULSE_LINUX_PACKAGE_TIMEOUT_SECONDS"`
-	DiskHealthTimeoutSeconds int    `name:"disk-health-timeout-seconds" help:"SMART/NVMe disk health timeout in seconds." env:"PULSE_LINUX_DISK_HEALTH_TIMEOUT_SECONDS"`
-
-	ProxmoxPveshPath       string `name:"proxmox-pvesh-path" help:"Path to pvesh on the local Proxmox VE node." env:"PULSE_PROXMOX_PVESH_PATH"`
-	ProxmoxTimeoutSeconds  int    `name:"proxmox-timeout-seconds" help:"Proxmox local command timeout in seconds." env:"PULSE_PROXMOX_TIMEOUT_SECONDS"`
-	ProxmoxEnableCephAPI   *bool  `name:"proxmox-enable-ceph-api" help:"Collect Ceph data through local pvesh." env:"PULSE_PROXMOX_ENABLE_CEPH_API"`
-	ProxmoxEnableLocalCeph *bool  `name:"proxmox-enable-local-ceph" help:"Also collect local Ceph CLI metrics on this node." env:"PULSE_PROXMOX_ENABLE_LOCAL_CEPH"`
+	ProxmoxPveshPath      string `name:"proxmox-pvesh-path" help:"Path to pvesh on the local Proxmox VE node." env:"PULSE_PROXMOX_PVESH_PATH"`
+	ProxmoxTimeoutSeconds int    `name:"proxmox-timeout-seconds" help:"Proxmox local command timeout in seconds." env:"PULSE_PROXMOX_TIMEOUT_SECONDS"`
+	ProxmoxEnableCephAPI  *bool  `name:"proxmox-enable-ceph-api" help:"Collect Ceph data through local pvesh." env:"PULSE_PROXMOX_ENABLE_CEPH_API"`
 
 	Local   bool `name:"local" help:"Write collected Pulse batch JSON to stdout instead of sending it." env:"PULSE_LOCAL"`
 	Pretty  bool `name:"pretty" help:"With --local, print a human-readable report instead of JSON." env:"PULSE_LOCAL_PRETTY"`
@@ -154,33 +131,24 @@ func loadConfig(c cli) (config.Config, error) {
 		return config.Config{}, err
 	}
 	cfg, err := config.Resolve(fileCfg, config.Overlay{
-		SpoolDir:                      c.SpoolDir,
-		SpoolMaxBytes:                 c.SpoolMaxBytes,
-		ConfigPath:                    cfgPath,
-		IngestURL:                     c.IngestURL,
-		IngestToken:                   os.Getenv("PULSE_INGEST_TOKEN"),
-		IngestTokenFile:               c.IngestTokenFile,
-		ResourceID:                    c.ResourceID,
-		ResourceLabel:                 c.ResourceLabel,
-		Dimensions:                    dimensions,
-		TimeoutSeconds:                c.TimeoutSeconds,
-		MaxRetries:                    c.MaxRetries,
-		InitialBackoffMS:              c.InitialBackoffMS,
-		IntervalSeconds:               c.IntervalSeconds,
-		CollectorTimeoutSeconds:       c.CollectorTimeoutSeconds,
-		ProcRoot:                      c.ProcRoot,
-		SysRoot:                       c.SysRoot,
-		HostRoot:                      c.HostRoot,
-		CPUSampleMS:                   c.CPUSampleMS,
-		LinuxProfile:                  c.LinuxProfile,
-		LinuxSystemdUnits:             splitCSV(c.SystemdUnits),
-		LinuxPackageTimeoutSeconds:    c.PackageTimeoutSeconds,
-		LinuxDiskHealthTimeoutSeconds: c.DiskHealthTimeoutSeconds,
-		ProxmoxPveshPath:              c.ProxmoxPveshPath,
-		ProxmoxTimeoutSeconds:         c.ProxmoxTimeoutSeconds,
-		ProxmoxEnableCephAPI:          c.ProxmoxEnableCephAPI,
-		ProxmoxEnableLocalCeph:        c.ProxmoxEnableLocalCeph,
-		AllowMissingPulse:             c.Local,
+		SpoolDir:                c.SpoolDir,
+		SpoolMaxBytes:           c.SpoolMaxBytes,
+		ConfigPath:              cfgPath,
+		IngestURL:               c.IngestURL,
+		IngestToken:             os.Getenv("PULSE_INGEST_TOKEN"),
+		IngestTokenFile:         c.IngestTokenFile,
+		ResourceID:              c.ResourceID,
+		ResourceLabel:           c.ResourceLabel,
+		Dimensions:              dimensions,
+		TimeoutSeconds:          c.TimeoutSeconds,
+		MaxRetries:              c.MaxRetries,
+		InitialBackoffMS:        c.InitialBackoffMS,
+		IntervalSeconds:         c.IntervalSeconds,
+		CollectorTimeoutSeconds: c.CollectorTimeoutSeconds,
+		ProxmoxPveshPath:        c.ProxmoxPveshPath,
+		ProxmoxTimeoutSeconds:   c.ProxmoxTimeoutSeconds,
+		ProxmoxEnableCephAPI:    c.ProxmoxEnableCephAPI,
+		AllowMissingPulse:       c.Local,
 	})
 	if err != nil {
 		return config.Config{}, err
@@ -194,34 +162,10 @@ func loadConfig(c cli) (config.Config, error) {
 }
 
 func collectors(cfg config.Config) []monitoring.Collector {
-	out := []monitoring.Collector{
-		system.Collector{ProcRoot: cfg.Host.ProcRoot, CPUSampleTime: cfg.CPUSampleWindow()},
-		filesystem.Collector{ProcRoot: cfg.Host.ProcRoot, HostRoot: cfg.Host.Root},
-		network.Collector{ProcRoot: cfg.Host.ProcRoot},
-		linuxruntime.Collector{ProcRoot: cfg.Host.ProcRoot},
-		packages.Collector{Timeout: time.Duration(cfg.Linux.PackageTimeoutSeconds) * time.Second},
-		systemd.Collector{Units: linuxSystemdUnits(cfg), Timeout: 5 * time.Second},
-		diskhealth.Collector{Timeout: time.Duration(cfg.Linux.DiskHealthTimeoutSeconds) * time.Second},
-		monitoring.ScopedCollector{
-			Resource: pulse.ResourceRef{Type: "proxmox-node", ID: cfg.Resource.ID, Label: cfg.Resource.Label},
-			Collector: proxmox.Collector{
-				PveshPath:     cfg.Proxmox.PveshPath,
-				Timeout:       cfg.ProxmoxTimeout(),
-				EnableCephAPI: cfg.ProxmoxCephAPIEnabled(),
-			},
-		},
-	}
-	if cfg.ThermalEnabled() {
-		out = append(out, thermal.Collector{SysRoot: cfg.Host.SysRoot})
-	}
-	if cfg.BtrfsEnabled() {
-		out = append(out, btrfs.Collector{ProcRoot: cfg.Host.ProcRoot, HostRoot: cfg.Host.Root, Timeout: 5 * time.Second})
-	}
-	if cfg.ZfsEnabled() {
-		out = append(out, zfs.Collector{Timeout: 5 * time.Second})
-	}
-	if cfg.ProxmoxLocalCephEnabled() || cfg.CephEnabled() {
-		out = append(out, ceph.Collector{Timeout: 5 * time.Second})
+	parts := (proxmox.Collector{PveshPath: cfg.Proxmox.PveshPath, Timeout: cfg.ProxmoxTimeout(), ListTimeout: time.Duration(cfg.Proxmox.ListTimeoutSeconds) * time.Second, EnableCephAPI: cfg.ProxmoxCephAPIEnabled()}).Collectors()
+	out := make([]monitoring.Collector, 0, len(parts))
+	for _, part := range parts {
+		out = append(out, monitoring.ScopedCollector{Resource: pulse.ResourceRef{Type: "proxmox-node", ID: cfg.Resource.ID, Label: cfg.Resource.Label}, Collector: part})
 	}
 	if len(cfg.Scripts) > 0 {
 		scripts := make([]script.Script, 0, len(cfg.Scripts))
@@ -235,58 +179,6 @@ func collectors(cfg config.Config) []monitoring.Collector {
 			})
 		}
 		out = append(out, script.Collector{Scripts: scripts})
-	}
-	return out
-}
-
-func linuxSystemdUnits(cfg config.Config) []string {
-	return mergeStringLists(profileSystemdUnits(cfg.Linux.Profile), cfg.Linux.SystemdUnits)
-}
-
-func profileSystemdUnits(profile string) []string {
-	switch strings.TrimSpace(strings.ToLower(profile)) {
-	case "", "none":
-		return nil
-	case "server":
-		return []string{"ssh.service", "sshd.service"}
-	case "desktop":
-		return []string{"ssh.service", "sshd.service", "display-manager.service"}
-	case "docker-host":
-		return []string{"docker.service", "containerd.service", "ssh.service", "sshd.service"}
-	case "proxmox":
-		return []string{"pveproxy.service", "pvedaemon.service", "pvestatd.service", "pve-cluster.service", "corosync.service", "ssh.service", "sshd.service"}
-	default:
-		return nil
-	}
-}
-
-func mergeStringLists(values ...[]string) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, list := range values {
-		for _, value := range list {
-			value = strings.TrimSpace(value)
-			if value == "" || seen[value] {
-				continue
-			}
-			seen[value] = true
-			out = append(out, value)
-		}
-	}
-	return out
-}
-
-func splitCSV(value string) []string {
-	if value == "" {
-		return nil
-	}
-	parts := strings.Split(value, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			out = append(out, part)
-		}
 	}
 	return out
 }

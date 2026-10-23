@@ -39,9 +39,12 @@ cpu_sample_ms = 250
 enable_thermal = true
 enable_btrfs = true
 enable_zfs = true
-enable_ceph = true
+# Proxmox Ceph is collected once by the elected pulse-proxmox node.
+enable_ceph = false
 
 [linux]
+# Use "proxmox-node" on PVE or "pbs" on Proxmox Backup Server.
+# Add concrete ceph-mon@NAME.service / ceph-osd@ID.service units below; no globs.
 profile = "docker-host"
 systemd_units = ["ssh.service", "docker.service"]
 package_timeout_seconds = 20

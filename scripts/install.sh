@@ -24,6 +24,7 @@ Install, configure, verify, and start one native Pulse ingestor as a
 service. Docker uses the separate Compose deployment and is not supported here.
 
   --ingestor=NAME       auto, linux, macos, proxmox, pbs, or uptime
+                        For proxmox/pbs, install pulse-linux separately too.
   --scheduler=NAME      auto, systemd, cron, launchd, or none
                         (systemd and launchd run a supervised service; cron
                         runs one collection per interval without cadences)

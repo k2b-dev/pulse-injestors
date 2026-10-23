@@ -5,101 +5,104 @@ section: Modules
 order: 450
 description: Local Proxmox Backup Server collection through proxmox-backup-debug.
 tags: [pbs, modules, reference]
-updated: 2026-07-23
+updated: 2026-10-23
 ---
 
 # Proxmox Backup Server module
 
-The PBS module collects Proxmox Backup Server data locally through `proxmox-backup-debug`.
+`pulse-proxmox-backup-server` uses the local PBS 4 API through `proxmox-backup-debug`. Run **pulse-linux too**, with profile `pbs`, for host CPU, RAM, disks, SMART, packages and systemd.
 
-## Resources
+## Resources and cadence
 
-| Resource type | Resource key | Used for |
+| Resource | ID components | Meaning |
 |---|---|---|
-| `proxmox-backup-server` | `proxmox-backup-server:<host-id>` | PBS server availability, version, tasks, and aggregate datastore count. |
-| `pbs-datastore` | `pbs-datastore:<host-id>:<datastore>` | Per-datastore usage, estimated-full, snapshot count, and latest snapshot signals. |
-| `pbs-job` | `pbs-job:<host-id>:<kind>:<job>` | Job state, last-run, next-run, and job-failure signals. |
+| `proxmox-backup-server` | stable host ID | Version, availability, task and job totals. |
+| `pbs-datastore` | host + datastore | Capacity, snapshots, failed verification count and GC. |
+| `pbs-job` | host + kind + job | Sync, verify, prune or tape job. |
+| `pbs-backup-group` | host + datastore + type/id at root; host + datastore + namespace + type/id otherwise | Latest snapshot for vm/101, ct/203 or host/x; label is `group on datastore` at root or `group in namespace on datastore`. |
 
-`host:<host-id>` is used by Linux host modules in the `pulse-proxmox-backup-server` binary. The PBS module itself emits only the resource types above.
+Datastores run every 300 seconds, jobs and groups every 900 seconds, and versions every 86400 seconds. `once` runs all phases. States are sent on change and refreshed after six hours when checked again. All times use UTC; ages use the collection timestamp. User-configured dimensions apply in addition to those listed. API text in states and error attributes is limited to 500 Unicode characters.
 
-## Scope notes
+Namespaces are listed recursively for each datastore, including the root namespace even if the API omits it. Group age and time come from each namespace's `/groups` response (`last-backup`, Unix seconds). Root group IDs stay unchanged. Non-root groups add the namespace to their ID and expose a `namespace` dimension, so `k8s-1` and `k8s-1/volumes` remain distinct. At most 2,000 groups are emitted per host per collection across all datastores and namespaces, ordered by datastore, namespace and group name. `pbs.groups.truncated=true` means some groups are omitted. Snapshot and failed-verification counts sum the full snapshot lists across all namespaces per datastore, even when group output is capped. A failed namespace, group or snapshot query emits `pbs.datastore.snapshots.failed`; incomplete datastore totals are omitted. A missing group has no age signal: compare observed groups with the guests expected by your policy. Snapshot age shows freshness, while the failed-verification metric separately reports integrity failures.
 
-- Datastore usage and snapshot signals are emitted once per datastore on `pbs-datastore`.
-- Job signals are emitted once per job on `pbs-job`.
-- Task aggregate signals stay on `proxmox-backup-server`; individual recent tasks are reported as events on that server resource.
-- `pbs.datastore.snapshots.failed` is scoped to the datastore that failed.
+To check primary, second-copy and offsite freshness, compare the same group on each destination host/datastore. An S3-backed datastore is included when PBS exposes it through the same API. This collector does not query S3 directly or infer replication from a successful job alone.
 
 ## Metrics
 
-| Name | Type | Unit | Dimensions | Example | Meaning |
-|---|---|---:|---|---:|---|
-| `pbs.datastores.total` | gauge |  | — | `2` | Total datastore count on the local PBS host. |
-| `pbs.datastore.bytes.used` | gauge | bytes | `datastore` | `1099511627776` | Used bytes for one PBS datastore. Emitted on `pbs-datastore`. |
-| `pbs.datastore.bytes.total` | gauge | bytes | `datastore` | `4398046511104` | Total bytes for one PBS datastore. Emitted on `pbs-datastore`. |
-| `pbs.datastore.bytes.usage` | gauge | percent | `datastore` | `25` | Used percentage for one PBS datastore. Emitted on `pbs-datastore`. |
-| `pbs.datastore.bytes.available` | gauge | bytes | `datastore` | `3298534883328` | Available bytes for one PBS datastore. Emitted on `pbs-datastore`. |
-| `pbs.datastore.estimated_full.seconds_until` | gauge | seconds | `datastore` | `7776000` | Seconds until estimated full date. Emitted on `pbs-datastore`. |
-| `pbs.datastore.snapshots.total` | gauge |  | `datastore` | `180` | Snapshot count in one datastore. Emitted on `pbs-datastore`. |
-| `pbs.datastore.snapshots.by_type` | gauge |  | `datastore`, `type` | `120` | Snapshot count by backup type. Emitted on `pbs-datastore`. |
-| `pbs.datastore.snapshot.latest.age` | gauge | seconds | `datastore` | `3600` | Age of latest snapshot in one datastore. Emitted on `pbs-datastore`. |
-| `pbs.jobs.total` | gauge |  | `kind` | `3` | Job count for one kind. |
-| `pbs.jobs.enabled` | gauge |  | `kind` | `2` | Enabled job count for one kind. |
-| `pbs.job.last_run.age` | gauge | seconds | `kind`, `job`, `datastore` | `86400` | Age of a job's last run. |
-| `pbs.job.next_run.seconds_until` | gauge | seconds | `kind`, `job`, `datastore` | `43200` | Seconds until a job's next run. |
-| `pbs.tasks.recent` | gauge |  | — | `50` | Recent task count. |
-| `pbs.tasks.by_status` | gauge |  | `status` | `46` | Recent task count by status class. |
-| `pbs.tasks.by_type_status` | gauge |  | `type`, `status` | `12` | Recent task count by worker type and status class. |
+| Signal | Type | Unit | Dimensions | Cadence | Example | Meaning |
+|---|---|---|---|---|---|---|
+| `pbs.datastores.total` | gauge | — | — | 300 s | `2` | Total datastore count on the local PBS host. |
+| `pbs.datastore.bytes.used` | gauge | bytes | `datastore` | 300 s | `1099511627776` | Used bytes for one PBS datastore. Emitted on `pbs-datastore`. |
+| `pbs.datastore.bytes.total` | gauge | bytes | `datastore` | 300 s | `4398046511104` | Total bytes for one PBS datastore. Emitted on `pbs-datastore`. |
+| `pbs.datastore.bytes.usage` | gauge | percent | `datastore` | 300 s | `25` | Used percentage for one PBS datastore. Emitted on `pbs-datastore`. |
+| `pbs.datastore.bytes.available` | gauge | bytes | `datastore` | 300 s | `3298534883328` | Available bytes for one PBS datastore. Emitted on `pbs-datastore`. |
+| `pbs.datastore.estimated_full.seconds_until` | gauge | seconds | `datastore` | 300 s | `7776000` | Seconds until estimated full date. Emitted on `pbs-datastore`. |
+| `pbs.datastore.snapshots.total` | gauge | — | `datastore` | 900 s | `180` | Snapshot count in one datastore. Emitted on `pbs-datastore`. |
+| `pbs.datastore.snapshots.by_type` | gauge | — | `datastore`, `type` | 900 s | `120` | Snapshot count by backup type. Emitted on `pbs-datastore`. |
+| `pbs.datastore.snapshot.latest.age` | gauge | seconds | `datastore` | 900 s | `3600` | Age of latest snapshot in one datastore. Emitted on `pbs-datastore`. |
+| `pbs.jobs.total` | gauge | — | `kind` | 900 s | `3` | Job count for one kind. |
+| `pbs.jobs.enabled` | gauge | — | `kind` | 900 s | `2` | Enabled job count for one kind. |
+| `pbs.job.last_run.age` | gauge | seconds | `kind`, `job`, `datastore` | 900 s | `86400` | Age of a job's last run. |
+| `pbs.job.next_run.seconds_until` | gauge | seconds | `kind`, `job`, `datastore` | 900 s | `43200` | Seconds until a job's next run. |
+| `pbs.tasks.recent` | gauge | — | — | 900 s | `50` | Recent task count. |
+| `pbs.tasks.by_status` | gauge | — | `status` | 900 s | `46` | Recent task count by status class. |
+| `pbs.tasks.by_type_status` | gauge | — | `type`, `status` | 900 s | `12` | Recent task count by worker type and status class. |
+| `pbs.datastore.verify.failed_snapshots` | gauge | — | `datastore` | 900 s | 0 | Snapshots whose last verification state is failed; counts snapshots, not groups. |
+| `pbs.datastore.gc.last_run.age` | gauge | seconds | `datastore` | 900 s | 86400 | Age since the last completed GC run, regardless of success. |
+| `pbs.group.last_snapshot.age` | gauge | seconds | `datastore`, non-root `namespace` | 900 s | 3600 | Age of the newest snapshot in this backup group. |
 
 ## States
 
-| Key | Value type | Dimensions | Example | Meaning |
-|---|---|---|---|---|
-| `pbs.available` | boolean | — | `true` | Whether local PBS version collection succeeded. |
-| `pbs.version` | string | — | `3.2.2` | PBS version. |
-| `pbs.release` | string | — | `3.2` | PBS release. |
-| `pbs.repoid` | string | — | `abcd1234` | PBS repository id. |
-| `pbs.datastore.present` | boolean | `datastore` | `true` | Datastore exists. Emitted on `pbs-datastore`. |
-| `pbs.datastore.estimated_full.time` | string | `datastore` | `2026-09-01T00:00:00Z` | Estimated full timestamp. Emitted on `pbs-datastore`. |
-| `pbs.datastore.snapshot.latest.time` | string | `datastore` | `2026-06-11T00:00:00Z` | Latest snapshot timestamp. Emitted on `pbs-datastore`. |
-| `pbs.job.present` | boolean | `kind`, `job`, `datastore` | `true` | Job exists. |
-| `pbs.job.enabled` | boolean | `kind`, `job`, `datastore` | `true` | Job is enabled. |
-| `pbs.job.schedule` | string | `kind`, `job`, `datastore` | `daily` | Job schedule. |
-| `pbs.job.last_run.state` | string | `kind`, `job`, `datastore` | `OK` | Raw last-run state. |
-| `pbs.job.last_run.time` | string | `kind`, `job`, `datastore` | `2026-06-11T00:00:00Z` | Last-run end time. |
-| `pbs.job.next_run.time` | string | `kind`, `job`, `datastore` | `2026-06-12T00:00:00Z` | Next run time. |
+| Signal | Type | Unit | Dimensions | Cadence | Example | Meaning |
+|---|---|---|---|---|---|---|
+| `pbs.available` | state boolean | — | — | 300 s; also 86400 s | `true` | Whether the latest datastore-usage or version query succeeded. A command setup failure also sets false. |
+| `pbs.version` | state string | — | — | 86400 s | `4.0` | PBS version. |
+| `pbs.release` | state string | — | — | 86400 s | `4.0` | PBS release. |
+| `pbs.repoid` | state string | — | — | 86400 s | `abcd1234` | PBS repository id. |
+| `pbs.datastore.present` | state boolean | — | `datastore` | 300 s | `true` | Datastore exists. Emitted on `pbs-datastore`. |
+| `pbs.datastore.estimated_full.time` | state string | — | `datastore` | 300 s | `2026-09-01T00:00:00Z` | Estimated full timestamp. Emitted on `pbs-datastore`. |
+| `pbs.datastore.snapshot.latest.time` | state string | — | `datastore` | 900 s | `2026-06-11T00:00:00Z` | Latest snapshot timestamp. Emitted on `pbs-datastore`. |
+| `pbs.job.present` | state boolean | — | `kind`, `job`, `datastore` | 900 s | `true` | Job exists. |
+| `pbs.job.enabled` | state boolean | — | `kind`, `job`, `datastore` | 900 s | `true` | Job is enabled. |
+| `pbs.job.schedule` | state string | — | `kind`, `job`, `datastore` | 900 s | `daily` | Job schedule. |
+| `pbs.job.last_run.state` | state string | — | `kind`, `job`, `datastore` | 900 s | `OK` | Raw last-run state, limited to 500 characters. |
+| `pbs.job.last_run.result` | state string | — | `kind`, `job`, `datastore` | 900 s | `warnings` | Normalized result: ok, warnings, error or unknown. |
+| `pbs.job.last_run.time` | state string | — | `kind`, `job`, `datastore` | 900 s | `2026-06-11T00:00:00Z` | Last-run end time. |
+| `pbs.job.next_run.time` | state string | — | `kind`, `job`, `datastore` | 900 s | `2026-06-12T00:00:00Z` | Next run time. |
+| `pbs.groups.truncated` | state boolean | — | — | 900 s | false | More than 2,000 groups found across this host; later groups omitted. |
+| `pbs.group.last_snapshot.time` | state string | — | `datastore`, non-root `namespace` | 900 s | 2026-10-23T10:00:00Z | UTC timestamp of the newest snapshot in the group. |
+| `pbs.datastore.gc.last_run.state` | state string | — | `datastore` | 900 s | OK | Raw last GC result, limited to 500 characters; empty when no result is available. |
+| `pbs.datastore.gc.last_run.result` | state string | — | `datastore` | 900 s | ok | Normalized GC result: ok, warnings, error or unknown. |
+| `pbs.datastore.gc.last_run.time` | state string | — | `datastore` | 900 s | 2026-10-23T00:00:00Z | Last GC completion time; empty if not available. |
+
+Result states classify `OK` as `ok`, `WARNINGS: n` as `warnings`, an empty result as `unknown`, and other non-empty text as `error`. Only `error` produces job failure events; warnings remain visible through the result state. The existing `.state` retains the raw text, limited to 500 characters.
+
+Job `kind` is sync, verify, prune or tape. GC is reported on its datastore. Job age and next-run metrics are omitted when the API has no timestamp. A negative seconds-until value means the scheduled time has passed. Estimated-full is emitted only when PBS provides a prediction; it is not a guaranteed exhaustion date.
 
 ## Events
 
-| Kind | Dimensions | Attributes | Identities | Trigger |
-|---|---|---|---|---|
-| `pbs.config.failed` | `operation=configure` | `error` | | Invalid local command configuration. |
-| `pbs.version.failed` | `operation=version` | `error` | | Version query failed. |
-| `pbs.datastore.usage.failed` | `operation=datastore_usage` | `error` | | Datastore usage query failed. |
-| `pbs.datastore.snapshots.failed` | `datastore`, `operation=snapshots` | `error` | | Snapshot query failed for one datastore. |
-| `pbs.job.list.failed` | `kind`, `operation=job_list` | `error` | | Job list failed for one job kind. |
-| `pbs.job.failed` | `kind`, `job`, optional `datastore`, `status=error` | `state` | | Job last-run state is not `OK`/`ok`. |
-| `pbs.tasks.failed` | `operation=tasks` | `error` | | Recent task query failed. |
-| `pbs.task.failed` | optional `node`, `type`, `status` | `status`, `workerId`, `startTime`, `endTime` | `actorId=user`, `correlationId=UPID` | Recent task status class is `error`. |
+All events have no unit. Command failures carry `attributes.error`. Job failures carry the truncated raw `state` and use `last-run-upid` as `correlationId`. They are emitted once per UPID while it remains in the job results. Task failures are emitted once per UPID while present in the recent task list, with at most ten new failures per cycle after de-duplication. Seen sets are pruned after successful list reads. A restart or a result that leaves and re-enters the lists can repeat an event. Task events carry optional `status`, `workerId`, `startTime`, `endTime`, with the user in `actorId` and UPID in `correlationId`.
 
-## Dimensions
+| Signal | Type | Unit | Dimensions | Cadence | Example | Meaning |
+|---|---|---|---|---|---|---|
+| `pbs.config.failed` | event | — | `operation=configure` | each due phase | error | Invalid command configuration. |
+| `pbs.version.failed` | event | — | `operation=version` | 86400 s | error | Version query failed. |
+| `pbs.datastore.usage.failed` | event | — | optional `datastore`, `operation=datastore_usage` | 300 s | error | Capacity query failed, or PBS returned an error for this datastore; no capacity values are emitted for it. |
+| `pbs.datastore.list.failed` | event | — | `operation=datastore_list` | 900 s | error | Datastore discovery failed. |
+| `pbs.datastore.snapshots.failed` | event | — | `datastore`, `operation=snapshots` | 900 s | error | Namespace, group or snapshot listing failed for this datastore. |
+| `pbs.job.list.failed` | event | — | `kind`, `operation=job_list` | 900 s | error | One job-kind query failed. |
+| `pbs.job.failed` | event | — | `kind`, `job`, optional `datastore`, `status=error` | 900 s | error | A completed job has an error result; warnings do not emit failure events. |
+| `pbs.tasks.failed` | event | — | `operation=tasks` | 900 s | error | Task listing failed. |
+| `pbs.task.failed` | event | — | optional `node`, `type`, `status` | 900 s | error | Recent task has an error status; at most ten events per collection. |
 
-| Name | Example | Applies to | Meaning |
-|---|---|---|---|
-| `datastore` | `main` | datastore and job signals | PBS datastore name. |
-| `kind` | `sync` | job signals | PBS job kind: `gc`, `prune`, `sync`, or `verify`. |
-| `job` | `sync-main` | job signals | Job id. |
-| `node` | `localhost` | task events | PBS task node. |
-| `type` | `backup` | task aggregate metrics and events | PBS worker type. |
-| `status` | `ok` | task aggregate metrics | Normalized task status class. |
-| `operation` | `datastore_usage` | failure events | Bounded collector operation that failed. |
+Missing `proxmox-backup-debug` reports `pbs.available=false` quietly; query, permission, timeout and parsing failures produce scoped events without stopping the other phases.
 
-Worker IDs, UPIDs, users, and timestamps are attributes or first-class identity fields rather than dimensions.
+## Read-only API paths
 
-## Requirements
+Commands use `proxmox-backup-debug api get <path> --output-format json`; query parameters become flags, including `--ns` for non-root namespaces. Commands parse stdout only, capped at 64 MiB; larger output fails visibly. Command errors include at most 1 KiB of stderr. `[pbs] timeout_seconds` defaults to 10; namespace, group and snapshot lists use `list_timeout_seconds`, which defaults to 60 and must be positive. Both are bounded by `[runner] collector_timeout_seconds`; raise the collector timeout when a whole phase with several lists needs more time.
 
-- Runs on a Proxmox Backup Server host.
-- `proxmox-backup-debug` and local permissions.
-
-## Failure behavior
-
-Missing `proxmox-backup-debug` emits `pbs.available=false`. Unavailable local API data emits availability states or scoped failure events without stopping host modules.
+- Version: `/version`.
+- Capacity: `/status/datastore-usage`.
+- Groups and verification: `/admin/datastore`, then `/admin/datastore/<store>/namespace?max-depth=7`, then `/admin/datastore/<store>/groups` and `/admin/datastore/<store>/snapshots` for every namespace (`?ns=<namespace>` for non-root; omitted at root) for every datastore.
+- Jobs: `/admin/gc`, `/admin/prune`, `/admin/sync`, `/admin/verify`, `/tape/backup` (an empty list means no tape jobs).
+- Tasks, in the jobs phase: `/nodes/localhost/tasks?limit=50`.

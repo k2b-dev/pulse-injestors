@@ -1,9 +1,12 @@
 package main
 
 import (
+	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadConfigPreservesExplicitResourceID(t *testing.T) {
@@ -20,5 +23,21 @@ func TestLoadConfigPreservesExplicitResourceID(t *testing.T) {
 	}
 	if cfg.Resource.Type != "host" {
 		t.Fatalf("resource type = %q", cfg.Resource.Type)
+	}
+}
+
+func TestSpecializedCollectors(t *testing.T) {
+	cfg, err := loadConfig(cli{Local: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := collectors(cfg)
+	if len(got) != 4 {
+		t.Fatalf("unexpected collectors: %v", got)
+	}
+	for i, want := range []time.Duration{60 * time.Second, 300 * time.Second, 900 * time.Second, 24 * time.Hour} {
+		if got[i].(monitoring.Cadenced).Cadence() != want || !strings.HasPrefix(got[i].Name(), "proxmox.") {
+			t.Fatal(got[i])
+		}
 	}
 }

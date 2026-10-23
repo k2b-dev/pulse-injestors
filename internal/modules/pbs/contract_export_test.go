@@ -16,8 +16,12 @@ import (
 // TestPulseContractExport exercises mocked collection even without the external contract harness.
 func TestPulseContractExport(t *testing.T) {
 	runner := &fakeRunner{responses: map[string]string{
-		"api get /version --output-format json":                `{"version":"4.2","release":"4.2-1","repoid":"abc"}`,
-		"api get /status/datastore-usage --output-format json": `[{"store":"main","used":1000,"total":4000,"avail":3000,"estimated-full-date":2000000000}]`,
+		"api get /admin/datastore --output-format json":                              `[{"store":"main"}]`,
+		"api get /tape/backup --output-format json":                                  `[]`,
+		"api get /version --output-format json":                                      `{"version":"4.2","release":"4.2-1","repoid":"abc"}`,
+		"api get /status/datastore-usage --output-format json":                       `[{"store":"main","used":1000,"total":4000,"avail":3000,"estimated-full-date":2000000000}]`,
+		"api get /admin/datastore/main/namespace --max-depth 7 --output-format json": `[]`,
+		"api get /admin/datastore/main/groups --output-format json":                  `[{"backup-type": "vm", "backup-id": "100", "last-backup": 1700000000}, {"backup-type": "ct", "backup-id": "101", "last-backup": 1700000500}]`,
 		"api get /admin/datastore/main/snapshots --output-format json": `[
 			{"backup-type":"vm","backup-id":"100","backup-time":1700000000},
 			{"backup-type":"ct","backup-id":"101","backup-time":1700000500}
@@ -32,11 +36,11 @@ func TestPulseContractExport(t *testing.T) {
 		]`,
 	}}
 
-	batch, err := Collector{
+	batch, err := (&Collector{
 		CommandPath: "proxmox-backup-debug",
 		Runner:      runner,
 		Timeout:     time.Second,
-	}.Collect(context.Background(), monitoring.Scope{
+	}).Collect(context.Background(), monitoring.Scope{
 		Resource:  pulse.ResourceRef{Type: "proxmox-backup-server", ID: "pbs"},
 		Timestamp: time.Unix(1700001000, 0).UTC(),
 	})

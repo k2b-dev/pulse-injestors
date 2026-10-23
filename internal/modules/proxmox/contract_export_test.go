@@ -17,7 +17,7 @@ import (
 func TestPulseContractExport(t *testing.T) {
 	runner := &fakeRunner{responses: map[string]string{
 		"get /version --output-format json":        `{"version":"9.0","release":"9.0-1","repoid":"abc"}`,
-		"get /cluster/status --output-format json": `[{"type":"cluster","name":"lab","quorate":1},{"type":"node","name":"pve1","online":1,"ip":"10.0.0.1"},{"type":"node","name":"pve2","online":0}]`,
+		"get /cluster/status --output-format json": `[{"type":"cluster","name":"lab","quorate":1},{"type":"node","name":"pve1","online":1,"local":1,"nodeid":1,"ip":"10.0.0.1"},{"type":"node","name":"pve2","online":0}]`,
 		"get /cluster/resources --output-format json": `[
 			{"id":"node/pve1","type":"node","node":"pve1","status":"online","cpu":0.25,"maxcpu":8,"mem":1024,"maxmem":4096,"disk":2048,"maxdisk":8192,"uptime":99},
 			{"id":"qemu/100","type":"qemu","node":"pve1","name":"vm-100","status":"running","cpu":0.5,"maxcpu":2,"mem":512,"maxmem":1024,"disk":100,"maxdisk":200,"uptime":10},
@@ -32,7 +32,10 @@ func TestPulseContractExport(t *testing.T) {
 			{"id":"backup-daily","enabled":1,"schedule":"daily","storage":"pbs","mode":"snapshot"},
 			{"id":"backup-disabled","enabled":0,"schedule":"weekly","storage":"local"}
 		]`,
-		"get /cluster/backup-info/not-backed-up --output-format json": `[{"vmid":102,"name":"ct-102","type":"lxc","node":"pve1"}]`,
+
+		"get /cluster/ha/status/current --output-format json":                       `[{"type":"service","sid":"vm:100","status":"started"}]`,
+		"get /nodes/pve1/storage --output-format json":                              `[{"storage":"pbs","type":"pbs","shared":1,"enabled":1,"active":1,"used":10,"total":100,"avail":90}]`,
+		"get /nodes/pve1/storage/pbs/content --content backup --output-format json": `[{"vmid":100,"ctime":1700000000},{"vmid":100,"ctime":1700000300}]`,
 		"get /cluster/ceph/status --output-format json": `{
 				"fsid":"ceph-fsid-1",
 				"health":{"status":"HEALTH_OK"},
@@ -42,12 +45,12 @@ func TestPulseContractExport(t *testing.T) {
 		"get /nodes/pve1/ceph/pools --output-format json": `[{"pool_name":"rbd","bytes_used":10,"max_avail":20,"objects":3}]`,
 	}}
 
-	batch, err := Collector{
+	batch, err := (&Collector{
 		PveshPath:     "pvesh",
 		Runner:        runner,
 		Timeout:       time.Second,
 		EnableCephAPI: true,
-	}.Collect(context.Background(), monitoring.Scope{
+	}).Collect(context.Background(), monitoring.Scope{
 		Resource:  pulse.ResourceRef{Type: "proxmox-node", ID: "pve"},
 		Timestamp: time.Unix(1700001000, 0).UTC(),
 	})

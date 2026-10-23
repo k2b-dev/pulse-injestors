@@ -61,7 +61,7 @@ type cli struct {
 	HostRoot    string `name:"host-root" help:"Host root filesystem." env:"PULSE_HOST_ROOT"`
 	CPUSampleMS int    `name:"cpu-sample-ms" help:"CPU usage sample window in milliseconds." env:"PULSE_HOST_CPU_SAMPLE_MS"`
 
-	LinuxProfile             string `name:"linux-profile" help:"Linux monitoring profile: server, desktop, docker-host." env:"PULSE_LINUX_PROFILE"`
+	LinuxProfile             string `name:"linux-profile" help:"Linux monitoring profile: server, desktop, docker-host, proxmox-node, pbs." env:"PULSE_LINUX_PROFILE"`
 	SystemdUnits             string `name:"systemd-units" help:"Comma-separated systemd units to monitor." env:"PULSE_LINUX_SYSTEMD_UNITS"`
 	PackageTimeoutSeconds    int    `name:"package-timeout-seconds" help:"Linux package update timeout in seconds." env:"PULSE_LINUX_PACKAGE_TIMEOUT_SECONDS"`
 	DiskHealthTimeoutSeconds int    `name:"disk-health-timeout-seconds" help:"SMART/NVMe disk health timeout in seconds." env:"PULSE_LINUX_DISK_HEALTH_TIMEOUT_SECONDS"`
@@ -264,6 +264,10 @@ func profileSystemdUnits(profile string) []string {
 		return []string{"ssh.service", "sshd.service"}
 	case "desktop":
 		return []string{"ssh.service", "sshd.service", "display-manager.service"}
+	case "proxmox-node":
+		return []string{"pve-cluster.service", "corosync.service", "pvedaemon.service", "pveproxy.service", "pvestatd.service", "pve-ha-lrm.service", "pve-ha-crm.service"}
+	case "pbs":
+		return []string{"proxmox-backup.service", "proxmox-backup-proxy.service"}
 	case "docker-host":
 		return []string{"docker.service", "containerd.service", "ssh.service", "sshd.service"}
 	default:
