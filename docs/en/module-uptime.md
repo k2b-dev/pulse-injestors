@@ -3,89 +3,93 @@ title: Uptime module
 navTitle: Uptime
 section: Modules
 order: 470
-description: ICMP, DNS, TCP, HTTP, and TLS availability signals for named endpoints.
+description: Endpoint availability, expected ports and DNS records, TLS expiry, and mail IP blocklists.
 tags: [uptime, internet, modules, reference]
-updated: 2026-07-23
+updated: 2026-10-23
 ---
 
 # Uptime module
 
-The uptime module checks a bounded list of named endpoints from one probe. Target failures remain normal telemetry so one unavailable endpoint does not break the other checks.
+Each target reports `uptime.check.result`: `ok`, `failed` (a confirmed finding), or `error` (the check could not complete). Alert on both `failed` and `error`. An error never contributes a successful sample to availability.
 
-## Resource types
+## Resources and scheduling
 
-| Resource type | Resource key | Label | Used for |
+| Resource type | Resource key | Label | Meaning |
 |---|---|---|---|
-| `uptime-probe` | `uptime-probe:<probe-id>` | Configured probe label | Shared runner health for one installation. |
-| `uptime-endpoint` | `uptime-endpoint:<probe-id>:<target-id>` | Configured target label | Metrics and states for one logical endpoint. |
+| `uptime-probe` | `uptime-probe:<probe-id>` | Probe label | Collector health and heartbeat. |
+| `uptime-endpoint` | `uptime-endpoint:<probe-id>:<target-id>` | Target label | One configured check. Its identity survives address changes. |
 
-Changing a target address does not change the endpoint resource. Changing its configured `id` creates a different resource.
+| Kind | Default cadence | Target | Success condition |
+|---|---|---|---|
+| `icmp` | 60 seconds | IP in `address` | One system ping succeeds. |
+| `dns` | 60 seconds | Hostname in `address` | System resolver returns at least one address. |
+| `tcp` | 60 seconds | `host:port` in `address` | Connection succeeds. |
+| `http` | 60 seconds | URL in `address` | Exact `expected_status`, or any 200–399 response when unset. |
+| `ports` | 86400 seconds | Host or bracketed IPv6 in `address` | Every expected port is open and every other scanned port is closed or filtered. |
+| `dns_records` | 3600 seconds | DNS `name` and `records` | Every record set or TXT substring matches. |
+| `tls` | 3600 seconds | `host:port` in `address` | Chain and hostname verify; expiry is at least `warn_days` away. |
+| `dnsbl` | 3600 seconds | IPv4 in `address`, zones in `lists` | Each reference query works and the IP is absent from every list. |
+
+Set `cadence_seconds` on any target to override its cadence. `run` checks due targets on the runner interval; `once` checks every target. Keep the runner interval at 60 seconds for minute checks. States are sent on change and refreshed after six hours when their checks next run.
 
 ## Metrics
 
-Every metric below is emitted on one `uptime-endpoint` resource.
+All metrics belong to an `uptime-endpoint`. Dimensions `probe`, `endpoint`, and `check_type` are present throughout; DNSBL also emits per-list success samples with a `list` dimension, alongside the overall target sample without `list`.
 
 | Name | Type | Unit | Dimensions | Example | Meaning |
-|---|---|---:|---|---:|---|
-| `uptime.check.availability` | gauge |  | `probe`, `endpoint`, `check_type` | `1` | Check result: `1` for success and `0` for failure. Not emitted when the probe could not perform the check, such as a missing `ping` command. |
-| `uptime.check.duration` | gauge | milliseconds | `probe`, `endpoint`, `check_type` | `24.7` | Wall-clock duration for one completed or timed-out check. |
-| `uptime.dns.address_count` | gauge |  | `probe`, `endpoint`, `check_type=dns` | `2` | Number of IP addresses returned by one DNS lookup. |
-| `uptime.tls.certificate.expires_in` | gauge | seconds | `probe`, `endpoint`, `check_type=http` | `2592000` | Seconds until the leaf TLS certificate expires for the final HTTPS response. |
+|---|---|---|---|---|---|
+| `uptime.check.success` | gauge | — | base, optional `list` | `1` | 1 for `ok`, 0 for `failed`; absent for `error`. |
+| `uptime.check.duration` | gauge | milliseconds | base | `24.7` | Elapsed target check time, including errors. |
+| `uptime.dns.address_count` | gauge | — | base, `check_type=dns` | `2` | Addresses in a completed lookup. |
+| `uptime.ports.open` | gauge | — | base, `check_type=ports` | `2` | Open ports in a completed scan; absent on scan errors. |
+| `uptime.ports.filtered` | gauge | — | base, `check_type=ports` | `9980` | Ports whose TCP connections timed out in a completed scan; absent on scan errors. |
+| `uptime.tls.certificate.expires_in` | gauge | seconds | base, `check_type=http` or `tls` | `2592000` | Leaf certificate lifetime; negative after expiry. Use a Pulse threshold alert for advance warning. |
 
-Average `uptime.check.availability` over time to calculate an uptime ratio. Group by resource to keep one series per configured target.
+Average `uptime.check.success` by resource for the fraction of completed checks that succeeded. Monitor `uptime.check.result=error` separately; missing samples are not proof of availability. For DNSBL, filter on the desired `list` or select the overall sample without that dimension.
 
 ## States
 
-Every state below is emitted on one `uptime-endpoint` resource.
-
 | Key | Value type | Dimensions | Example | Meaning |
 |---|---|---|---|---|
-| `uptime.check.measured` | boolean | `probe`, `endpoint`, `check_type` | `true` | Whether the probe could perform this check. |
-| `uptime.check.success` | boolean | `probe`, `endpoint`, `check_type` | `true` | Current result. Read together with `uptime.check.measured`. |
-| `uptime.check.type` | string | `probe`, `endpoint`, `check_type` | `http` | Configured check type. |
-| `uptime.check.target` | string | `probe`, `endpoint`, `check_type` | `https://pulse.example.com/health` | Current configured IP, hostname, host and port, or URL. |
-| `uptime.check.error` | string | `probe`, `endpoint`, `check_type` | `timeout` | Stable diagnostic message for the current result. Empty after a successful check. |
-| `uptime.dns.addresses` | string | `probe`, `endpoint`, `check_type=dns` | `192.0.2.10, 2001:db8::10` | Sorted addresses from the current DNS result. Empty after a failed lookup. |
-| `uptime.http.status_code` | integer | `probe`, `endpoint`, `check_type=http` | `204` | Current HTTP status code, or `0` when no response was received. |
-| `uptime.http.final_url` | string | `probe`, `endpoint`, `check_type=http` | `https://example.com/health` | Final URL after redirects. Empty when no response was received. |
-| `uptime.http.protocol` | string | `probe`, `endpoint`, `check_type=http` | `HTTP/2.0` | HTTP protocol used by the current response. Empty when no response was received. |
-| `uptime.tls.server_name` | string | `probe`, `endpoint`, `check_type=http` | `example.com` | Common name from the current leaf TLS certificate. Empty without a TLS response. |
-| `uptime.tls.issuer` | string | `probe`, `endpoint`, `check_type=http` | `Example CA` | Common name of the current leaf certificate issuer. Empty without a TLS response. |
-| `uptime.tls.expires_at` | string | `probe`, `endpoint`, `check_type=http` | `2026-09-01T00:00:00Z` | UTC expiry timestamp of the current leaf TLS certificate. Empty without a TLS response. |
+| `uptime.check.result` | string | base, optional `list` | `error` | `ok`, `failed`, or `error`. |
+| `uptime.check.message` | string | base, optional `list` | `DNSBL reference check failed` | Reason, at most 500 characters; empty after success. |
+| `uptime.check.type` | string | base | `dns_records` | Configured kind. |
+| `uptime.check.target` | string | base | `example.com` | Address or DNS name being checked. |
+| `uptime.ports.unexpected` | string | base, ports | `25,8080` | Unexpected open ports, sorted comma list, at most 500 characters. |
+| `uptime.ports.missing` | string | base, ports | `443` | Expected ports that are closed or filtered, sorted comma list, at most 500 characters. |
+| `uptime.dnsbl.listed` | boolean | base, `list` | `true` | Listing finding from a completed list check. Read with that list's result; no new boolean is emitted on error. |
+| `uptime.dns.addresses` | string | base, dns | `192.0.2.10, 2001:db8::10` | Sorted addresses; empty after failure. |
+| `uptime.http.status_code` | integer | base, http | `204` | Response code, or 0 without a response. |
+| `uptime.http.final_url` | string | base, http | `https://example.com/health` | URL after redirects; empty without a response. |
+| `uptime.http.protocol` | string | base, http | `HTTP/2.0` | Response protocol; empty without a response. |
+| `uptime.tls.server_name` | string | base, http or tls | `example.com` | SNI/verification name for TLS checks; certificate common name for HTTP. |
+| `uptime.tls.issuer` | string | base, http or tls | `Example CA` | Leaf certificate issuer common name; empty without a certificate. |
+| `uptime.tls.expires_at` | string | base, http or tls | `2026-12-01T00:00:00Z` | Leaf expiry in UTC; empty without a certificate. |
 
-DNS and HTTP states are overwritten with empty values or status `0` after a failed result so stale response details do not remain current. The shared runner also emits `ingestor.collector.ok` on the `uptime-probe` resource.
+`base` means `probe`, `endpoint`, `check_type`, plus configured global dimensions. `list` is the configured DNSBL zone. Addresses and diagnostic messages remain state values rather than dimensions.
 
-## Events
+## Check behavior and failures
 
-The module does not emit events for target failures. A failed endpoint can occur every interval and is represented by availability metrics and current states instead of repeated historical events.
+**Ports:** `range` defaults to `1-10000`, inclusive; `expected` ports must fall inside it. Each scan uses at most 64 concurrent connections, a two-second connect timeout, and a total `timeout_seconds` budget of 900 seconds by default. Override the target's `timeout_seconds` to change that budget. A successful TCP connection means open, a refusal means closed, and a connect timeout means filtered. Closed and filtered ports count as not open. An unexpected open port or an expected port that is closed or filtered makes the result `failed`; the latter appears in `uptime.ports.missing`.
 
-The shared runner emits `ingestor.collector.failed` only when the complete uptime collector cannot run, such as an empty target list.
+Resolution or routing errors and a budget exhausted before the whole range is checked make the result `error`. A scan with zero open ports and zero refusals also returns `error`: it cannot distinguish a host that is down from one with every port filtered. Nonempty partial findings update the port lists, but an error never clears a previous finding with an empty list. Read the lists with the result state; only a completed scan without a scan error confirms that an empty list is current. Open-count, filtered-count, and success gauges are absent on scan errors. A hostname must resolve to exactly one address; use separate IP targets for hosts with multiple addresses. Both IPv4 and bracketed IPv6 are supported.
 
-## Dimensions
+**DNS records:** `records` supports A, AAAA, MX, NS, TXT, and CNAME. `expect` compares sets, ignoring ordering and duplicates. IP addresses use canonical form; DNS names ignore case and trailing dots. MX values use `priority hostname`. TXT values retain case and punctuation; `contains` accepts a substring in any returned TXT value and cannot be combined with `expect`. Split SPF and DMARC names into separate targets. Missing answers, NXDOMAIN, SERVFAIL, REFUSED, malformed replies, and timeouts are `error`; a returned set that differs is `failed`.
 
-| Name | Example | Applies to | Meaning |
-|---|---|---|---|
-| `probe` | `office-berlin` | all uptime signals | Stable configured ID of the machine or location performing checks. |
-| `endpoint` | `pulse-api` | all endpoint signals | Stable configured target ID. |
-| `check_type` | `http` | all endpoint signals | One of `icmp`, `dns`, `tcp`, or `http`. |
-| Global dimensions | `site=berlin` | all signals | Bounded deployment labels configured under `[dimensions]`. |
+**Resolvers:** `dns_records` and `dnsbl` accept `resolver = "ip:port"`, including `[IPv6]:port`. When omitted, they use nameservers from `/etc/resolv.conf`, querying the full configured name without search suffixes. UDP replies truncated by the server are retried over TCP. Use an explicit resolver for split DNS or DNSBL services that restrict public recursive resolvers.
 
-Addresses, URLs, DNS results, certificate names, and errors are states rather than dimensions. This avoids unstable or high-cardinality query labels.
+**TLS:** The connection uses SNI from the address hostname, or optional `server_name`. The certificate chain and hostname are verified against system roots, or the certificates in `ca_file`. Verification failure and expiry below `warn_days` (default 14) are `failed`; connection/handshake timeouts, a missing certificate, and an unreadable CA file are `error`. A refused connection is `failed`. Certificate expiry and issuer are retained for verification failures. TLS checks send no application data.
 
-## Check behavior
+**DNSBL:** Before querying the reversed target IPv4, each list must answer `2.0.0.127.<list>` with only `127.0.0.x` addresses. A failed reference query makes that list `error`. After a working reference, target NXDOMAIN is `ok`; a `127.0.0.x` listing is `failed`; empty replies, other address ranges, resolver failures, and timeouts are `error`. The overall target is `error` if any list could not be checked, otherwise `failed` if any lists report a listing. Individual results retain confirmed findings.
 
-| Type | Address format | Success condition | Additional output |
-|---|---|---|---|
-| `icmp` | IP address, for example `1.1.1.1` | One system `ping` succeeds before the timeout | No protocol-specific signals |
-| `dns` | Hostname, for example `example.com` | The system resolver returns at least one address | Address count and current addresses |
-| `tcp` | `host:port`, for example `database.example.com:5432` | A TCP connection is established before the timeout | No protocol-specific signals |
-| `http` | HTTP or HTTPS URL | Exact `expected_status`, or any `200`–`399` status when unset | Status, final URL, protocol, and TLS certificate data |
+**Existing checks:** HTTP uses GET, reads at most 64 KiB, and follows at most three redirects. Status mismatches, refused TCP/HTTP connections, and ping exit code 1 are `failed`. Missing/broken ping execution, DNS errors or empty answers, request/read errors, and timeouts are `error`. A failed target does not suppress other targets.
 
-HTTP checks use `GET`, read at most 64 KiB of the body, and follow at most three redirects.
+The module emits no events for target findings. The runner emits `ingestor.collector.ok` and `ingestor.collector.failed` for collector failures. [Uptime ingestor](/en/ingestor-uptime) explains source heartbeat monitoring and provides complete configurations.
 
-## Failure behavior
+## Signal migration
 
-- A refused connection, lookup error, HTTP error, status mismatch, failed ping, or timeout emits `availability=0`, `measured=true`, and a concise error state.
-- A missing or locally unusable `ping` command emits `measured=false` and does not emit an availability metric for that target.
-- One failed target does not stop or suppress other targets.
-- Invalid target IDs, address formats, kinds, status codes, duplicate IDs, and negative timeouts are rejected before collection.
+- Metric `uptime.check.availability` becomes `uptime.check.success` (gauge, 1/0).
+- Boolean states `uptime.check.measured` and `uptime.check.success` are replaced by `uptime.check.result`.
+- State `uptime.check.error` becomes `uptime.check.message`.
+- Collector dimensions change from `collector=uptime` to `collector=uptime-60s`, `uptime-3600s`, or `uptime-86400s` (custom cadences use their seconds). Update collector-health queries accordingly.
+- `uptime.check.duration` and existing DNS, HTTP, and TLS signal names remain unchanged. HTTP and standalone TLS share one expiry metric definition.

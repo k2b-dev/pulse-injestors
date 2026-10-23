@@ -190,7 +190,7 @@ func (a *agent) serve(ctx context.Context) error {
 	watchdogDone := make(chan struct{})
 	go func() {
 		defer close(watchdogDone)
-		watchdogLoop(ctx, os.Getenv("WATCHDOG_USEC"), interval, a.opt.Runner.LongestCollectTimeout(), &lastCompleted)
+		watchdogLoop(ctx, os.Getenv("WATCHDOG_USEC"), interval, a.opt.Runner.MaxCycleTimeout(), &lastCompleted)
 	}()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

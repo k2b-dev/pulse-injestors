@@ -84,3 +84,61 @@ address = "192.0.2.1"
 		t.Fatal("expected built-in target conflict")
 	}
 }
+
+func TestConfiguredScriptChecksAndCadences(t *testing.T) {
+	cfg, err := loadConfig(cli{Config: "../../configs/pulse-uptime.example.toml", Local: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets, err := configuredTargets(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]bool{}
+	for _, target := range targets {
+		found[target.Kind] = true
+		switch target.Kind {
+		case "ports":
+			if target.Timeout.Seconds() != 900 || target.Cadence.Seconds() != 86400 || len(target.Expected) != 2 {
+				t.Fatalf("ports=%+v", target)
+			}
+		case "dns_records":
+			if len(target.Records) == 0 || target.Name == "" || target.Resolver == "" {
+				t.Fatalf("records=%+v", target)
+			}
+		case "tls":
+			if target.WarnDays != 14 {
+				t.Fatal(target)
+			}
+		case "dnsbl":
+			if len(target.Lists) != 4 {
+				t.Fatal(target)
+			}
+		}
+	}
+	for _, kind := range []string{"icmp", "dns", "tcp", "http", "ports", "dns_records", "tls", "dnsbl"} {
+		if !found[kind] {
+			t.Fatal(kind)
+		}
+	}
+	for _, seconds := range []int{0, 17} {
+		for i := range cfg.Uptime.Targets {
+			if cfg.Uptime.Targets[i].Kind == "ports" {
+				cfg.Uptime.Targets[i].TimeoutSeconds = seconds
+			}
+		}
+		targets, err := configuredTargets(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := seconds
+		if want == 0 {
+			want = 900
+		}
+		for _, target := range targets {
+			if target.Kind == "ports" && target.Timeout.Seconds() != float64(want) {
+				t.Fatalf("ports budget=%v want %d seconds", target.Timeout, want)
+			}
+		}
+	}
+}

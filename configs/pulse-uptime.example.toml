@@ -42,3 +42,69 @@ timeout_seconds = 5
 # label = "PostgreSQL"
 # kind = "tcp"
 # address = "database.internal:5432"
+
+# Public port inventory: every port in the range is checked.
+# Connect timeouts are filtered (not open); expected filtered ports are missing.
+# No open ports and no refusals means error: host down or everything filtered.
+[[uptime.target]]
+id = "public-ports"
+label = "Public server ports"
+kind = "ports"
+address = "192.0.2.10" # IPv6: "[2001:db8::10]"
+expected = [22, 443]
+range = "1-10000"
+cadence_seconds = 86400
+timeout_seconds = 900 # Total scan budget; default 900 s.
+
+[[uptime.target]]
+id = "domain-records"
+label = "Domain DNS records"
+kind = "dns_records"
+name = "example.com"
+# Omit resolver to use /etc/resolv.conf nameservers.
+resolver = "192.0.2.53:53"
+cadence_seconds = 3600
+timeout_seconds = 30
+records = [
+  { type = "A", expect = ["192.0.2.10"] },
+  { type = "AAAA", expect = ["2001:db8::10"] },
+  { type = "MX", expect = ["10 mail.example.com."] },
+  { type = "NS", expect = ["ns1.example.com.", "ns2.example.com."] },
+  { type = "TXT", contains = "v=spf1" },
+]
+
+[[uptime.target]]
+id = "dmarc"
+label = "DMARC policy"
+kind = "dns_records"
+name = "_dmarc.example.com"
+resolver = "192.0.2.53:53"
+records = [{ type = "TXT", contains = "v=DMARC1; p=reject" }]
+
+[[uptime.target]]
+id = "public-certificate"
+label = "Public HTTPS certificate"
+kind = "tls"
+address = "example.com:443"
+warn_days = 14
+cadence_seconds = 3600
+# For an IP address or a private CA:
+# server_name = "example.com"
+# ca_file = "/etc/pulse/private-ca.pem"
+
+[[uptime.target]]
+id = "mail-blocklists"
+label = "Mail IP blocklists"
+kind = "dnsbl"
+address = "192.0.2.25"
+resolver = "192.0.2.53:53"
+lists = ["bl.spamcop.net", "b.barracudacentral.org", "dnsbl-1.uceprotect.net", "psbl.surriel.com"]
+cadence_seconds = 3600
+timeout_seconds = 30
+
+[[uptime.target]]
+id = "office-printer"
+label = "Office printer"
+kind = "icmp"
+address = "192.0.2.50"
+cadence_seconds = 60

@@ -116,7 +116,7 @@ func TestEmitImageInspectUsesImageResourceEntity(t *testing.T) {
 		ID:           "sha256:abcdef1234567890",
 		Architecture: "arm64",
 		OS:           "linux",
-	})
+	}, scope.Timestamp)
 	batch := b.Batch()
 	state := findState(batch.States, "docker.image.arch")
 	if state == nil {
@@ -133,128 +133,6 @@ func TestEmitImageInspectUsesImageResourceEntity(t *testing.T) {
 	}
 	if state.Dimensions["repository"] != "ghcr.io/example/api" || state.Dimensions["tag"] != "latest" {
 		t.Fatalf("image reference dims = %v", state.Dimensions)
-	}
-}
-
-func TestEmitMountsUsesContainerResourceWithMountDimensions(t *testing.T) {
-	scope := monitoring.Scope{
-		Resource:   pulse.ResourceRef{Type: "host", ID: "server-01"},
-		Dimensions: map[string]string{"collector": "docker"},
-		Timestamp:  time.Unix(0, 0).UTC(),
-	}
-	container := containerSummary{
-		ID:    "1234567890abcdef",
-		Names: []string{"/pulse-db-1"},
-		Labels: map[string]string{
-			"com.docker.compose.project":          "pulse",
-			"com.docker.compose.service":          "db",
-			"com.docker.compose.container-number": "1",
-		},
-	}
-	mount := dockerMount{Type: "volume", Name: "pulse_db", Destination: "/var/lib/postgresql/data", Driver: "local", RW: true}
-	b := monitoring.NewBuilder(containerScope(scope, "server-01", container))
-	emitMounts(b, container, containerDims(container), "/", []dockerMount{mount})
-	batch := b.Batch()
-	state := findState(batch.States, "docker.container.mount.rw")
-	if state == nil {
-		t.Fatalf("missing mount state: %#v", batch.States)
-	}
-	if state.Resource.Type != "docker-container" || state.Resource.Key() != "docker-container:server-01:compose:pulse:db:1" {
-		t.Fatalf("mount state entity = %s %s", state.Resource.Type, state.Resource.Key())
-	}
-	if state.Dimensions["mount_destination"] != "/var/lib/postgresql/data" || state.Dimensions["volume"] != "pulse_db" {
-		t.Fatalf("mount dims = %v", state.Dimensions)
-	}
-	if _, ok := state.Dimensions["container_id"]; ok {
-		t.Fatalf("mount dims contain runtime container id: %v", state.Dimensions)
-	}
-	if state.Resource == nil || state.Resource.Label != "pulse-db-1" {
-		t.Fatalf("mount resource = %#v", state.Resource)
-	}
-}
-
-func TestEmitNetworksUsesContainerResourceWithNetworkDimensions(t *testing.T) {
-	scope := monitoring.Scope{
-		Resource:   pulse.ResourceRef{Type: "host", ID: "server-01"},
-		Dimensions: map[string]string{"collector": "docker"},
-		Timestamp:  time.Unix(0, 0).UTC(),
-	}
-	container := containerSummary{ID: "1234567890abcdef", Names: []string{"/api"}}
-	var inspect inspectResponse
-	inspect.NetworkSettings.Networks = map[string]struct {
-		NetworkID   string   `json:"NetworkID"`
-		EndpointID  string   `json:"EndpointID"`
-		Gateway     string   `json:"Gateway"`
-		IPAddress   string   `json:"IPAddress"`
-		IPPrefixLen int      `json:"IPPrefixLen"`
-		MacAddress  string   `json:"MacAddress"`
-		Aliases     []string `json:"Aliases"`
-	}{
-		"pulse_default": {
-			NetworkID:   "network-1",
-			EndpointID:  "endpoint-1",
-			IPAddress:   "172.18.0.5",
-			IPPrefixLen: 16,
-		},
-	}
-	b := monitoring.NewBuilder(containerScope(scope, "server-01", container))
-	emitNetworks(b, container, inspect)
-	batch := b.Batch()
-	state := findState(batch.States, "docker.container.network.connected")
-	if state == nil {
-		t.Fatalf("missing network state: %#v", batch.States)
-	}
-	if state.Resource.Type != "docker-container" || state.Resource.Key() != "docker-container:server-01:name:api" {
-		t.Fatalf("network state entity = %s %s", state.Resource.Type, state.Resource.Key())
-	}
-	if state.Dimensions["network"] != "pulse_default" {
-		t.Fatalf("network dims = %v", state.Dimensions)
-	}
-	if state.Resource == nil || state.Resource.Label != "api" {
-		t.Fatalf("network resource = %#v", state.Resource)
-	}
-}
-
-func TestEmitContainerSummaryUsesResourceEntities(t *testing.T) {
-	scope := monitoring.Scope{
-		Resource:  pulse.ResourceRef{Type: "host", ID: "server-01"},
-		Timestamp: time.Unix(0, 0).UTC(),
-	}
-	batch := pulse.Batch{}
-	emitContainerSummary(&batch, scope, "server-01", []containerSummary{
-		{
-			ID:    "1234567890abcdef",
-			State: "running",
-			Labels: map[string]string{
-				"com.docker.compose.project": "pulse",
-				"com.docker.compose.service": "api",
-			},
-		},
-		{
-			ID:    "abcdef1234567890",
-			State: "exited",
-			Labels: map[string]string{
-				"com.docker.compose.project": "pulse",
-				"com.docker.compose.service": "api",
-			},
-		},
-	})
-
-	if countMetricEntity(batch.Metrics, "docker.compose.project.containers", "docker-compose-project", "docker-compose-project:server-01:pulse") != 1 {
-		t.Fatalf("missing project metric: %#v", batch.Metrics)
-	}
-	if countMetricEntity(batch.Metrics, "docker.compose.service.containers", "docker-compose-service", "docker-compose-service:server-01:pulse:api") != 1 {
-		t.Fatalf("missing service count metric: %#v", batch.Metrics)
-	}
-	if countMetricEntity(batch.Metrics, "docker.compose.service.containers.running", "docker-compose-service", "docker-compose-service:server-01:pulse:api") != 1 {
-		t.Fatalf("missing service running metric: %#v", batch.Metrics)
-	}
-	if countStateEntity(batch.States, "docker.compose.service.present", "docker-compose-service", "docker-compose-service:server-01:pulse:api") != 1 {
-		t.Fatalf("missing service state: %#v", batch.States)
-	}
-	state := findState(batch.States, "docker.compose.service.present")
-	if state == nil || state.Resource == nil || state.Resource.Label != "pulse/api" {
-		t.Fatalf("service label = %#v", state)
 	}
 }
 
@@ -425,24 +303,4 @@ func findState(states []pulse.State, key string) *pulse.State {
 		}
 	}
 	return nil
-}
-
-func TestComposeSummaryDoesNotAggregateCumulativeCounters(t *testing.T) {
-	scope := monitoring.Scope{Resource: pulse.ResourceRef{Type: "host", ID: "server"}}
-	b := monitoring.NewBuilder(containerScope(scope, "server", containerSummary{Names: []string{"/api"}}))
-	dims := map[string]string{"compose_project": "app", "compose_service": "api"}
-	for _, name := range []string{"network.rx", "network.tx", "blockio.read", "blockio.write"} {
-		b.Metric("docker.container."+name, "counter", 10, "bytes", dims)
-	}
-	b.Metric("docker.container.memory.used", "gauge", 20, "bytes", dims)
-	batch := b.Batch()
-	emitComposeUsageSummary(&batch, scope, "server")
-	if len(batch.Metrics) != 6 {
-		t.Fatalf("unexpected aggregate count: %d", len(batch.Metrics))
-	}
-	for _, metric := range batch.Metrics {
-		if metric.Resource.Type == "docker-compose-service" && metric.Type != "gauge" {
-			t.Fatalf("unsafe aggregate: %#v", metric)
-		}
-	}
 }

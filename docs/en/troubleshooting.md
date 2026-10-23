@@ -128,7 +128,7 @@ On Docker Desktop, Linux host metrics describe the Docker virtual machine. Insta
 
 ## ICMP checks are not measured
 
-`pulse-uptime` uses the system `ping` command. When it is missing or cannot run locally, the endpoint reports `uptime.check.measured=false` and a matching error state. No downtime metric is emitted for that target.
+`pulse-uptime` uses the system `ping` command. When it is missing or cannot run locally, the endpoint reports `uptime.check.result=error` and a matching error state. No downtime metric is emitted for that target.
 
 Install the platform ping package or disable the default targets and configure DNS, TCP, or HTTP checks instead. Other uptime targets continue without ICMP support.
 
@@ -140,4 +140,4 @@ Check the target-specific states in Pulse or run:
 sudo pulse-uptime --config /etc/pulse/pulse-uptime.toml --local --pretty once
 ```
 
-`uptime.check.error` distinguishes timeouts, DNS failures, refused TCP connections, HTTP request failures, and unexpected status codes. A single failed provider does not imply that every internet path is unavailable; compare the ICMP, DNS, TCP, and HTTP targets.
+`uptime.check.message` distinguishes timeouts, DNS failures, refused TCP connections, HTTP request failures, and unexpected status codes. A single failed provider does not imply that every internet path is unavailable; compare the ICMP, DNS, TCP, and HTTP targets.

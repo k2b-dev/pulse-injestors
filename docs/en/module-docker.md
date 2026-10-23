@@ -3,254 +3,282 @@ title: Docker module
 navTitle: Docker
 section: Modules
 order: 310
-description: Resources, dimensions, and collected signals for Docker Engine monitoring.
+description: Resources, cadences, dimensions, and signals for Docker Engine monitoring.
 tags: [docker, modules, reference]
-updated: 2026-07-23
+updated: 2026-10-23
 ---
 
 # Docker module
 
-The Docker module collects daemon, container, Compose, image, network attachment, and mount data through the Docker Engine API.
+The Docker module monitors container lifecycle, health, restarts, and resource use through the local Docker Engine socket. Compose resources show running and total container counts. Image inventory covers images referenced by existing containers, including stopped containers.
+
+## Cadences and volume
+
+| Data | Cadence | Scope |
+|---|---|---|
+| Daemon availability and running/total counts | 60 seconds | One daemon |
+| Container status, health, image reference, and restarts | 60 seconds | Every container, including stopped containers |
+| Compose running/total counts | 60 seconds | Every discovered project and service |
+| CPU, memory, network, and block I/O | 300 seconds | Running containers |
+| Daemon version and image inventory | 24 hours | Daemon and images in use |
+| Optional registry checks | 24 hours | Checkable image references in use |
+
+`run` uses these cadences with the runner interval as its scheduling resolution. Keep `runner.interval_seconds = 60` for minute-level status. A longer runner interval delays checks. `once` runs every phase.
+
+States are sent only when their values change and refreshed after six hours when next collected. Daily inventory states refresh on their next daily collection. The status state uses Docker's lifecycle value, such as `running` or `exited`; it excludes elapsed text such as `Up 12 minutes`.
+
+For 70 running containers, the regular metrics contribute 70 restart values plus two daemon counts each minute, and 490 resource-use values every five minutes: **170 metric values/minute** on average. Changed states, six-hour refreshes, daily inventory, failures, and ingestor self-monitoring add values. The fake-socket regression includes 70 Compose services and cold-start inventory and checks a Docker-only average below 400 values/minute. This is a fixture result, not a live-host measurement.
+
+Stats use bounded concurrency (`docker.concurrency`, default `4`). Each container request has a timeout (`docker.container_timeout_seconds`, default `10`). The whole stats phase has an independent budget (`docker.stats_timeout_seconds`, default `120`), so it can exceed a shorter `runner.collector_timeout_seconds`. The runner collects status before slower phases; a slow stats phase can still delay the next cycle. A timed-out phase waits until its next cadence; other phase failures retry on the next runner tick.
 
 ## Resources
 
 | Resource type | Resource key | Label | Scope |
 |---|---|---|---|
-| `docker-daemon` | `docker-daemon:<host>` | `Docker on server-01` | One Docker daemon. |
-| `docker-container` | `docker-container:<host>:compose:<project>:<service>:<number>` | Docker name, for example `app-core` | One logical container across image updates and recreates. |
-| `docker-compose-project` | `docker-compose-project:<host>:<project>` | Compose project name | One Compose project. |
-| `docker-compose-service` | `docker-compose-service:<host>:<project>:<service>` | `<project>/<service>` | One logical Compose service. |
-| `docker-image` | `docker-image:<host>:<repository>:<tag>` | `repository:tag` | One image reference used by a collected container. |
+| `docker-daemon` | `docker-daemon:<host>` | `Docker on server-01` | One Docker daemon |
+| `docker-container` | `docker-container:<host>:compose:<project>:<service>:<number>` | Docker container name | One logical Compose replica |
+| `docker-compose-project` | `docker-compose-project:<host>:<project>` | Project name | One Compose project |
+| `docker-compose-service` | `docker-compose-service:<host>:<project>:<service>` | `<project>/<service>` | One Compose service |
+| `docker-image` | `docker-image:<host>:<repository>:<tag>` | Image reference | One image reference in use |
 
-Compose container identity uses project, service, and container number. Non-Compose identity uses the Docker container name. The runtime container ID is a state value and does not change the resource identity.
+Compose container identity uses project, service, and container number. When the number is absent, identity uses the name within the project/service. Non-Compose containers use `docker-container:<host>:name:<name>`. Only unnamed containers fall back to a shortened runtime ID. Normal named-container recreation preserves identity.
 
-Image identity prefers `repository:tag`, then a shortened repository digest, then a shortened image ID. Full image IDs and digests are state values.
+Image identity prefers the reference used by a container, then a shortened repository digest, then a shortened local image ID when no reference is available. Extra tags returned by image inspection do not create extra resources. When different container instances use the same logical image reference with different local image IDs, inventory selects one representative: a running container first, then the first image ID in lexical order. Runtime IDs are no longer emitted as signals.
 
-Mounts and network attachments are not separate resources. They are parts of a container and use bounded `mount_*` or `network` dimensions on the `docker-container` resource.
-
-Compose throughput is calculated from container counters in Pulse. Aggregate
-CPU and memory gauges remain available; raw network and disk counters are not
-summed across replaceable containers.
-
-## Metrics
-
-### Docker daemon
-
-Emitted once per Docker daemon.
-
-| Name | Type | Unit | Dimensions | Example | Meaning |
-|---|---|---:|---|---:|---|
-| `docker.containers.total` | gauge | | — | `12` | Total containers known to the daemon. |
-| `docker.containers.running` | gauge | | — | `9` | Containers currently running. |
-| `docker.containers.healthy` | gauge | | — | `7` | Containers with a configured healthy Docker healthcheck. |
-| `docker.containers.unhealthy` | gauge | | — | `1` | Containers with a configured non-healthy Docker healthcheck. |
-| `docker.images.updates_available` | gauge | | — | `2` | Image resources with a detected registry update. Registry checks must be enabled. |
-
-### Docker container
-
-Emitted once per logical container unless a row names an additional attachment dimension.
-
-| Name | Type | Unit | Dimensions | Example | Meaning |
-|---|---|---:|---|---:|---|
-| `docker.container.cpu.usage` | gauge | percent | container | `21.5` | Current CPU usage for one container. |
-| `docker.container.memory.used` | gauge | bytes | container | `134217728` | Memory used by one container, excluding reclaimable cache where available. |
-| `docker.container.memory.limit` | gauge | bytes | container | `1073741824` | Configured memory limit for one container. |
-| `docker.container.memory.usage` | gauge | percent | container | `12.5` | Used memory as a percentage of the container limit. |
-| `docker.container.pids.current` | gauge | | container | `18` | Current process count in one container. |
-| `docker.container.network.rx` | counter | bytes | container, `interface` | `12345678` | Bytes received by one container interface. |
-| `docker.container.network.tx` | counter | bytes | container, `interface` | `87654321` | Bytes transmitted by one container interface. |
-| `docker.container.network.rx_errors` | counter | — | container, `interface` | `0` | Receive errors on one container interface. |
-| `docker.container.network.tx_errors` | counter | — | container, `interface` | `0` | Transmit errors on one container interface. |
-| `docker.container.blockio.read` | counter | bytes | container | `104857600` | Block I/O bytes read by one container. |
-| `docker.container.blockio.write` | counter | bytes | container | `52428800` | Block I/O bytes written by one container. |
-| `docker.container.restart_count` | gauge | | container | `1` | Number of container restarts reported by Docker. |
-| `docker.container.exit_code` | gauge | | container | `0` | Last container process exit code. |
-| `docker.container.restart_policy.maximum_retry_count` | gauge | | container | `3` | Maximum retries configured by the restart policy. |
-| `docker.container.uptime` | gauge | seconds | container | `3600` | Time since the current container instance started. |
-| `docker.container.health.failing_streak` | gauge | | container | `0` | Consecutive failed Docker healthchecks. |
-| `docker.container.mounts.total` | gauge | | container | `3` | Mounts attached to one container. |
-| `docker.container.mounts.by_type` | gauge | | container, `mount_type` | `2` | Mounts of one Docker mount type. |
-| `docker.container.network.ip_prefix_len` | gauge | bits | container, `network` | `16` | IP prefix length for one network attachment. |
-| `docker.container.network.aliases.count` | gauge | | container, `network` | `2` | Aliases configured on one network attachment. |
-| `docker.container.mount.filesystem.total` | gauge | bytes | container, mount | `107374182400` | Total host filesystem bytes behind one mount source. |
-| `docker.container.mount.filesystem.available` | gauge | bytes | container, mount | `64424509440` | Available host filesystem bytes behind one mount source. |
-| `docker.container.mount.filesystem.used` | gauge | bytes | container, mount | `42949672960` | Used host filesystem bytes behind one mount source. |
-| `docker.container.mount.filesystem.usage` | gauge | percent | container, mount | `40` | Used percentage of the host filesystem behind one mount source. |
-
-### Docker Compose project
-
-Emitted once per detected Compose project.
-
-| Name | Type | Unit | Dimensions | Example | Meaning |
-|---|---|---:|---|---:|---|
-| `docker.compose.project.containers` | gauge | | `compose_project` | `4` | Containers belonging to one Compose project. |
-
-### Docker Compose service
-
-Emitted once per detected Compose service. Usage values are sums across its current container replicas.
-
-| Name | Type | Unit | Dimensions | Example | Meaning |
-|---|---|---:|---|---:|---|
-| `docker.compose.service.containers` | gauge | | `compose_project`, `compose_service` | `2` | Containers belonging to one Compose service. |
-| `docker.compose.service.containers.running` | gauge | | `compose_project`, `compose_service` | `2` | Running containers in one Compose service. |
-| `docker.compose.service.cpu.usage` | gauge | percent | `compose_project`, `compose_service` | `35.2` | Sum of current CPU usage across service containers. |
-| `docker.compose.service.memory.used` | gauge | bytes | `compose_project`, `compose_service` | `268435456` | Sum of memory used across service containers. |
-| `docker.compose.service.memory.limit` | gauge | bytes | `compose_project`, `compose_service` | `2147483648` | Sum of memory limits across service containers. |
-| `docker.compose.service.pids.current` | gauge | | `compose_project`, `compose_service` | `34` | Sum of current processes across service containers. |
-
-### Docker image
-
-Emitted once per logical image reference used by a collected container.
-
-| Name | Type | Unit | Dimensions | Example | Meaning |
-|---|---:|---:|---|---:|---|
-| `docker.image.age` | gauge | seconds | image | `604800` | Time since the image was created. |
-| `docker.image.repo_tags.count` | gauge | | image | `2` | Repository tags attached to the local image. |
-| `docker.image.repo_digests.count` | gauge | | image | `1` | Repository digests attached to the local image. |
-| `docker.image.size` | gauge | bytes | image | `304087040` | Local image size. |
-| `docker.image.virtual_size` | gauge | bytes | image | `304087040` | Docker-reported virtual image size. |
-
-## States
-
-### Docker daemon
-
-Emitted once per Docker daemon.
-
-| Key | Value type | Dimensions | Example | Meaning |
-|---|---|---|---|---|
-| `docker.available` | boolean | — | `true` | Whether the Docker Engine API is reachable. |
-| `docker.version` | string | — | `26.1.4` | Docker Engine version. |
-| `docker.os` | string | — | `Docker Desktop` | Operating system reported by Docker. |
-| `docker.arch` | string | — | `aarch64` | Architecture reported by Docker. |
-
-### Docker container
-
-Emitted once per logical container unless a row names an attachment dimension.
-
-| Key | Value type | Dimensions | Example | Meaning |
-|---|---|---|---|---|
-| `docker.container.running` | boolean | container | `true` | Whether the container is running. |
-| `docker.container.status` | string | container | `Up 2 hours` | Human-readable Docker status. |
-| `docker.container.image` | string | container | `postgres:16` | Image reference from the container list. |
-| `docker.container.runtime.id` | string | container | `1234567890abcdef...` | Current Docker runtime container ID. |
-| `docker.container.stats.available` | boolean | container | `true` | Whether runtime stats were collected. |
-| `docker.container.inspect.available` | boolean | container | `true` | Whether inspect data was collected. |
-| `docker.container.lifecycle.status` | string | container | `running` | Raw lifecycle status. |
-| `docker.container.paused` | boolean | container | `false` | Whether the container is paused. |
-| `docker.container.restarting` | boolean | container | `false` | Whether the container is restarting. |
-| `docker.container.oom_killed` | boolean | container | `false` | Whether Docker reports an out-of-memory kill. |
-| `docker.container.dead` | boolean | container | `false` | Whether Docker reports the container as dead. |
-| `docker.container.autoremove` | boolean | container | `false` | Whether automatic removal is configured. |
-| `docker.container.privileged` | boolean | container | `false` | Whether privileged mode is enabled. |
-| `docker.container.created_at` | string | container | `2026-06-10T08:00:00Z` | Container creation timestamp. |
-| `docker.container.started_at` | string | container | `2026-06-10T08:05:00Z` | Current instance start timestamp. |
-| `docker.container.finished_at` | string | container | `2026-06-10T09:00:00Z` | Last finish timestamp. |
-| `docker.container.image.id` | string | container | `sha256:abc...` | Local image ID used by the current instance. |
-| `docker.container.image.reference` | string | container | `postgres:16` | Configured image reference. |
-| `docker.container.hostname` | string | container | `db` | Hostname configured inside the container. |
-| `docker.container.network_mode` | string | container | `bridge` | Configured network mode. |
-| `docker.container.runtime` | string | container | `runc` | Configured OCI runtime. |
-| `docker.container.restart_policy` | string | container | `unless-stopped` | Restart policy name. |
-| `docker.container.health.available` | boolean | container | `true` | Whether a Docker healthcheck is configured. |
-| `docker.container.health.status` | string | container | `healthy` | Raw Docker health status. |
-| `docker.container.health.healthy` | boolean | container | `true` | Whether the current health status is healthy. |
-| `docker.container.compose.available` | boolean | container | `true` | Whether Compose identity labels are present. |
-| `docker.container.compose.project` | string | container | `pulse` | Compose project label. |
-| `docker.container.compose.service` | string | container | `api` | Compose service label. |
-| `docker.container.compose.container_number` | string | container | `1` | Compose replica/container number. |
-| `docker.container.compose.version` | string | container | `2.27.0` | Compose version label. |
-| `docker.container.compose.config_hash` | string | container | `abc123` | Compose configuration hash. |
-| `docker.container.compose.working_dir` | string | container | `/srv/pulse` | Compose project working directory. |
-| `docker.container.compose.config_files` | string | container | `/srv/pulse/compose.yml` | Compose configuration file list. |
-| `docker.container.network.connected` | boolean | container, `network` | `true` | Whether the container is attached to one Docker network. |
-| `docker.container.network.id` | string | container, `network` | `aa12...` | Docker network ID. |
-| `docker.container.network.endpoint_id` | string | container, `network` | `bb34...` | Docker endpoint ID. |
-| `docker.container.network.gateway` | string | container, `network` | `172.18.0.1` | Gateway for one network attachment. |
-| `docker.container.network.ip_address` | string | container, `network` | `172.18.0.5` | Container IP address on one Docker network. |
-| `docker.container.network.mac_address` | string | container, `network` | `02:42:ac:12:00:05` | Container MAC address on one Docker network. |
-| `docker.container.network.aliases` | string | container, `network` | `api,pulse-api` | Comma-separated aliases on one Docker network. |
-| `docker.container.mount.volume` | string | container, mount | `pulse_db` | Docker volume name. |
-| `docker.container.mount.driver` | string | container, mount | `local` | Docker volume driver. |
-| `docker.container.mount.rw` | boolean | container, mount | `true` | Whether one mount is read-write. |
-| `docker.container.mount.source` | string | container, mount | `/var/lib/docker/volumes/pulse_db/_data` | Host-side mount source. |
-| `docker.container.mount.mode` | string | container, mount | `z` | Docker mount mode. |
-| `docker.container.mount.propagation` | string | container, mount | `rprivate` | Docker mount propagation mode. |
-
-### Docker Compose project and service
-
-Emitted once for each discovered Compose resource.
-
-| Key | Resource | Value type | Dimensions | Example | Meaning |
-|---|---|---|---|---|---|
-| `docker.compose.project.present` | `docker-compose-project` | boolean | `compose_project` | `true` | Compose project appears in the current container inventory. |
-| `docker.compose.service.present` | `docker-compose-service` | boolean | `compose_project`, `compose_service` | `true` | Compose service appears in the current container inventory. |
-
-### Docker image
-
-Emitted once per image resource.
-
-| Key | Value type | Dimensions | Example | Meaning |
-|---|---|---|---|---|
-| `docker.image.inspect.available` | boolean | image | `true` | Whether local image inspection succeeded. |
-| `docker.image.id` | string | image | `sha256:abc...` | Full local Docker image ID. |
-| `docker.image.created_at` | string | image | `2026-06-01T12:00:00Z` | Image creation timestamp. |
-| `docker.image.repo_tags` | string | image | `app:latest,app:v1` | Comma-separated local repository tags. |
-| `docker.image.repo_digests` | string | image | `app@sha256:...` | Comma-separated local repository digests. |
-| `docker.image.arch` | string | image | `arm64` | Image architecture. |
-| `docker.image.os` | string | image | `linux` | Image operating system. |
-| `docker.image.registry.checkable` | boolean | image, registry | `true` | Whether the image reference can be checked against a registry. |
-| `docker.image.registry.checked` | boolean | image, registry | `true` | Whether the remote registry lookup succeeded. |
-| `docker.image.registry.remote_digest` | string | image, registry | `sha256:remote...` | Remote manifest digest. |
-| `docker.image.registry.local_digest_available` | boolean | image, registry | `true` | Whether a comparable local digest exists. |
-| `docker.image.registry.local_digest` | string | image, registry | `sha256:local...` | Local digest used for comparison. |
-| `docker.image.update_available` | boolean | image, registry | `false` | Whether local and remote digests differ. |
-
-## Events
-
-Errors are stored in `attributes.error`. The bounded failed operation remains a dimension.
-
-| Kind | Resource | Dimensions | Attributes | Trigger |
-|---|---|---|---|---|
-| `docker.unavailable` | `docker-daemon` | `operation=version` | `error` | Docker version request failed. |
-| `docker.collect.failed` | `docker-daemon` | `operation=containers` | `error` | Container inventory failed. |
-| `docker.container.collect.failed` | `docker-container` | container, `operation=stats\|inspect` | `error` | Runtime stats or inspect failed for one container. |
-| `docker.image.collect.failed` | `docker-image` | image, `operation=inspect` | `error` | Local image inspection failed. |
-| `docker.image.registry.check.failed` | `docker-image` | image, registry, `operation=manifest` | `error` | Registry manifest lookup failed. |
+Mounts and network attachments are no longer collected. For filesystem capacity, use the [filesystem module](/en/module-filesystem) on the host.
 
 ## Dimensions
 
-Dimension sets used above:
+All signals also inherit configured global dimensions. The tables use these dimension sets:
 
-- **container**: `host`, `container`, and available `compose_project`, `compose_service`, `compose_container_number`.
-- **image**: `host`, `image`, and available `repository`, `tag`.
-- **mount**: container dimensions plus `mount_type`, `mount_destination`, and optional `volume`.
-- **registry**: image dimensions plus `registry`, `repository`, and `tag`.
-
-| Name | Example | Applies to | Meaning |
+| Set | Dimensions | Example | Meaning |
 |---|---|---|---|
-| `container` | `pulse-api-1` | container signals | Human-readable Docker container name. |
-| `compose_project` | `pulse` | Compose resources and containers | Compose project. |
-| `compose_service` | `api` | Compose services and containers | Compose service. |
-| `compose_container_number` | `1` | Compose containers | Stable Compose replica/container number. |
-| `interface` | `eth0` | container network counters | Interface returned by Docker stats. |
-| `network` | `pulse_default` | network attachment signals | Docker network name. |
-| `mount_type` | `volume` | mount signals | Docker mount type. |
-| `mount_destination` | `/var/lib/postgresql/data` | mount signals | Path inside the container. |
-| `volume` | `pulse_db` | mount signals | Docker volume name when present. |
-| `image` | `ghcr.io/example/api:latest` | image signals | Human-readable image reference. |
-| `repository` | `ghcr.io/example/api` | image and registry signals | Image repository. |
-| `tag` | `latest` | image and registry signals | Image tag. |
-| `registry` | `ghcr.io` | registry checks | Registry host. |
-| `operation` | `inspect` | failure events | Bounded collector operation that failed. |
+| daemon | No module-specific dimensions | — | One daemon |
+| container | `container`; available `compose_project`, `compose_service`, `compose_container_number` | `container=app-api-1` | Name and Compose membership of one logical container |
+| project | `compose_project` | `compose_project=app` | One Compose project |
+| service | `compose_project`, `compose_service` | `compose_project=app`, `compose_service=api` | One Compose service |
+| image | `image`; available `repository`, `tag` | `image=ghcr.io/example/api:1`, `repository=ghcr.io/example/api`, `tag=1` | One image reference |
+| registry | image dimensions plus `registry`, `repository`, `tag` | `registry=ghcr.io` | One registry comparison |
 
-Runtime container IDs, image IDs, network IDs, endpoint IDs, digests, paths, IP addresses, MAC addresses, and aliases are states or event attributes, not dimensions.
+Events add the bounded `operation` dimension. Errors belong in `attributes.error`. No interface, network attachment, mount, address, runtime-ID, or path dimensions are emitted.
 
-## Requirements
+## Metrics
 
-- Docker Engine socket access.
-- Host root mounted at `host.root` for mount filesystem usage.
-- Outbound registry access when registry checks are enabled.
+### Docker daemon — every 60 seconds
 
-## Failure behavior
+Resource: `docker-daemon`.
 
-An unavailable Docker socket emits `docker.available=false` and `docker.unavailable`. Container and image failures remain scoped to the affected resource and do not stop unrelated collection. Registry checks are optional and do not fail the Docker collector.
+| Name | Type | Unit | Dimensions | Example | Meaning |
+|---|---|---|---|---|---|
+| `docker.containers.total` | gauge | — | daemon | `70` | All containers known to the daemon |
+| `docker.containers.running` | gauge | — | daemon | `68` | Containers whose lifecycle state is `running` |
+
+### Docker container
+
+Resource: `docker-container`. Restarts are collected every 60 seconds for all containers. The other metrics are collected every 300 seconds for running containers.
+
+| Name | Type | Unit | Dimensions | Example | Meaning |
+|---|---|---|---|---|---|
+| `docker.container.restarts` | counter | — | container | `2` | Docker restart count for the current container instance; resets on recreation |
+| `docker.container.cpu.usage` | gauge | percent | container | `21.5` | CPU use from Docker's current and previous CPU samples; may exceed 100% across multiple CPUs |
+| `docker.container.memory.used` | gauge | bytes | container | `134217728` | Memory usage excluding the inactive-file cache, or Docker's cache fallback when available |
+| `docker.container.memory.limit` | gauge | bytes | container | `1073741824` | Memory limit reported by Docker; `0` when absent |
+| `docker.container.network.rx` | counter | bytes | container | `12345678` | Received bytes summed across all interfaces in this container |
+| `docker.container.network.tx` | counter | bytes | container | `87654321` | Transmitted bytes summed across all interfaces in this container |
+| `docker.container.blockio.read` | counter | bytes | container | `104857600` | Read bytes summed across block devices |
+| `docker.container.blockio.write` | counter | bytes | container | `52428800` | Written bytes summed across block devices |
+
+CPU is omitted when Docker lacks a usable sample or reports a counter reset. Network and block I/O totals are `0` when Docker reports no entries. Counters can reset on container recreation; changing interface membership can also reduce network totals. Calculate rates per container before grouping by Compose service or project. Compose resources do not emit summed usage or cumulative counters.
+
+### Docker image — every 24 hours
+
+Resource: `docker-image`. Each row is conditional on the corresponding image-inspect field being present; size fields must be positive.
+
+| Name | Type | Unit | Dimensions | Example | Meaning |
+|---|---|---|---|---|---|
+| `docker.image.age` | gauge | seconds | image | `604800` | Time from the parsed creation timestamp to collection, bounded at zero |
+| `docker.image.repo_tags.count` | gauge | — | image | `2` | Number of local tags attached to this in-use image |
+| `docker.image.repo_digests.count` | gauge | — | image | `1` | Number of local repository digests attached to this in-use image |
+| `docker.image.size` | gauge | bytes | image | `304087040` | Local image size |
+| `docker.image.virtual_size` | gauge | bytes | image | `304087040` | Virtual size reported by Docker |
+
+## States
+
+State values have no unit. Compose counts are string states in `running/total` form, so unchanged counts do not consume a metric value each minute.
+
+### Docker daemon
+
+Resource: `docker-daemon`.
+
+| Key | Value type | Unit | Dimensions | Example | Meaning |
+|---|---|---|---|---|---|
+| `docker.available` | boolean | — | daemon | `true` | Container inventory request succeeded; checked every 60 seconds |
+| `docker.version` | string | — | daemon | `27.0.0` | Docker Engine version, checked daily |
+
+### Docker container — every 60 seconds
+
+Resource: `docker-container`.
+
+| Key | Value type | Unit | Dimensions | Example | Meaning |
+|---|---|---|---|---|---|
+| `docker.container.status` | string | — | container | `running` | Stable Docker lifecycle: `created`, `running`, `paused`, `restarting`, `removing`, `exited`, or `dead` |
+| `docker.container.health` | string | — | container | `healthy` | `none`, `starting`, `healthy`, or `unhealthy`; `none` means no recognized Docker healthcheck status |
+| `docker.container.image` | string | — | container | `ghcr.io/example/api:1` | Image reference from container inventory |
+
+Health and restart count require a successful inspect. An inspect failure emits an event and leaves the last health state unchanged; it does not report a healthy result.
+
+### Docker Compose — every 60 seconds
+
+| Key | Resource | Value type | Unit | Dimensions | Example | Meaning |
+|---|---|---|---|---|---|---|
+| `docker.compose.project.containers` | `docker-compose-project` | string | — | project | `3/4` | Running containers / total containers in this project |
+| `docker.compose.service.containers` | `docker-compose-service` | string | — | service | `1/2` | Running containers / total containers in this service |
+
+A project or service is discovered from container labels. When its last container disappears, the resource is no longer observed; no synthetic zero or deletion state is emitted.
+
+### Docker image — every 24 hours
+
+Resource: `docker-image`. Registry rows are emitted only when `docker.enable_registry_checks = true` (default `false`). Other metadata rows require the field to be present.
+
+| Key | Value type | Unit | Dimensions | Example | Meaning |
+|---|---|---|---|---|---|
+| `docker.image.inspect.available` | boolean | — | image | `true` | Local image inspection succeeded |
+| `docker.image.created_at` | string | — | image | `2026-06-01T12:00:00Z` | Image creation timestamp |
+| `docker.image.repo_tags` | string | — | image | `app:latest,app:v1` | Comma-separated local tags |
+| `docker.image.repo_digests` | string | — | image | `app@sha256:abc` | Comma-separated local repository digests |
+| `docker.image.arch` | string | — | image | `arm64` | Image architecture |
+| `docker.image.os` | string | — | image | `linux` | Image operating system |
+| `docker.image.registry.checkable` | boolean | — | image or registry | `true` | A tag has an explicit registry or a comparable local digest; unqualified single-name Docker Hub references are skipped |
+| `docker.image.registry.checked` | boolean | — | registry | `true` | Remote manifest lookup succeeded |
+| `docker.image.registry.remote_digest` | string | — | registry | `sha256:remote` | Remote manifest digest |
+| `docker.image.registry.local_digest_available` | boolean | — | registry | `true` | A comparable local repository digest exists |
+| `docker.image.registry.local_digest` | string | — | registry | `sha256:local` | Local digest used for comparison |
+| `docker.image.update_available` | boolean | — | registry | `false` | Comparable local and remote digests differ |
+
+Registry checks do not use the host's Docker login credentials. A private registry that requires authentication may reject a check. Missing local digests prevent an update comparison. Registry access is never required for local stats. Daily inventory uses `runner.collector_timeout_seconds` (default 60 seconds). If registry checks make that phase time out, raise this budget enough to inspect every image; a timed-out daily phase waits for its next daily cadence.
+
+## Events
+
+Events have no numeric value or unit. Every event includes `attributes.error` with the failure detail.
+
+| Kind | Resource | Dimensions | Example | Trigger |
+|---|---|---|---|---|
+| `docker.unavailable` | `docker-daemon` | daemon, `operation=containers` | `error="…connect: no such file…"` | Minute-level container inventory request failed |
+| `docker.collect.failed` | `docker-daemon` | daemon, `operation=containers` or `operation=version` | `error="…HTTP 500…"` | Stats/image inventory or daily daemon version request failed |
+| `docker.container.collect.failed` | `docker-container` | container, `operation=stats` or `operation=inspect` | `error="…context deadline exceeded…"` | Stats or health/restart inspection failed for one container |
+| `docker.image.collect.failed` | `docker-image` | image, `operation=inspect` | `error="…HTTP 404…"` | Local image inspection failed |
+| `docker.image.registry.check.failed` | `docker-image` | registry, `operation=manifest` | `error="…HTTP 401…"` | Optional registry lookup failed |
+
+Container and image failures preserve results from other resources. The runner also emits its shared `ingestor.collector.*` failure signals when a phase exhausts its overall timeout. Check socket permissions and Docker availability for daemon failures; check timeout settings for incomplete large-host collection.
+
+## Signal changes
+
+Update queries that use the previous Docker signal set:
+
+| Previous signal | Replacement or changed behavior |
+|---|---|
+| `docker.container.restart_count` (gauge) | `docker.container.restarts` (counter), every 60 seconds |
+| `docker.container.lifecycle.status` | `docker.container.status` now carries the stable lifecycle value |
+| `docker.container.health.status` | `docker.container.health`, including `none` for no recognized healthcheck status |
+| `docker.container.image.reference` | `docker.container.image` |
+| `docker.compose.project.containers` (gauge) | Same key as a `running/total` string state; query states instead of metrics |
+| `docker.compose.service.containers` (gauge) | Same key as a `running/total` string state; query states instead of metrics |
+| `docker.compose.service.containers.running` (gauge) | Running count is the first part of `docker.compose.service.containers` |
+| `docker.container.network.rx`, `docker.container.network.tx` | Same counter names, now one total per container with no `interface` dimension |
+
+The following signals are removed. This list also includes old names replaced above.
+
+### Container lifecycle and configuration
+
+- `docker.container.autoremove`
+- `docker.container.created_at`
+- `docker.container.dead`
+- `docker.container.exit_code`
+- `docker.container.finished_at`
+- `docker.container.hostname`
+- `docker.container.image.id`
+- `docker.container.image.reference`
+- `docker.container.inspect.available`
+- `docker.container.lifecycle.status`
+- `docker.container.memory.usage`
+- `docker.container.network_mode`
+- `docker.container.oom_killed`
+- `docker.container.paused`
+- `docker.container.pids.current`
+- `docker.container.privileged`
+- `docker.container.restart_count`
+- `docker.container.restart_policy`
+- `docker.container.restart_policy.maximum_retry_count`
+- `docker.container.restarting`
+- `docker.container.running`
+- `docker.container.runtime`
+- `docker.container.runtime.id`
+- `docker.container.started_at`
+- `docker.container.stats.available`
+- `docker.container.uptime`
+
+### Container health detail
+
+- `docker.container.health.available`
+- `docker.container.health.failing_streak`
+- `docker.container.health.healthy`
+- `docker.container.health.status`
+
+### Container Compose label states
+
+- `docker.container.compose.available`
+- `docker.container.compose.config_files`
+- `docker.container.compose.config_hash`
+- `docker.container.compose.container_number`
+- `docker.container.compose.project`
+- `docker.container.compose.service`
+- `docker.container.compose.version`
+- `docker.container.compose.working_dir`
+
+### Mounts
+
+- `docker.container.mount.driver`
+- `docker.container.mount.filesystem.available`
+- `docker.container.mount.filesystem.total`
+- `docker.container.mount.filesystem.usage`
+- `docker.container.mount.filesystem.used`
+- `docker.container.mount.mode`
+- `docker.container.mount.propagation`
+- `docker.container.mount.rw`
+- `docker.container.mount.source`
+- `docker.container.mount.volume`
+- `docker.container.mounts.by_type`
+- `docker.container.mounts.total`
+
+### Network attachment and error detail
+
+- `docker.container.network.aliases`
+- `docker.container.network.aliases.count`
+- `docker.container.network.connected`
+- `docker.container.network.endpoint_id`
+- `docker.container.network.gateway`
+- `docker.container.network.id`
+- `docker.container.network.ip_address`
+- `docker.container.network.ip_prefix_len`
+- `docker.container.network.mac_address`
+- `docker.container.network.rx_errors`
+- `docker.container.network.tx_errors`
+
+### Compose aggregates
+
+- `docker.compose.service.containers.running`
+- `docker.compose.project.present`
+- `docker.compose.service.cpu.usage`
+- `docker.compose.service.memory.limit`
+- `docker.compose.service.memory.used`
+- `docker.compose.service.pids.current`
+- `docker.compose.service.present`
+
+### Daemon summaries and image IDs
+
+- `docker.arch`
+- `docker.os`
+- `docker.containers.healthy`
+- `docker.containers.unhealthy`
+- `docker.image.id`
+- `docker.images.updates_available`

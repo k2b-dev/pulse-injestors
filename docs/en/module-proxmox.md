@@ -120,7 +120,7 @@ All events have no unit. Command failures carry `attributes.error`; task failure
 
 Commands use `pvesh get <path> --output-format json`; query parameters become CLI flags. Commands parse stdout only, capped at 64 MiB; larger output fails visibly. Command errors include at most 1 KiB of stderr. `[proxmox] timeout_seconds` defaults to 10; storage content lists use `list_timeout_seconds`, which defaults to 120 and must be positive. The backup phase has its own `backup_timeout_seconds` budget, default 180, also strictly positive. Each list call is bounded by the remaining phase budget; raise the backup budget when several large stores need more time. Other phases use `[runner] collector_timeout_seconds`.
 
-The cycle budget is the larger of the runner interval and the longest budget among due collectors. Fast health collectors still run first; earlier work consumes part of the shared cycle budget. `once` includes every collector when choosing that budget. Watchdog liveness allows for the longest configured collector budget. Ceph pool listing uses the singular `/nodes/<local>/ceph/pool` endpoint required by PVE 9.
+The cycle budget is the larger of the runner interval and the sum of timeout budgets for due collectors. Fast health collectors still run first; the cycle budget includes earlier work without shortening later collector budgets. `once` includes every collector when choosing that budget. Watchdog liveness allows for the full configured cycle budget. Ceph pool listing uses the singular `/nodes/<local>/ceph/pool` endpoint required by PVE 9.
 
 - Every phase: `/cluster/status`.
 - Version: `/version`.

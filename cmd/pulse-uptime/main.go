@@ -92,11 +92,11 @@ func main() {
 		Dimensions: monitoring.MergeDimensions(cfg.Dimensions, map[string]string{
 			"probe": cfg.Resource.ID,
 		}),
-		Collectors: []monitoring.Collector{uptime.Collector{
+		Collectors: (uptime.Collector{
 			Targets:     targets,
 			Concurrency: cfg.Uptime.Concurrency,
 			Timeout:     cfg.UptimeTimeout(),
-		}},
+		}).Scheduled(),
 		Timeout:  cfg.CollectorTimeout(),
 		Interval: cfg.RunnerInterval(),
 		Logger:   log,
@@ -178,10 +178,20 @@ func configuredTargets(cfg config.Config) ([]uptime.Target, error) {
 		}
 		seen[target.ID] = true
 		timeout := cfg.UptimeTimeout()
+		if strings.ToLower(strings.TrimSpace(target.Kind)) == uptime.KindPorts {
+			timeout = 900 * time.Second
+		}
 		if target.TimeoutSeconds > 0 {
 			timeout = time.Duration(target.TimeoutSeconds) * time.Second
 		}
+		var records []uptime.Record
+		for _, record := range target.Records {
+			records = append(records, uptime.Record{Type: strings.ToUpper(record.Type), Expect: record.Expect, Contains: record.Contains})
+		}
 		targets = append(targets, uptime.Target{
+			Cadence: time.Duration(target.CadenceSeconds) * time.Second,
+			Name:    target.Name, Resolver: target.Resolver, Expected: target.Expected, Range: target.Range,
+			Records: records, CAFile: target.CAFile, ServerName: target.ServerName, WarnDays: target.WarnDays, Lists: target.Lists,
 			ID:             target.ID,
 			Label:          strings.TrimSpace(target.Label),
 			Kind:           strings.ToLower(strings.TrimSpace(target.Kind)),

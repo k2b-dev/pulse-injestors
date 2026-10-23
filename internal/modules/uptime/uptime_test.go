@@ -38,13 +38,14 @@ func TestCollectorEmitsStableEndpointResourcesAndProtocolSignals(t *testing.T) {
 		Timestamp:  time.Date(2026, 7, 23, 18, 0, 0, 0, time.UTC),
 	}
 	collector := Collector{
+		Resolver:    localTestResolver(t),
 		Concurrency: 4,
 		Timeout:     time.Second,
 		HTTPClient:  httpServer.Client(),
 		Ping:        func(context.Context, string) error { return nil },
 		Targets: []Target{
 			{ID: "router", Label: "Router", Kind: KindICMP, Address: "192.0.2.1"},
-			{ID: "resolver", Label: "Resolver", Kind: KindDNS, Address: "localhost"},
+			{ID: "resolver", Label: "Resolver", Kind: KindDNS, Address: "fixture.test"},
 			{ID: "database", Label: "Database", Kind: KindTCP, Address: tcpListener.Addr().String()},
 			{ID: "pulse", Label: "Pulse", Kind: KindHTTP, Address: httpServer.URL, ExpectedStatus: http.StatusNoContent},
 		},
@@ -67,7 +68,7 @@ func TestCollectorEmitsStableEndpointResourcesAndProtocolSignals(t *testing.T) {
 			t.Errorf("missing resource %q", id)
 		}
 	}
-	if metricValue(batch, "uptime.check.availability", "pulse") != 1 {
+	if metricValue(batch, "uptime.check.success", "pulse") != 1 {
 		t.Fatalf("HTTP availability metric missing: %#v", batch.Metrics)
 	}
 	if metricValue(batch, "uptime.dns.address_count", "resolver") < 1 {
@@ -79,7 +80,7 @@ func TestCollectorEmitsStableEndpointResourcesAndProtocolSignals(t *testing.T) {
 	if stateValue(batch, "uptime.http.status_code", "pulse") != http.StatusNoContent {
 		t.Fatalf("HTTP status state missing: %#v", batch.States)
 	}
-	if stateValue(batch, "uptime.check.error", "pulse") != "" {
+	if stateValue(batch, "uptime.check.message", "pulse") != "" {
 		t.Fatalf("unexpected HTTP error: %#v", batch.States)
 	}
 }
@@ -105,13 +106,13 @@ func TestCollectorModelsTargetFailureWithoutReturningCollectorError(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if metricValue(batch, "uptime.check.availability", "api") != 0 {
+	if metricValue(batch, "uptime.check.success", "api") != 0 {
 		t.Fatalf("availability = %#v", batch.Metrics)
 	}
-	if stateValue(batch, "uptime.check.success", "api") != false {
+	if stateValue(batch, "uptime.check.result", "api") != "failed" {
 		t.Fatalf("success state = %#v", batch.States)
 	}
-	if stateValue(batch, "uptime.check.error", "api") != "unexpected HTTP status" {
+	if stateValue(batch, "uptime.check.message", "api") != "unexpected HTTP status" {
 		t.Fatalf("error state = %#v", batch.States)
 	}
 	if len(batch.Events) != 0 {
@@ -132,13 +133,13 @@ func TestCollectorDoesNotReportUnavailablePingCommandAsDowntimeMetric(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(batch.Metrics) != 0 {
+	if metricValue(batch, "uptime.check.success", "router") != -1 {
 		t.Fatalf("unexpected metrics: %#v", batch.Metrics)
 	}
-	if stateValue(batch, "uptime.check.measured", "router") != false {
+	if stateValue(batch, "uptime.check.result", "router") != "error" {
 		t.Fatalf("measured state = %#v", batch.States)
 	}
-	if stateValue(batch, "uptime.check.error", "router") != "ping command unavailable" {
+	if stateValue(batch, "uptime.check.message", "router") != "ping command unavailable" {
 		t.Fatalf("error state = %#v", batch.States)
 	}
 }
@@ -158,13 +159,13 @@ func TestCollectorDoesNotReportPingExecutionErrorAsDowntimeMetric(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(batch.Metrics) != 0 {
+	if metricValue(batch, "uptime.check.success", "router") != -1 {
 		t.Fatalf("unexpected metrics: %#v", batch.Metrics)
 	}
-	if stateValue(batch, "uptime.check.measured", "router") != false {
+	if stateValue(batch, "uptime.check.result", "router") != "error" {
 		t.Fatalf("measured state = %#v", batch.States)
 	}
-	if stateValue(batch, "uptime.check.error", "router") != "ping command failed" {
+	if stateValue(batch, "uptime.check.message", "router") != "ping command failed" {
 		t.Fatalf("error state = %#v", batch.States)
 	}
 }
@@ -237,7 +238,7 @@ func hasResource(batch pulse.Batch, entityID string) bool {
 
 func metricValue(batch pulse.Batch, name, endpoint string) float64 {
 	for _, metric := range batch.Metrics {
-		if metric.Name == name && metric.Dimensions["endpoint"] == endpoint {
+		if metric.Name == name && metric.Dimensions["endpoint"] == endpoint && metric.Dimensions["list"] == "" {
 			return metric.Value
 		}
 	}
