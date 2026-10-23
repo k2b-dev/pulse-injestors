@@ -36,6 +36,7 @@ type Record struct {
 	Contains string
 }
 type Target struct {
+	RatePerSecond  int
 	Cadence        time.Duration
 	Name           string
 	Resolver       string

@@ -4,6 +4,7 @@ set -eu
 
 ROOT=$(CDPATH='' cd "$(dirname "$0")/.." && pwd)
 TMP=$(mktemp -d)
+TMP=$(CDPATH='' cd "$TMP" && pwd -P)
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 
 case "$(uname -m)" in
@@ -73,6 +74,14 @@ else
 fi
 printf '%s  %s\n' "$checksum" "$archive" > "$release/checksums.txt"
 printf '%s  %s\n' "$uptime_checksum" "$uptime_archive" >> "$release/checksums.txt"
+if [ "$os" = linux ]; then
+    for extra_binary in pulse-proxmox pulse-proxmox-backup-server; do
+        cp "$payload/$binary" "$payload/$extra_binary"
+        extra_archive="${extra_binary}_${os}_${arch}.tar.gz"
+        tar -C "$payload" -czf "$release/$extra_archive" "$extra_binary"
+        sha256sum "$release/$extra_archive" | awk -v file="$extra_archive" '{print $1 "  " file}' >> "$release/checksums.txt"
+    done
+fi
 : > "$release/checksums.txt.sig"
 : > "$release/checksums.txt.pem"
 
@@ -218,6 +227,34 @@ if [ "$os" = "linux" ]; then
     test "$(grep -Fc -- "--config $config once" "$calls")" -eq 1
     cmp "$prefix/$binary" "$payload/$binary"
 
+    grep -Fq 'MemoryMax=256M' "$unit"
+    # A leftover managed token must not override inline or foreign credentials.
+    for credential_kind in inline foreign; do
+        if [ "$credential_kind" = inline ]; then
+            sed 's|^ingest_token_file = .*|ingest_token = "inline-fixture"|' "$TMP/original.toml" > "$config"
+        else
+            sed "s|^ingest_token_file = .*|ingest_token_file = \"$token_file\"|" "$TMP/original.toml" > "$config"
+        fi
+        PULSE_RELEASE_BASE="file://$release" PULSE_RELEASE_TAG=v0.1.0 \
+        PULSE_COSIGN_BIN="$TMP/cosign" PULSE_INSTALL_TEST_CALLS="$calls" \
+        sh "$ROOT/scripts/install.sh" --unattended --ingestor=linux \
+            --scheduler=systemd --prefix="$prefix" --config-path="$config" >/dev/null
+        if grep -Eq '^(LoadCredential=pulse-ingest-token:|Environment=PULSE_INGEST_TOKEN_FILE=)' "$unit"; then
+            printf 'overrode %s credential\n' "$credential_kind" >&2; exit 1
+        fi
+    done
+    cp "$TMP/original.toml" "$config"
+    for heavy_ingestor in proxmox pbs; do
+        heavy_binary=pulse-proxmox
+        [ "$heavy_ingestor" != pbs ] || heavy_binary=pulse-proxmox-backup-server
+        PULSE_RELEASE_BASE="file://$release" PULSE_RELEASE_TAG=v0.1.0 \
+        PULSE_COSIGN_BIN="$TMP/cosign" PULSE_INSTALL_TEST_CALLS="$calls" \
+        sh "$ROOT/scripts/install.sh" --unattended --ingestor="$heavy_ingestor" \
+            --scheduler=systemd --prefix="$prefix" --config-source="$config" \
+            --config-path="$TMP/$heavy_binary.toml" >/dev/null
+        grep -Fq 'MemoryMax=512M' "$systemd_dir/$heavy_binary.service"
+    done
+
     uptime_systemd_config="$TMP/uptime-systemd/pulse-uptime.toml"
     PULSE_RELEASE_BASE="file://$release" \
     PULSE_RELEASE_TAG="v0.1.0" \
@@ -274,40 +311,90 @@ sh "$ROOT/scripts/install.sh" \
 test ! -e "$uptime_prefix/pulse-uptime"
 test -f "$uptime_config"
 
-# Purge keeps TOML but removes both the private queue/cache and token.
-test -f "$token_path"
-test -f "$TMP/spool/part.json"
-sh "$ROOT/scripts/install.sh" --unattended --uninstall --purge \
-    --ingestor="$ingestor" --scheduler=none --prefix="$prefix" \
-    --config-path="$config" > "$TMP/purge.out"
+# Exercise the fixed macOS managed path under a private HOME on every platform.
+# No purge test may touch the machine's real /var/lib/pulse state.
+mkdir -p "$TMP/purge-commands" "$TMP/home"
+cat > "$TMP/purge-commands/uname" <<'EOF'
+#!/bin/sh
+if [ "$1" = -s ]; then printf 'Darwin\n'; else /usr/bin/uname "$@"; fi
+EOF
+cat > "$TMP/purge-commands/launchctl" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$TMP/purge-commands/uname" "$TMP/purge-commands/launchctl"
+purge_fixture() {
+    HOME="$TMP/home" PATH="$TMP/purge-commands:$PATH" sh "$ROOT/scripts/install.sh" \
+        --unattended --uninstall --purge --ingestor=macos --scheduler=none \
+        --prefix="$prefix" --config-path="$config"
+}
+managed_spool="$TMP/home/Library/Application Support/Pulse/pulse-macos-spool"
+mkdir -p "$managed_spool/quarantine" "$managed_spool/unknown.part"
+for entry in a.part .states .binding .lock .pending-test kernel.cursor quarantine/rejected.json unknown.txt .unknown quarantine/keep.txt; do
+    printf 'fixture\n' > "$managed_spool/$entry"
+done
+# The installed config points at TMP/spool: not a single byte there is removed.
+purge_fixture > "$TMP/purge.out"
 test -f "$config"
 test ! -e "$token_path"
-test ! -e "$TMP/spool"
-grep -Fq 'purged spool/state directories and token files' "$TMP/purge.out"
+test -f "$TMP/spool/part.json"
+for entry in a.part .states .binding .lock .pending-test kernel.cursor quarantine/rejected.json; do
+    test ! -e "$managed_spool/$entry"
+done
+for entry in unknown.txt .unknown quarantine/keep.txt; do
+    test -f "$managed_spool/$entry"
+    grep -Fq "$managed_spool/$entry" "$TMP/purge.out"
+done
+test -d "$managed_spool/unknown.part"
+grep -Fq 'left unrecognized spool entries' "$TMP/purge.out"
+grep -Fq 'purged managed spool entries and token file' "$TMP/purge.out"
+rm -rf "$managed_spool"
+mkdir -p "$managed_spool/quarantine"
+printf 'known\n' > "$managed_spool/quarantine/rejected.json"
+purge_fixture >/dev/null
+test ! -e "$managed_spool"
+
+# Config-derived paths, even unsafe-looking ones, never become purge targets.
+cp "$config" "$TMP/purge-config-before.toml"
+mkdir -p "$TMP/foreign-spool"
+printf 'keep\n' > "$TMP/foreign-spool/.states"
+printf 'keep\n' > "$TMP/foreign.token"
+ln -s "$TMP/foreign-spool" "$TMP/spool-link"
+for configured_spool in / /var/lib "$TMP/../spool" "$TMP/spool-link"; do
+    printf '[pulse]\nspool_dir = "%s"\ningest_token_file = "%s"\n' \
+        "$configured_spool" "$TMP/foreign.token" > "$config"
+    purge_fixture >/dev/null
+    test -f "$TMP/foreign-spool/.states"
+    test -L "$TMP/spool-link"
+    test -f "$TMP/foreign.token"
+done
+cp "$TMP/purge-config-before.toml" "$config"
+
+# Refuse directory, entry, quarantine, parent, and managed-token symlinks.
+for link in "$managed_spool" "$managed_spool/a.part" "$managed_spool/quarantine" "$token_path"; do
+    mkdir -p "$(dirname "$link")"
+    ln -s "$TMP/foreign-spool" "$link"
+    if purge_fixture > "$TMP/invalid.out" 2>&1; then
+        printf 'accepted symlink purge target: %s\n' "$link" >&2; exit 1
+    fi
+    grep -Fq 'refusing symlink' "$TMP/invalid.out"
+    test -f "$TMP/foreign-spool/.states"
+    test -L "$link"
+    rm "$link"
+done
+rm -rf "$managed_spool"
+managed_parent=$(dirname "$managed_spool")
+rmdir "$managed_parent"
+ln -s "$TMP/foreign-spool" "$managed_parent"
+if purge_fixture > "$TMP/invalid.out" 2>&1; then
+    printf 'accepted symlink parent\n' >&2; exit 1
+fi
+rm "$managed_parent"
 
 if sh "$ROOT/scripts/install.sh" --purge > "$TMP/invalid.out" 2>&1; then
     printf 'accepted purge without uninstall\n' >&2; exit 1
 fi
 grep -Fq -- '--purge requires --uninstall' "$TMP/invalid.out"
-
-# Refuse ambiguous or unsafe purge paths before removing anything.
-for bad_path in / /var/lib "$TMP/../spool"; do
-    printf '[pulse]\nspool_dir = "%s"\n' "$bad_path" > "$TMP/unsafe.toml"
-    cp "$payload/$binary" "$prefix/$binary"
-    if sh "$ROOT/scripts/install.sh" --unattended --uninstall --purge \
-        --ingestor="$ingestor" --scheduler=none --prefix="$prefix" \
-        --config-path="$TMP/unsafe.toml" > "$TMP/invalid.out" 2>&1; then
-        printf 'accepted unsafe purge path\n' >&2; exit 1
-    fi
-    test -x "$prefix/$binary"
-done
-printf "[pulse]\nspool_dir = '/tmp/example-spool'\n" > "$TMP/unsafe.toml"
-if sh "$ROOT/scripts/install.sh" --unattended --uninstall --purge \
-    --ingestor="$ingestor" --scheduler=none --prefix="$prefix" \
-    --config-path="$TMP/unsafe.toml" > "$TMP/invalid.out" 2>&1; then
-    printf 'accepted unsupported purge TOML\n' >&2; exit 1
-fi
-test -x "$prefix/$binary"
 
 if [ "$os" = "linux" ]; then
     export PULSE_RELEASE_BASE="file://$release" PULSE_RELEASE_TAG=v0.1.0
@@ -369,21 +456,6 @@ if [ "$os" = "linux" ]; then
     test "$(cat "$PULSE_INSTALL_TEST_SYSTEMCTL.count")" -eq 61
     grep -Fq 'did not become active within 60 s' "$TMP/timeout.out"
     if grep -Fq 'update complete' "$TMP/timeout.out"; then exit 1; fi
-
-    # A custom spool symlink (as used by DynamicUser) and external token.
-    mkdir -p "$TMP/real-spool"
-    printf 'cache\n' > "$TMP/real-spool/.states"
-    ln -s "$TMP/real-spool" "$TMP/spool-link"
-    cp "$token_file" "$TMP/external.token"
-    printf '[pulse]\nspool_dir = "%s"\ningest_token_file = "%s"\n' \
-        "$TMP/spool-link" "$TMP/external.token" > "$TMP/custom.toml"
-    sh "$ROOT/scripts/install.sh" --unattended --uninstall --purge \
-        --ingestor=linux --scheduler=none --prefix="$prefix" \
-        --config-path="$TMP/custom.toml" >/dev/null
-    test ! -e "$TMP/real-spool"
-    test ! -L "$TMP/spool-link"
-    test ! -e "$TMP/external.token"
-    test -f "$TMP/custom.toml"
 fi
 
 printf 'installer integration test passed\n'

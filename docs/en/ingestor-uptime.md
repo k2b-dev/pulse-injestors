@@ -166,7 +166,7 @@ See the [Uptime module](/en/module-uptime) for every metric, state, dimension, d
 
 Use `cadence_seconds = 86400` for DNS or TLS checks when retaining the old daily schedule. Set Pulse alerts for both `uptime.check.result=failed` and `uptime.check.result=error`. An exhausted check budget, empty DNS answer, or failed DNSBL reference is an error, never a pass.
 
-For `ports`, individual connect timeouts mean filtered and count as not open: unexpected open ports and expected ports that are closed or filtered produce `failed`. A scan with no open ports and no refusals produces `error`, because it cannot distinguish a host that is down from one with every port filtered. Completed scans without scan errors report both `uptime.ports.open` and `uptime.ports.filtered`.
+For `ports`, `rate_per_second` defaults to `200` and must be positive; each scan also limits concurrent connections to 64. Individual connect timeouts mean filtered and count as not open: unexpected open ports and expected ports that are closed or filtered produce `failed`. A scan with no open ports and no refusals produces `error`, because it cannot distinguish a host that is down from one with every port filtered. Completed scans without scan errors report both `uptime.ports.open` and `uptime.ports.filtered`.
 
 The complete example below includes all four public check families plus LAN ping. Replace the example addresses, names, resolver, source URL, and token path before use. Configure DNSBL queries through a resolver accepted by each list provider. Their reference checks expose blocked or unusable resolvers.
 
@@ -207,6 +207,7 @@ timeout_seconds = 5
 id = "public-ports"
 label = "Public server ports"
 kind = "ports"
+rate_per_second = 200
 address = "192.0.2.10" # IPv6: "[2001:db8::10]"
 expected = [22, 443]
 range = "1-10000"
@@ -271,6 +272,6 @@ cadence_seconds = 60
 
 ## Detect a stopped prober
 
-The ingestor already sends `ingestor.heartbeat`. Configure **Expected data** on the uptime source in Pulse so missing heartbeat data alerts when the prober stops or cannot deliver. This replaces the external dead-man's-switch service; an extra self-ping target is unnecessary. Allow for the longest configured check budget and delivery retries when choosing the expected-data window.
+The ingestor already sends `ingestor.heartbeat`. Configure **Expected data** on the uptime source in Pulse so missing heartbeat data alerts when the prober stops or cannot deliver. This replaces the external dead-man's-switch service; an extra self-ping target is unnecessary. Allow for the collection interval and delivery retries when choosing the expected-data window. Long scans do not delay heartbeats.
 
-The runner checks minute targets before slower checks. A long scan can delay the next cycle; its default budget is fifteen minutes. `once` runs every cadence for verification. After editing the config, run `--local --pretty once`, inspect every target's result, then restart the supervised ingestor.
+Minute targets and heartbeats continue while a separate lane runs slower checks. Each slow collector queues its result when it finishes; a port scan has a default budget of fifteen minutes. `once` runs every cadence for verification. After editing the config, run `--local --pretty once`, inspect every target's result, then restart the supervised ingestor.

@@ -143,12 +143,12 @@ func mergeDims(base, extra map[string]string) map[string]string {
 	out := make(map[string]string, len(base)+len(extra))
 	for k, v := range base {
 		if v != "" {
-			out[k] = v
+			out[k] = boundedText(v, 500)
 		}
 	}
 	for k, v := range extra {
 		if v != "" {
-			out[k] = v
+			out[k] = boundedText(v, 500)
 		}
 	}
 	return out
@@ -215,11 +215,33 @@ func resourceFromScope(scope Scope) *pulse.ResourceRef {
 	if resource.Label == "" {
 		resource.Label = signalLabel(scope)
 	}
+	resource.Label = boundedText(resource.Label, 240)
 	return &resource
 }
 
 func applyResource(resource **pulse.ResourceRef, scope Scope) {
 	if *resource == nil {
 		*resource = resourceFromScope(scope)
+	} else {
+		// Do not mutate a collector-owned resource shared with another lane.
+		copy := **resource
+		copy.Label = boundedText(copy.Label, 240)
+		*resource = &copy
 	}
+}
+
+// boundedText follows Pulse's UTF-16 limits without splitting a Unicode rune.
+func boundedText(value string, limit int) string {
+	units := 0
+	for offset, r := range value {
+		size := 1
+		if r > 0xffff {
+			size = 2
+		}
+		if units+size > limit {
+			return value[:offset]
+		}
+		units += size
+	}
+	return value
 }

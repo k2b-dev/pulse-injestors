@@ -2,6 +2,7 @@ package pbs
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -420,6 +421,10 @@ func collectDatastoreGroups(ctx context.Context, b *monitoring.Builder, client C
 				gs.Resource.ID = entity.ID(stableHostFromScope(scope), store, ns, name)
 				gs.Resource.Label = name + " in " + ns + " on " + store
 				dims["namespace"] = ns
+			}
+			if len(gs.Resource.Type)+1+len(gs.Resource.ID) > 505 || len(gs.Resource.ID) > 500 {
+				// Keep short identities stable; hash the full identity for deep paths.
+				gs.Resource.ID = fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(gs.Resource.ID)))
 			}
 			gb := monitoring.NewBuilder(gs)
 			value := ""

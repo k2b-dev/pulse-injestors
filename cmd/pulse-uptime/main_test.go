@@ -142,3 +142,33 @@ func TestConfiguredScriptChecksAndCadences(t *testing.T) {
 		}
 	}
 }
+
+func TestPortScanConfiguredRate(t *testing.T) {
+	for _, rate := range []string{"", "rate_per_second = 50", "rate_per_second = 0", "rate_per_second = -1"} {
+		t.Run(rate, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			text := "[uptime]\nenable_defaults = false\n[[uptime.target]]\nid = \"ports\"\nlabel = \"Ports\"\nkind = \"ports\"\naddress = \"127.0.0.1\"\n" + rate + "\n"
+			if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := loadConfig(cli{Config: path, ResourceID: "test", Local: true})
+			if rate == "rate_per_second = 0" || rate == "rate_per_second = -1" {
+				if err == nil {
+					t.Fatal("nonpositive rate accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			targets, err := configuredTargets(cfg)
+			want := 200
+			if rate != "" {
+				want = 50
+			}
+			if err != nil || len(targets) != 1 || targets[0].RatePerSecond != want {
+				t.Fatalf("targets=%+v err=%v", targets, err)
+			}
+		})
+	}
+}

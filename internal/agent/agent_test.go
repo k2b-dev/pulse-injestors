@@ -338,3 +338,55 @@ func (localSlowCollector) Collect(_ context.Context, scope monitoring.Scope) (pu
 	b.State("slow.state", true, nil)
 	return b.Batch(), nil
 }
+
+// The second slow collector blocks until shutdown: the first result must reach
+// Pulse before the lane completes, while health continues every second.
+type slowServiceCollector struct {
+	name  string
+	delay time.Duration
+}
+
+func (c slowServiceCollector) Name() string                  { return c.name }
+func (c slowServiceCollector) Cadence() time.Duration        { return time.Hour }
+func (c slowServiceCollector) CollectTimeout() time.Duration { return 30 * time.Second }
+func (c slowServiceCollector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.Batch, error) {
+	timer := time.NewTimer(c.delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return pulse.Batch{}, ctx.Err()
+	case <-timer.C:
+	}
+	b := monitoring.NewBuilder(scope)
+	b.State(c.name+".result", true, nil)
+	return b.Batch(), nil
+}
+func TestServeSlowLaneDoesNotDelayHeartbeatAndStreamsResults(t *testing.T) {
+	fake, opt, _ := setup(t, filepath.Join(t.TempDir(), "spool"))
+	opt.Command = "run"
+	opt.Runner.Collectors = append(opt.Runner.Collectors,
+		slowServiceCollector{"slow", 5 * time.Second}, slowServiceCollector{"following", time.Hour})
+	ctx, cancel := context.WithTimeout(context.Background(), 6500*time.Millisecond)
+	defer cancel()
+	if err := Run(ctx, opt); err != nil {
+		t.Fatal(err)
+	}
+	beforeSlow, slowResults := 0, 0
+	for _, batch := range fake.received() {
+		for _, state := range batch.States {
+			if state.Key == "slow.result" {
+				slowResults++
+			}
+		}
+		if slowResults == 0 {
+			for _, metric := range batch.Metrics {
+				if metric.Name == "ingestor.heartbeat" {
+					beforeSlow++
+				}
+			}
+		}
+	}
+	if beforeSlow < 4 || slowResults != 1 {
+		t.Fatalf("heartbeats before slow result=%d, slow results=%d", beforeSlow, slowResults)
+	}
+}

@@ -50,6 +50,7 @@ timeout_seconds = 5
 id = "public-ports"
 label = "Public server ports"
 kind = "ports"
+rate_per_second = 200 # Positive connections/s limit, in addition to concurrency.
 address = "192.0.2.10" # IPv6: "[2001:db8::10]"
 expected = [22, 443]
 range = "1-10000"

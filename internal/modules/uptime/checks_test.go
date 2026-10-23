@@ -484,3 +484,38 @@ func TestLongMismatchMessageIsBounded(t *testing.T) {
 		t.Fatalf("truncation not exercised: %d", len([]rune(message)))
 	}
 }
+
+func TestPortScanRateLimitAndCancellation(t *testing.T) {
+	for _, rate := range []int{0, 20} {
+		t.Run(fmt.Sprint(rate), func(t *testing.T) {
+			var mu sync.Mutex
+			calls := 0
+			c := Collector{PortDial: func(context.Context, string) (net.Conn, error) {
+				mu.Lock()
+				calls++
+				mu.Unlock()
+				return nil, syscall.ECONNREFUSED
+			}}
+			start := time.Now()
+			result := c.checkPorts(context.Background(), Target{Address: "127.0.0.1", Range: "1-6", RatePerSecond: rate})
+			effective := rate
+			if effective == 0 {
+				effective = 200
+			}
+			if !result.success || calls != 6 || time.Since(start) < 5*time.Second/time.Duration(effective) {
+				t.Fatalf("rate=%d calls=%d elapsed=%s result=%+v", rate, calls, time.Since(start), result)
+			}
+		})
+	}
+	c := Collector{PortDial: func(context.Context, string) (net.Conn, error) {
+		t.Error("dial after cancellation")
+		return nil, syscall.ECONNREFUSED
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	result := c.checkPorts(ctx, Target{Address: "127.0.0.1", Range: "1-100", RatePerSecond: 1})
+	if result.measured || result.success || time.Since(start) > time.Second {
+		t.Fatalf("cancellation: %+v", result)
+	}
+}

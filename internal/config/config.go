@@ -140,6 +140,7 @@ type UptimeRecordConfig struct {
 }
 
 type UptimeTargetConfig struct {
+	RatePerSecond  *int                 `toml:"rate_per_second"`
 	CadenceSeconds int                  `toml:"cadence_seconds"`
 	Name           string               `toml:"name"`
 	Resolver       string               `toml:"resolver"`
@@ -959,6 +960,9 @@ func validateUptimeTargets(targets []UptimeTargetConfig) error {
 				return fmt.Errorf("uptime target %q expected_status must be between 100 and 599", target.ID)
 			}
 		case "ports":
+			if target.RatePerSecond != nil && *target.RatePerSecond <= 0 {
+				return fmt.Errorf("uptime target %q rate_per_second must be positive", target.ID)
+			}
 			host := strings.Trim(target.Address, "[]")
 			if host == "" || strings.ContainsAny(host, "/ \t\r\n") || (strings.Contains(host, ":") && net.ParseIP(host) == nil) {
 				return fmt.Errorf("uptime target %q ports address must be a host", target.ID)

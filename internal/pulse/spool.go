@@ -150,6 +150,32 @@ func (s *Spool) load(now time.Time) error {
 	if err != nil {
 		return err
 	}
+	// A surviving parent is authoritative: its split did not commit. Discard
+	// every descendant, including grandchildren from an interrupted retry.
+	present := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		present[path] = true
+	}
+	kept := paths[:0]
+	for _, path := range paths {
+		stem := strings.TrimSuffix(path, partSuffix)
+		orphan := false
+		for strings.HasSuffix(stem, "-a") || strings.HasSuffix(stem, "-b") {
+			stem = stem[:len(stem)-2]
+			if present[stem+partSuffix] {
+				orphan = true
+				break
+			}
+		}
+		if orphan {
+			if err := os.Remove(path); err != nil {
+				return err
+			}
+		} else {
+			kept = append(kept, path)
+		}
+	}
+	paths = kept
 	sort.Strings(paths)
 	for _, path := range paths {
 		info, err := os.Lstat(path)
@@ -311,7 +337,9 @@ func (s *Spool) reject(part spoolPart, body []byte, result Result) Result {
 		}
 		return Result{Outcome: Delivered}
 	}
-	s.quarantine(part, body, result)
+	if err := s.quarantine(part, body, result); err != nil {
+		return Result{Outcome: Retry, Err: err}
+	}
 	return Result{Outcome: Delivered}
 }
 
@@ -360,9 +388,8 @@ func (s *Spool) replace(part spoolPart, halves [][]byte) (err error) {
 			}
 		}
 	}()
-	for _, body := range halves {
-		s.seq++
-		next := spoolPart{name: partName(part.created, s.seq), created: part.created, size: int64(len(body))}
+	for i, body := range halves {
+		next := spoolPart{name: fmt.Sprintf("%s-%c%s", strings.TrimSuffix(part.name, partSuffix), 'a'+i, partSuffix), created: part.created, size: int64(len(body))}
 		replacement = append(replacement, next)
 		if s.Dir == "" {
 			replacement[len(replacement)-1].body = body
@@ -384,7 +411,7 @@ func (s *Spool) replace(part spoolPart, halves [][]byte) (err error) {
 	return nil
 }
 
-func (s *Spool) quarantine(part spoolPart, body []byte, result Result) {
+func (s *Spool) quarantine(part spoolPart, body []byte, result Result) error {
 	counts := countItems(body)
 	item, metric := describeItem(body)
 	if strings.Contains(strings.ToLower(result.Message), "type and unit") {
@@ -403,8 +430,9 @@ func (s *Spool) quarantine(part spoolPart, body []byte, result Result) {
 		}
 	}
 	if err := s.remove(part); err != nil {
-		s.log().Error("could not remove rejected part from spool", "err", err)
+		return fmt.Errorf("remove rejected part from spool: %w", err)
 	}
+	return nil
 }
 
 func (s *Spool) writeQuarantine(part spoolPart, body []byte, result Result) error {
@@ -579,7 +607,13 @@ func parsePartName(name string) (time.Time, uint64, bool) {
 	if err != nil || n <= 0 {
 		return time.Time{}, 0, false
 	}
-	seq, err := strconv.ParseUint(seqText, 10, 64)
+	components := strings.Split(seqText, "-")
+	for _, branch := range components[1:] {
+		if branch != "a" && branch != "b" {
+			return time.Time{}, 0, false
+		}
+	}
+	seq, err := strconv.ParseUint(components[0], 10, 64)
 	if err != nil {
 		return time.Time{}, 0, false
 	}

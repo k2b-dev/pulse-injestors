@@ -33,7 +33,7 @@ Use `ingestor.heartbeat` for liveness. It is a gauge with value `1` per cycle, w
 
 ## Resources
 
-Every resource has a stable `type`, `id`, and human-readable `label`. The canonical resource key is `<type>:<id>`, for example:
+Every resource has a stable `type`, `id`, and human-readable `label`. Labels are capped at 240 UTF-16 code units and dimension values at 500 before validation, without splitting Unicode characters. IDs are never truncated; an overlong ID remains a validation error. The canonical resource key is `<type>:<id>`, for example:
 
 - `host:server-01`
 - `docker-container:server-01:compose:pulse:api:1`

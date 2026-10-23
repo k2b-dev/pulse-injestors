@@ -580,3 +580,95 @@ func TestSpoolFailedSplitCleansUpHalvesBeforeRestart(t *testing.T) {
 		t.Fatalf("restart replayed orphan halves: %v", bodies)
 	}
 }
+
+func TestSpoolRecoversInterruptedSplit(t *testing.T) {
+	for _, suffixes := range [][]string{{"-a"}, {"-a", "-b"}, {"-a-a", "-a-b", "-b"}} {
+		t.Run(strings.Join(suffixes, "_"), func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "spool")
+			spool, _ := openSpool(t, dir, 1<<20, fixedNow)
+			batch := stateBatch("first")
+			batch.States = append(batch.States, stateBatch("second").States...)
+			if err := spool.Enqueue([]Batch{batch}, fixedNow); err != nil {
+				t.Fatal(err)
+			}
+			part, body, err := spool.peek(fixedNow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, suffix := range suffixes {
+				path := filepath.Join(dir, strings.TrimSuffix(part.name, partSuffix)+suffix+partSuffix)
+				if err := atomicWrite(path, body); err != nil {
+					t.Fatal(err)
+				}
+			}
+			spool.Close()
+			reopened, _ := openSpool(t, dir, 1<<20, fixedNow)
+			files, _ := filepath.Glob(filepath.Join(dir, "*.part"))
+			if reopened.State().Parts != 1 || len(files) != 1 {
+				t.Fatalf("replayed split descendants: %v", files)
+			}
+			fake, client := newFake(t)
+			if result := reopened.Drain(context.Background(), client); result.Outcome != Delivered {
+				t.Fatal(result)
+			}
+			if bodies, _ := fake.requests(); len(bodies) != 1 || bodies[0] != string(body) {
+				t.Fatalf("replay: %v", bodies)
+			}
+		})
+	}
+}
+
+func TestSpoolCommittedSplitSurvivesRestart(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "spool")
+	spool, _ := openSpool(t, dir, 1<<20, fixedNow)
+	batch := stateBatch("first")
+	batch.States = append(batch.States, stateBatch("second").States...)
+	if err := spool.Enqueue([]Batch{batch}, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+	part, body, err := spool.peek(fixedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	halves, _ := halve(body)
+	if err := spool.replace(*part, halves); err != nil {
+		t.Fatal(err)
+	}
+	for i, queued := range spool.parts {
+		want := strings.TrimSuffix(part.name, partSuffix) + []string{"-a.part", "-b.part"}[i]
+		if queued.name != want {
+			t.Fatalf("name=%s want=%s", queued.name, want)
+		}
+	}
+	spool.Close()
+	reopened, _ := openSpool(t, dir, 1<<20, fixedNow)
+	if reopened.State().Parts != 2 {
+		t.Fatal(reopened.State())
+	}
+}
+
+func TestSpoolRejectedSingletonRemovalFailureRetries(t *testing.T) {
+	spool, _ := openSpool(t, filepath.Join(t.TempDir(), "spool"), 1<<20, fixedNow)
+	if err := spool.Enqueue([]Batch{stateBatch("bad")}, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+	part, body, err := spool.peek(fixedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A nonempty directory at the part path makes removal fail even as root.
+	path := filepath.Join(spool.Dir, part.name)
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "blocker"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	result := spool.reject(*part, body, Result{Outcome: Rejected, Status: 400})
+	if result.Outcome != Retry || result.Err == nil || spool.State().Parts != 1 {
+		t.Fatalf("removal failure: %+v", result)
+	}
+}
