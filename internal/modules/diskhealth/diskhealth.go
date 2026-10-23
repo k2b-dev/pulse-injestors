@@ -229,25 +229,30 @@ func parseSmartAttributes(out []byte) []smartAttribute {
 }
 
 func emitSmartAttributes(b *monitoring.Builder, dims map[string]string, out []byte) {
+	temperatureSent := false
 	for _, attr := range parseSmartAttributes(out) {
-		attrDims := copyDims(dims)
-		attrDims["attribute"] = attr.Name
-		b.Metric("system.disk.smart.attribute.raw", "gauge", attr.Value, "count", attrDims)
 		switch attr.Name {
 		case "reallocated_sector_ct":
-			b.Metric("system.disk.smart.reallocated_sectors", "gauge", attr.Value, "count", dims)
+			b.Metric("system.disk.smart.reallocated_sectors", "gauge", attr.Value, "", dims)
 		case "current_pending_sector":
-			b.Metric("system.disk.smart.pending_sectors", "gauge", attr.Value, "count", dims)
+			b.Metric("system.disk.smart.pending_sectors", "gauge", attr.Value, "", dims)
 		case "offline_uncorrectable":
-			b.Metric("system.disk.smart.uncorrectable_sectors", "gauge", attr.Value, "count", dims)
+			b.Metric("system.disk.smart.uncorrectable_sectors", "gauge", attr.Value, "", dims)
 		case "udma_crc_error_count":
-			b.Metric("system.disk.smart.udma_crc_errors", "gauge", attr.Value, "count", dims)
+			b.Metric("system.disk.smart.udma_crc_errors", "counter", attr.Value, "", dims)
 		case "power_on_hours":
-			b.Metric("system.disk.smart.power_on_hours", "gauge", attr.Value, "hours", dims)
+			b.Metric("system.disk.smart.power_on_time", "counter", attr.Value*3600, "seconds", dims)
 		case "power_cycle_count":
-			b.Metric("system.disk.smart.power_cycles", "gauge", attr.Value, "count", dims)
+			b.Metric("system.disk.smart.power_cycles", "counter", attr.Value, "", dims)
 		case "temperature_celsius", "airflow_temperature_cel":
-			b.Metric("system.disk.smart.temperature", "gauge", attr.Value, "celsius", dims)
+			if !temperatureSent {
+				b.Metric("system.disk.smart.temperature", "gauge", attr.Value, "celsius", dims)
+				temperatureSent = true
+			}
+		default:
+			attrDims := copyDims(dims)
+			attrDims["attribute"] = attr.Name
+			b.Metric("system.disk.smart.attribute.raw", "gauge", attr.Value, "", attrDims)
 		}
 	}
 }
@@ -330,8 +335,8 @@ func emitNVMeSmart(b *monitoring.Builder, dims map[string]string, out []byte) {
 	emitNVMeTemperature(b, raw, dims)
 	emitNumber(b, raw, "percentage_used", "system.disk.nvme.percentage_used", "percent", dims)
 	emitNumber(b, raw, "available_spare", "system.disk.nvme.available_spare", "percent", dims)
-	emitNumber(b, raw, "media_errors", "system.disk.nvme.media_errors", "count", dims)
-	emitNumber(b, raw, "num_err_log_entries", "system.disk.nvme.error_log_entries", "count", dims)
+	emitNumber(b, raw, "media_errors", "system.disk.nvme.media_errors", "", dims)
+	emitNumber(b, raw, "num_err_log_entries", "system.disk.nvme.error_log_entries", "", dims)
 }
 
 func emitNVMeTemperature(b *monitoring.Builder, raw map[string]any, dims map[string]string) {
@@ -339,13 +344,16 @@ func emitNVMeTemperature(b *monitoring.Builder, raw map[string]any, dims map[str
 	if !ok {
 		return
 	}
-	b.Metric("system.disk.nvme.temperature", "gauge", v, "kelvin", dims)
 	b.Metric("system.disk.nvme.temperature.celsius", "gauge", v-273.15, "celsius", dims)
 }
 
 func emitNumber(b *monitoring.Builder, raw map[string]any, source, name, unit string, dims map[string]string) {
 	if v, ok := jsonNumber(raw[source]); ok {
-		b.Metric(name, "gauge", v, unit, dims)
+		typ := "gauge"
+		if name == "system.disk.nvme.media_errors" || name == "system.disk.nvme.error_log_entries" {
+			typ = "counter"
+		}
+		b.Metric(name, typ, v, unit, dims)
 	}
 }
 

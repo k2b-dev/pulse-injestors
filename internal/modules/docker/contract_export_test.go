@@ -14,7 +14,7 @@ import (
 
 // Exercise Docker's signal renderers with API-shaped fixtures, without a daemon.
 func TestPulseContractExport(t *testing.T) {
-	scope := monitoring.Scope{Resource: pulse.ResourceRef{Type: "host", ID: "fixture", Label: "Fixture"}, Dimensions: map[string]string{"host": "fixture"}, Timestamp: time.Unix(1700001000, 0).UTC()}
+	scope := monitoring.Scope{Resource: pulse.ResourceRef{Type: "host", ID: "fixture", Label: "Fixture"}, Timestamp: time.Unix(1700001000, 0).UTC()}
 	container := containerSummary{ID: "abcdef0123456789", Names: []string{"/app-1"}, State: "running", Labels: map[string]string{"com.docker.compose.project": "example", "com.docker.compose.service": "app", "com.docker.compose.container-number": "1"}}
 	b := monitoring.NewBuilder(containerScope(scope, "fixture", container))
 	var stats statsResponse

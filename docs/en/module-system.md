@@ -5,12 +5,14 @@ section: Modules
 order: 320
 description: Host CPU, memory, load, and uptime collection.
 tags: [system, modules, reference]
-updated: 2026-06-11
+updated: 2026-10-23
 ---
 
 # System module
 
 The system module collects core host metrics from procfs.
+
+In `pulse-linux`, this collector runs every 60 seconds by default. Override `system` in `[runner.cadence]`. States are sent on change and refreshed after six hours when checked again; table cadences describe collection. Other binaries retain their own schedules.
 
 ## Resource types
 
@@ -18,19 +20,21 @@ The system module collects core host metrics from procfs.
 
 ## Metrics
 
-| Name | Type | Unit | Dimensions | Example | Meaning |
-|---|---|---:|---|---:|---|
-| `system.cpu.usage` | gauge | percent | `host` | `17.4` | CPU busy percentage for the host, sampled over the configured window. |
-| `system.load.1m` | gauge | load | `host` | `0.82` | 1 minute load average for the host. |
-| `system.load.5m` | gauge | load | `host` | `0.74` | 5 minute load average for the host. |
-| `system.load.15m` | gauge | load | `host` | `0.69` | 15 minute load average for the host. |
-| `system.memory.total` | gauge | bytes | `host` | `17179869184` | Total memory in bytes for the host. |
-| `system.memory.available` | gauge | bytes | `host` | `9126805504` | Available memory in bytes for applications on the host. |
-| `system.memory.used` | gauge | bytes | `host` | `8053063680` | Used memory in bytes for the host. |
-| `system.memory.usage` | gauge | percent | `host` | `46.9` | Used memory percentage for the host. |
-| `system.swap.used` | gauge | bytes | `host` | `268435456` | Used swap in bytes for the host. Emitted only when swap is configured. |
-| `system.swap.usage` | gauge | percent | `host` | `12.5` | Used swap percentage for the host. |
-| `system.uptime` | gauge | seconds | `host` | `86400` | Host uptime in seconds. |
+| Signal | Type | Unit | Dimensions | Example | Meaning | Cadence |
+|---|---|---|---|---|---|---|
+| `system.cpu.usage` | gauge | percent | — | `17.4` | CPU busy percentage for the host, sampled over the configured window. | 60 s |
+| `system.load.1m` | gauge | — | — | `0.82` | 1 minute load average for the host. | 60 s |
+| `system.load.5m` | gauge | — | — | `0.74` | 5 minute load average for the host. | 60 s |
+| `system.load.15m` | gauge | — | — | `0.69` | 15 minute load average for the host. | 60 s |
+| `system.memory.total` | gauge | bytes | — | `17179869184` | Total memory in bytes for the host. | 60 s |
+| `system.memory.available` | gauge | bytes | — | `9126805504` | Available memory in bytes for applications on the host. | 60 s |
+| `system.memory.used` | gauge | bytes | — | `8053063680` | Used memory in bytes for the host. | 60 s |
+| `system.memory.usage` | gauge | percent | — | `46.9` | Used memory percentage for the host. | 60 s |
+| `system.swap.used` | gauge | bytes | — | `268435456` | Used swap in bytes for the host. Emitted only when swap is configured. | 60 s |
+| `system.swap.usage` | gauge | percent | — | `12.5` | Used swap percentage for the host. | 60 s |
+| `system.uptime` | gauge | seconds | — | `86400` | Host uptime in seconds. | 60 s |
+| `system.cpu.time` | counter | seconds | `mode` | `12500.25` | Cumulative aggregate CPU time; mode is user, nice, system, idle, iowait, irq, softirq, or steal. USER_HZ is 100; guest time is already included in user/nice. | 60 s |
+| `system.cpu.cores` | gauge | — | — | `8` | Number of logical CPUs reported by procfs. | 60 s |
 
 ## States
 
@@ -42,9 +46,8 @@ This module does not emit events directly. If all core procfs reads fail, the ru
 
 ## Dimensions
 
-| Name | Example | Applies to | Meaning |
-|---|---|---|---|
-| `host` | `server-01` | all signals | Stable host id from configuration. |
+`mode` identifies the eight CPU time modes listed above. There is no automatic `host` dimension.
+
 
 ## Requirements
 
@@ -53,4 +56,4 @@ This module does not emit events directly. If all core procfs reads fail, the ru
 
 ## Failure behavior
 
-Missing procfs files produce a collector failure because the module cannot identify the host system. Optional modules continue independently.
+Reads that succeed still produce metrics. If no core metric can be read, the runner reports a collector failure. CPU usage needs two samples; cumulative mode counters remain available when no CPU delta can be measured.

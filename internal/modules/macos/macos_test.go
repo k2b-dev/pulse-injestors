@@ -72,9 +72,6 @@ func TestIoregNumbersParsesSignedValues(t *testing.T) {
 func TestMacOSResourceScopes(t *testing.T) {
 	scope := monitoring.Scope{
 		Resource: pulse.ResourceRef{Type: "host", ID: "macbook-01"},
-		Dimensions: map[string]string{
-			"host": "macbook-01",
-		},
 	}
 
 	filesystem := filesystemScope(scope, "/System/Volumes/Data")

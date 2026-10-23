@@ -89,3 +89,36 @@ func TestStateCacheKeepsLastDuplicateBeforeComparing(t *testing.T) {
 		t.Fatalf("earlier duplicate caused a resend: %+v", send)
 	}
 }
+
+func TestSoftwareRefreshWeeklyAndDailyObservationPreventsForget(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	c := &StateCache{Path: filepath.Join(t.TempDir(), "states")}
+	states := []pulse.State{{Key: "software.package.version", Value: "1"}, {Key: "system.os.version", Value: "1"}}
+	for day := 0; day <= 15; day++ {
+		ts := now.Add(time.Duration(day) * 24 * time.Hour)
+		send, commit := c.Filter(states, ts)
+		want := 1
+		if day%7 == 0 {
+			want = 2
+		}
+		if len(send) != want {
+			t.Fatalf("day %d: %v", day, send)
+		}
+		commit()
+		if err := c.Save(ts); err != nil {
+			t.Fatal(err)
+		}
+		// Verify persistence keeps the last-seen timestamp even when not resent.
+		if err := c.Load(); err != nil {
+			t.Fatal(err)
+		}
+		if len(c.entries) != 2 {
+			t.Fatal("daily observed key forgotten")
+		}
+	}
+	states[0].Value = "2"
+	send, _ := c.Filter(states, now.Add(15*24*time.Hour+time.Minute))
+	if len(send) != 1 || send[0].Key != "software.package.version" {
+		t.Fatalf("change not sent: %v", send)
+	}
+}

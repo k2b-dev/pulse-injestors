@@ -1,6 +1,7 @@
 package config
 
 import (
+	"github.com/k2b-dev/pulse-injestors/internal/entity"
 	"os"
 	"path/filepath"
 	"strings"
@@ -438,5 +439,79 @@ func TestResolveLocalSkipsTokenFilesAndCredentials(t *testing.T) {
 		if _, err := Resolve(base, Overlay{}); err == nil {
 			t.Fatal("non-local resolution accepted missing token file/credential")
 		}
+	}
+}
+
+func TestLinuxSliceConfiguration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	body := `[runner.cadence]
+network = 600
+"script:custom" = 120
+[linux]
+network_exclude = []
+certificate_paths = ["/etc/certs/*.pem"]
+[[backup]]
+name = "db"
+marker_file = "/var/lib/backup/ok"
+[[script]]
+name = "custom"
+command = ["true"]
+cadence_seconds = 120
+`
+	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := LoadFile(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Resolve(file, Overlay{AllowMissingPulse: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Linux.NetworkExclude == nil || cfg.Runner.Cadence["network"] != 600 || len(cfg.Backups) != 1 || cfg.Scripts[0].CadenceSeconds != 120 {
+		t.Fatalf("config lost: %+v", cfg)
+	}
+	for _, bad := range []Config{
+		{Runner: RunnerConfig{Cadence: map[string]int{"network": 59}}},
+		{Runner: RunnerConfig{Cadence: map[string]int{"": 60}}},
+		{Linux: LinuxConfig{NetworkExclude: []string{"["}}},
+		{Linux: LinuxConfig{CertificatePaths: []string{"["}}},
+		{Backups: []BackupConfig{{Name: "db"}}},
+		{Backups: []BackupConfig{{Name: "db", MarkerFile: "a", Command: []string{"true"}}}},
+		{Backups: []BackupConfig{{Name: "db", MarkerFile: "a"}, {Name: "db", MarkerFile: "b"}}},
+		{Scripts: []ScriptConfig{{Name: "x", Command: []string{"true"}, CadenceSeconds: 59}}},
+	} {
+		if _, err := Resolve(bad, Overlay{AllowMissingPulse: true}); err == nil {
+			t.Fatalf("accepted invalid config: %+v", bad)
+		}
+	}
+}
+
+func TestReservedHostDimension(t *testing.T) {
+	const want = "dimension 'host' is reserved; the resource id identifies the host"
+	for _, value := range []string{"other-host", ""} {
+		for _, overlay := range []bool{false, true} {
+			file, overrides := Config{}, Overlay{AllowMissingPulse: true}
+			if overlay {
+				overrides.Dimensions = map[string]string{"host": value}
+			} else {
+				file.Dimensions = map[string]string{"host": value}
+			}
+			if _, err := Resolve(file, overrides); err == nil || err.Error() != want {
+				t.Fatalf("value=%q overlay=%v: %v", value, overlay, err)
+			}
+		}
+	}
+	if _, err := ParseDimensions([]string{"host=other-host"}); err == nil || err.Error() != want {
+		t.Fatalf("CLI host dimension: %v", err)
+	}
+	cfg, err := Resolve(Config{Resource: ResourceConfig{ID: "resource-host"}, Dimensions: map[string]string{"site": "test"}},
+		Overlay{AllowMissingPulse: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := entity.StableHostIDFromScope(cfg.Resource.ID, cfg.Dimensions); got != "resource-host" {
+		t.Fatalf("host identity = %q", got)
 	}
 }

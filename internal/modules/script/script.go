@@ -24,7 +24,8 @@ type Script struct {
 }
 
 type Collector struct {
-	Scripts []Script
+	CollectorName string
+	Scripts       []Script
 }
 
 type output struct {
@@ -34,7 +35,12 @@ type output struct {
 	States     []pulse.State     `json:"states"`
 }
 
-func (c Collector) Name() string { return "script" }
+func (c Collector) Name() string {
+	if c.CollectorName != "" {
+		return c.CollectorName
+	}
+	return "script"
+}
 
 func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.Batch, error) {
 	b := monitoring.NewBuilder(scope)

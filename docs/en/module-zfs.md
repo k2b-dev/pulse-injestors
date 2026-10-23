@@ -5,12 +5,14 @@ section: Modules
 order: 380
 description: ZFS pool, dataset, and snapshot collection.
 tags: [zfs, storage, modules, reference]
-updated: 2026-07-23
+updated: 2026-10-23
 ---
 
 # ZFS module
 
 The ZFS module collects pool, dataset, and snapshot data through ZFS tools.
+
+In `pulse-linux`, this collector runs every 300 seconds by default. Override `zfs` in `[runner.cadence]`. States are sent on change and refreshed after six hours when checked again; table cadences describe collection. Other binaries retain their own schedules.
 
 ## Resource types
 
@@ -22,53 +24,52 @@ The ZFS module collects pool, dataset, and snapshot data through ZFS tools.
 
 ## Metrics
 
-| Name | Type | Unit | Dimensions | Example | Meaning |
-|---|---|---:|---|---:|---|
-| `system.zfs.pools` | gauge |  | `host` | `1` | Number of ZFS pools returned for the host. |
-| `system.zfs.pool.size` | gauge | bytes | `host`, `pool` | `1999844147200` | Total size in bytes for one ZFS pool. |
-| `system.zfs.pool.allocated` | gauge | bytes | `host`, `pool` | `644245094400` | Allocated bytes in one ZFS pool. |
-| `system.zfs.pool.free` | gauge | bytes | `host`, `pool` | `1355599052800` | Free bytes in one ZFS pool. |
-| `system.zfs.pool.capacity` | gauge | percent | `host`, `pool` | `32` | Used capacity percentage for one ZFS pool. |
-| `system.zfs.pool.fragmentation` | gauge | percent | `host`, `pool` | `8` | Fragmentation percentage for one ZFS pool. |
-| `system.zfs.pool.scan.errors` | gauge | count | `host`, `pool` | `0` | Error count from the latest scan for one ZFS pool. |
-| `system.zfs.datasets` | gauge |  | `host` | `12` | Number of ZFS filesystems and volumes returned for the host. |
-| `system.zfs.dataset.used` | gauge | bytes | `host`, `dataset` | `10737418240` | Used bytes for one ZFS dataset or volume. |
-| `system.zfs.dataset.available` | gauge | bytes | `host`, `dataset` | `214748364800` | Available bytes for one ZFS dataset or volume. |
-| `system.zfs.dataset.referenced` | gauge | bytes | `host`, `dataset` | `5368709120` | Referenced bytes for one ZFS dataset or volume. |
-| `system.zfs.dataset.compressratio` | gauge | ratio | `host`, `dataset` | `1.42` | Compression ratio for one ZFS dataset or volume. |
-| `system.zfs.dataset.snapshots` | gauge |  | `host`, `dataset` | `7` | Snapshot count for one ZFS dataset. |
-| `system.zfs.snapshots` | gauge |  | `host` | `34` | Total ZFS snapshot count on the host. |
+| Signal | Type | Unit | Dimensions | Example | Meaning | Cadence |
+|---|---|---|---|---|---|---|
+| `system.zfs.pools` | gauge | — | — | `1` | Number of ZFS pools returned for the host. | 300 s |
+| `system.zfs.pool.size` | gauge | bytes | `pool` | `1999844147200` | Total size in bytes for one ZFS pool. | 300 s |
+| `system.zfs.pool.allocated` | gauge | bytes | `pool` | `644245094400` | Allocated bytes in one ZFS pool. | 300 s |
+| `system.zfs.pool.free` | gauge | bytes | `pool` | `1355599052800` | Free bytes in one ZFS pool. | 300 s |
+| `system.zfs.pool.capacity` | gauge | percent | `pool` | `32` | Used capacity percentage for one ZFS pool. | 300 s |
+| `system.zfs.pool.fragmentation` | gauge | percent | `pool` | `8` | Fragmentation percentage for one ZFS pool. | 300 s |
+| `system.zfs.pool.scan.errors` | gauge | — | `pool` | `0` | Error count from the latest scan for one ZFS pool. | 300 s |
+| `system.zfs.datasets` | gauge | — | — | `12` | Number of ZFS filesystems and volumes returned for the host. | 300 s |
+| `system.zfs.dataset.used` | gauge | bytes | `dataset` | `10737418240` | Used bytes for one ZFS dataset or volume. | 300 s |
+| `system.zfs.dataset.available` | gauge | bytes | `dataset` | `214748364800` | Available bytes for one ZFS dataset or volume. | 300 s |
+| `system.zfs.dataset.referenced` | gauge | bytes | `dataset` | `5368709120` | Referenced bytes for one ZFS dataset or volume. | 300 s |
+| `system.zfs.dataset.compressratio` | gauge | — | `dataset` | `1.42` | Compression ratio for one ZFS dataset or volume. | 300 s |
+| `system.zfs.dataset.snapshots` | gauge | — | `dataset` | `7` | Snapshot count for one ZFS dataset. | 300 s |
+| `system.zfs.snapshots` | gauge | — | — | `34` | Total ZFS snapshot count on the host. | 300 s |
 
 ## States
 
-| Key | Value type | Dimensions | Example | Meaning |
-|---|---|---|---|---|
-| `system.zfs.available` | boolean | `host` | `true` | Whether either `zpool` or `zfs` is available. |
-| `system.zfs.zpool.available` | boolean | `host` | `true` | Whether `zpool` is available. |
-| `system.zfs.zfs.available` | boolean | `host` | `true` | Whether `zfs` is available. |
-| `system.zfs.pool.present` | boolean | `host`, `pool` | `true` | One ZFS pool was returned by `zpool list`. |
-| `system.zfs.pool.health` | string | `host`, `pool` | `ONLINE` | Raw health value for one ZFS pool. |
-| `system.zfs.pool.healthy` | boolean | `host`, `pool` | `true` | Whether one ZFS pool reports `ONLINE`. |
-| `system.zfs.pool.scan.status` | string | `host`, `pool` | `scrub repaired 0B` | Latest scan status text for one ZFS pool. |
-| `system.zfs.pool.scan.completed_at` | string | `host`, `pool` | `Sun Jun 7 01:23:45 2026` | Latest scan completion text for one ZFS pool. |
-| `system.zfs.dataset.present` | boolean | `host`, `dataset` | `true` | One ZFS dataset or volume was returned by `zfs list`. |
-| `system.zfs.dataset.type` | string | `host`, `dataset` | `filesystem` | ZFS dataset type, usually `filesystem` or `volume`. |
-| `system.zfs.dataset.mountpoint` | string | `host`, `dataset` | `/tank/data` | Mountpoint for one ZFS dataset when set. |
+| Signal | Type | Unit | Dimensions | Example | Meaning | Cadence |
+|---|---|---|---|---|---|---|
+| `system.zfs.available` | state boolean | — | — | `true` | Whether either `zpool` or `zfs` is available. | 300 s; change / 6 h |
+| `system.zfs.zpool.available` | state boolean | — | — | `true` | Whether `zpool` is available. | 300 s; change / 6 h |
+| `system.zfs.zfs.available` | state boolean | — | — | `true` | Whether `zfs` is available. | 300 s; change / 6 h |
+| `system.zfs.pool.present` | state boolean | — | `pool` | `true` | One ZFS pool was returned by `zpool list`. | 300 s; change / 6 h |
+| `system.zfs.pool.health` | state string | — | `pool` | `ONLINE` | Raw health value for one ZFS pool. | 300 s; change / 6 h |
+| `system.zfs.pool.healthy` | state boolean | — | `pool` | `true` | Whether one ZFS pool reports `ONLINE`. | 300 s; change / 6 h |
+| `system.zfs.pool.scan.status` | state string | — | `pool` | `scrub repaired 0B` | Latest scan status text for one ZFS pool. | 300 s; change / 6 h |
+| `system.zfs.pool.scan.completed_at` | state string | — | `pool` | `Sun Jun 7 01:23:45 2026` | Latest scan completion text for one ZFS pool. | 300 s; change / 6 h |
+| `system.zfs.dataset.present` | state boolean | — | `dataset` | `true` | One ZFS dataset or volume was returned by `zfs list`. | 300 s; change / 6 h |
+| `system.zfs.dataset.type` | state string | — | `dataset` | `filesystem` | ZFS dataset type, usually `filesystem` or `volume`. | 300 s; change / 6 h |
+| `system.zfs.dataset.mountpoint` | state string | — | `dataset` | `/tank/data` | Mountpoint for one ZFS dataset when set. | 300 s; change / 6 h |
 
 ## Events
 
-| Kind | Dimensions | Attributes | Trigger |
-|---|---|---|---|
-| `system.zfs.pools.failed` | `host`, `operation=pool_list` | `error` | `zpool list` failed. |
-| `system.zfs.pool.status.failed` | `host`, `operation=pool_status` | `error` | `zpool status` failed. |
-| `system.zfs.datasets.failed` | `host`, `operation=dataset_list` | `error` | `zfs list` for filesystems/volumes failed. |
-| `system.zfs.snapshots.failed` | `host`, `operation=snapshot_list` | `error` | `zfs list` for snapshots failed. |
+| Signal | Type | Unit | Dimensions | Example | Meaning | Cadence |
+|---|---|---|---|---|---|---|
+| `system.zfs.pools.failed` | event | — | `operation=pool_list` | `error` | `zpool list` failed. | on trigger at 300 s |
+| `system.zfs.pool.status.failed` | event | — | `operation=pool_status` | `error` | `zpool status` failed. | on trigger at 300 s |
+| `system.zfs.datasets.failed` | event | — | `operation=dataset_list` | `error` | `zfs list` for filesystems/volumes failed. | on trigger at 300 s |
+| `system.zfs.snapshots.failed` | event | — | `operation=snapshot_list` | `error` | `zfs list` for snapshots failed. | on trigger at 300 s |
 
 ## Dimensions
 
 | Name | Example | Applies to | Meaning |
 |---|---|---|---|
-| `host` | `server-01` | all signals | Stable host id from configuration. |
 | `pool` | `tank` | pool signals | ZFS pool name. |
 | `dataset` | `tank/data` | dataset and snapshot signals | Dataset name. |
 | `operation` | `pool_list` | failure events | Bounded collector operation that failed. |

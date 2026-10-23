@@ -68,9 +68,6 @@ config:
 func TestZFSScopeUsesResourceEntities(t *testing.T) {
 	scope := monitoring.Scope{
 		Resource: pulse.ResourceRef{Type: "host", ID: "server-01"},
-		Dimensions: map[string]string{
-			"host": "server-01",
-		},
 	}
 
 	pool := poolScope(scope, "tank")

@@ -620,8 +620,8 @@ func emitStats(b *monitoring.Builder, dims map[string]string, stats statsRespons
 		nd["interface"] = iface
 		b.Metric("docker.container.network.rx", "counter", float64(netStats.RxBytes), "bytes", nd)
 		b.Metric("docker.container.network.tx", "counter", float64(netStats.TxBytes), "bytes", nd)
-		b.Metric("docker.container.network.rx_errors", "counter", float64(netStats.RxErrors), "count", nd)
-		b.Metric("docker.container.network.tx_errors", "counter", float64(netStats.TxErrors), "count", nd)
+		b.Metric("docker.container.network.rx_errors", "counter", float64(netStats.RxErrors), "", nd)
+		b.Metric("docker.container.network.tx_errors", "counter", float64(netStats.TxErrors), "", nd)
 	}
 	blockRead, blockWrite := dockerBlockIO(stats)
 	b.Metric("docker.container.blockio.read", "counter", float64(blockRead), "bytes", dims)

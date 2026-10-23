@@ -95,7 +95,7 @@ func collectPoolStatus(ctx context.Context, b *monitoring.Builder, scope monitor
 			pb.State("system.zfs.pool.scan.completed_at", scan.CompletedAt, dims)
 		}
 		if scan.Errors >= 0 {
-			pb.Metric("system.zfs.pool.scan.errors", "gauge", float64(scan.Errors), "count", dims)
+			pb.Metric("system.zfs.pool.scan.errors", "gauge", float64(scan.Errors), "", dims)
 		}
 		b.Merge(pb.Batch())
 	}
@@ -125,7 +125,7 @@ func collectDatasets(ctx context.Context, b *monitoring.Builder, scope monitorin
 		db.Metric("system.zfs.dataset.available", "gauge", dataset.Available, "bytes", dims)
 		db.Metric("system.zfs.dataset.referenced", "gauge", dataset.Referenced, "bytes", dims)
 		if dataset.CompressRatio >= 0 {
-			db.Metric("system.zfs.dataset.compressratio", "gauge", dataset.CompressRatio, "ratio", dims)
+			db.Metric("system.zfs.dataset.compressratio", "gauge", dataset.CompressRatio, "", dims)
 		}
 		b.Merge(db.Batch())
 	}

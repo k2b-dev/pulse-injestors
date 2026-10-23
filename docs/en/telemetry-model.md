@@ -25,7 +25,7 @@ Metrics support `gauge` and nonnegative `counter` values. A metric name has one 
 
 ## State freshness and liveness
 
-States are queued when their value changes and refreshed after six hours when observed again. The cache is persisted at `<spool_dir>/.states` when a spool directory is configured. In Pulse, a state timestamp records its last change or refresh, not the last check.
+States are queued when their value changes and refreshed after six hours when observed again (`software.*`: seven days). Daily observations prevent software inventory entries from being forgotten. The cache is persisted at `<spool_dir>/.states` when a spool directory is configured. In Pulse, a state timestamp records its last change or refresh, not the last check.
 
 After the spool drops or rejects data, the cache is cleared so all states observed in the next collection cycle are sent again.
 
@@ -53,14 +53,13 @@ Dimensions are bounded labels used by exact filters and grouping:
 
 ```json
 {
-  "host": "server-01",
   "environment": "production",
   "compose_project": "pulse",
   "compose_service": "api"
 }
 ```
 
-Suitable dimensions include environment, region, host, service, interface, mount, pool, probe, endpoint, and normalized status. Runtime container IDs, request IDs, full paths, IP addresses, URLs, user IDs, digests, and raw error messages are not dimensions.
+Suitable dimensions include environment, region, service, interface, mount, pool, probe, endpoint, and normalized status. Runtime container IDs, request IDs, full paths, IP addresses, URLs, user IDs, digests, and raw error messages are not dimensions.
 
 ## Event context
 
@@ -84,7 +83,8 @@ Built-in collector errors put the error message in `attributes.error`. A bounded
 | `seconds` | Uptime, age, and duration. |
 | `milliseconds` | Short measured latency and request duration. |
 | `celsius` / `kelvin` | Temperature. |
-| `count` | Counter values where the counted item is part of the meaning. |
-| empty | Plain cardinalities such as CPU cores, container totals, or process totals. |
+| empty (`""`) | Counts, load averages, and dimensionless ratios. Cumulative error and event counts use type `counter`; current totals use `gauge`. |
 
 Each [module reference](/en/modules) lists the exact resource, dimensions, type, unit, and example for every emitted signal.
+
+Host ingestors no longer inject a `host` dimension. Use the resource key to identify the host; existing resource IDs are unchanged. The `host` dimension is reserved and rejected in configuration; other global dimensions remain configurable.

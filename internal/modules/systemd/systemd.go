@@ -4,16 +4,21 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/k2b-dev/pulse-injestors/internal/entity"
+	"github.com/k2b-dev/pulse-injestors/internal/localexec"
 	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
 	"github.com/k2b-dev/pulse-injestors/internal/pulse"
 )
 
 type Collector struct {
+	Run     localexec.Runner
 	Units   []string
 	Timeout time.Duration
 }
@@ -23,24 +28,43 @@ func (c Collector) Name() string { return "systemd" }
 func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.Batch, error) {
 	b := monitoring.NewBuilder(scope)
 	units := cleanUnits(c.Units)
-	if len(units) == 0 {
-		b.State("system.systemd.units.configured", false, nil)
-		return b.Batch(), nil
-	}
-	b.State("system.systemd.units.configured", true, nil)
-	path, err := exec.LookPath("systemctl")
-	if err != nil {
-		b.State("system.systemd.available", false, nil)
-		return b.Batch(), nil
-	}
-	b.State("system.systemd.available", true, nil)
+	b.State("system.systemd.units.configured", len(units) > 0, nil)
 	timeout := c.Timeout
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
+	run := c.Run
+	if run == nil {
+		run = localexec.Run
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	out, err := run(runCtx, "systemctl", "list-units", "--state=failed", "--plain", "--no-legend", "--no-pager")
+	cancel()
+	if errors.Is(err, exec.ErrNotFound) || unavailable(err) {
+		b.State("system.systemd.available", false, nil)
+		return b.Batch(), nil
+	}
+	b.State("system.systemd.available", err == nil, nil)
+	if err != nil {
+		return b.Batch(), fmt.Errorf("list failed units: %w", err)
+	}
+	names := []string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		if f := strings.Fields(line); len(f) > 0 {
+			names = append(names, f[0])
+		}
+	}
+	names = cleanUnits(names)
+	sort.Strings(names)
+	b.Metric("system.systemd.failed_units", "gauge", float64(len(names)), "", nil)
+	joined := []rune(strings.Join(names, ","))
+	if len(joined) > 500 {
+		joined = joined[:500]
+	}
+	b.State("system.systemd.failed", string(joined), nil)
 	for _, unit := range units {
 		ub := monitoring.NewBuilder(unitScope(scope, unit))
-		collectUnit(ctx, ub, path, unit, timeout)
+		collectUnit(ctx, ub, run, unit, timeout)
 		b.Merge(ub.Batch())
 	}
 	return b.Batch(), nil
@@ -53,18 +77,18 @@ func unitScope(scope monitoring.Scope, unit string) monitoring.Scope {
 	return scope
 }
 
-func collectUnit(ctx context.Context, b *monitoring.Builder, systemctl, unit string, timeout time.Duration) {
+func collectUnit(ctx context.Context, b *monitoring.Builder, run localexec.Runner, unit string, timeout time.Duration) {
 	dims := map[string]string{"service": unit, "service_manager": "systemd"}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	out, err := exec.CommandContext(runCtx, systemctl, "show", unit,
+	out, err := run(runCtx, "systemctl", "show", unit,
 		"--property=LoadState",
 		"--property=ActiveState",
 		"--property=SubState",
 		"--property=UnitFileState",
 		"--property=Description",
 		"--no-pager",
-	).Output()
+	)
 	if err != nil {
 		b.State("system.service.available", false, dims)
 		b.EventDetails("system.service.collect.failed", monitoring.MergeDimensions(dims, map[string]string{"operation": "systemctl_show"}), monitoring.EventDetails{
@@ -119,4 +143,13 @@ func emitString(b *monitoring.Builder, key, value string, dims map[string]string
 	if value != "" {
 		b.State(key, value, dims)
 	}
+}
+
+func unavailable(err error) bool {
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		return false
+	}
+	message := string(exit.Stderr)
+	return strings.Contains(message, "System has not been booted with systemd") || strings.Contains(message, "Failed to connect to bus: No such file or directory") || strings.Contains(message, "Failed to connect to system scope bus via local transport: No such file or directory")
 }

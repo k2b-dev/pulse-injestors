@@ -107,7 +107,7 @@ func TestDockerResourceIDs(t *testing.T) {
 func TestEmitImageInspectUsesImageResourceEntity(t *testing.T) {
 	scope := monitoring.Scope{
 		Resource:   pulse.ResourceRef{Type: "host", ID: "server-01"},
-		Dimensions: map[string]string{"host": "server-01", "collector": "docker"},
+		Dimensions: map[string]string{"collector": "docker"},
 		Timestamp:  time.Unix(0, 0).UTC(),
 	}
 	identity := imageIdentityFrom("server-01", "sha256:abcdef1234567890", nil, []string{"ghcr.io/example/api:latest"}, nil)
@@ -139,7 +139,7 @@ func TestEmitImageInspectUsesImageResourceEntity(t *testing.T) {
 func TestEmitMountsUsesContainerResourceWithMountDimensions(t *testing.T) {
 	scope := monitoring.Scope{
 		Resource:   pulse.ResourceRef{Type: "host", ID: "server-01"},
-		Dimensions: map[string]string{"host": "server-01", "collector": "docker"},
+		Dimensions: map[string]string{"collector": "docker"},
 		Timestamp:  time.Unix(0, 0).UTC(),
 	}
 	container := containerSummary{
@@ -176,7 +176,7 @@ func TestEmitMountsUsesContainerResourceWithMountDimensions(t *testing.T) {
 func TestEmitNetworksUsesContainerResourceWithNetworkDimensions(t *testing.T) {
 	scope := monitoring.Scope{
 		Resource:   pulse.ResourceRef{Type: "host", ID: "server-01"},
-		Dimensions: map[string]string{"host": "server-01", "collector": "docker"},
+		Dimensions: map[string]string{"collector": "docker"},
 		Timestamp:  time.Unix(0, 0).UTC(),
 	}
 	container := containerSummary{ID: "1234567890abcdef", Names: []string{"/api"}}
@@ -217,9 +217,8 @@ func TestEmitNetworksUsesContainerResourceWithNetworkDimensions(t *testing.T) {
 
 func TestEmitContainerSummaryUsesResourceEntities(t *testing.T) {
 	scope := monitoring.Scope{
-		Resource:   pulse.ResourceRef{Type: "host", ID: "server-01"},
-		Dimensions: map[string]string{"host": "server-01"},
-		Timestamp:  time.Unix(0, 0).UTC(),
+		Resource:  pulse.ResourceRef{Type: "host", ID: "server-01"},
+		Timestamp: time.Unix(0, 0).UTC(),
 	}
 	batch := pulse.Batch{}
 	emitContainerSummary(&batch, scope, "server-01", []containerSummary{

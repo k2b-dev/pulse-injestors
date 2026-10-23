@@ -40,11 +40,11 @@ Emitted once per Docker daemon.
 
 | Name | Type | Unit | Dimensions | Example | Meaning |
 |---|---|---:|---|---:|---|
-| `docker.containers.total` | gauge | | `host` | `12` | Total containers known to the daemon. |
-| `docker.containers.running` | gauge | | `host` | `9` | Containers currently running. |
-| `docker.containers.healthy` | gauge | | `host` | `7` | Containers with a configured healthy Docker healthcheck. |
-| `docker.containers.unhealthy` | gauge | | `host` | `1` | Containers with a configured non-healthy Docker healthcheck. |
-| `docker.images.updates_available` | gauge | | `host` | `2` | Image resources with a detected registry update. Registry checks must be enabled. |
+| `docker.containers.total` | gauge | | — | `12` | Total containers known to the daemon. |
+| `docker.containers.running` | gauge | | — | `9` | Containers currently running. |
+| `docker.containers.healthy` | gauge | | — | `7` | Containers with a configured healthy Docker healthcheck. |
+| `docker.containers.unhealthy` | gauge | | — | `1` | Containers with a configured non-healthy Docker healthcheck. |
+| `docker.images.updates_available` | gauge | | — | `2` | Image resources with a detected registry update. Registry checks must be enabled. |
 
 ### Docker container
 
@@ -59,8 +59,8 @@ Emitted once per logical container unless a row names an additional attachment d
 | `docker.container.pids.current` | gauge | | container | `18` | Current process count in one container. |
 | `docker.container.network.rx` | counter | bytes | container, `interface` | `12345678` | Bytes received by one container interface. |
 | `docker.container.network.tx` | counter | bytes | container, `interface` | `87654321` | Bytes transmitted by one container interface. |
-| `docker.container.network.rx_errors` | counter | count | container, `interface` | `0` | Receive errors on one container interface. |
-| `docker.container.network.tx_errors` | counter | count | container, `interface` | `0` | Transmit errors on one container interface. |
+| `docker.container.network.rx_errors` | counter | — | container, `interface` | `0` | Receive errors on one container interface. |
+| `docker.container.network.tx_errors` | counter | — | container, `interface` | `0` | Transmit errors on one container interface. |
 | `docker.container.blockio.read` | counter | bytes | container | `104857600` | Block I/O bytes read by one container. |
 | `docker.container.blockio.write` | counter | bytes | container | `52428800` | Block I/O bytes written by one container. |
 | `docker.container.restart_count` | gauge | | container | `1` | Number of container restarts reported by Docker. |
@@ -83,7 +83,7 @@ Emitted once per detected Compose project.
 
 | Name | Type | Unit | Dimensions | Example | Meaning |
 |---|---|---:|---|---:|---|
-| `docker.compose.project.containers` | gauge | | `host`, `compose_project` | `4` | Containers belonging to one Compose project. |
+| `docker.compose.project.containers` | gauge | | `compose_project` | `4` | Containers belonging to one Compose project. |
 
 ### Docker Compose service
 
@@ -91,12 +91,12 @@ Emitted once per detected Compose service. Usage values are sums across its curr
 
 | Name | Type | Unit | Dimensions | Example | Meaning |
 |---|---|---:|---|---:|---|
-| `docker.compose.service.containers` | gauge | | `host`, `compose_project`, `compose_service` | `2` | Containers belonging to one Compose service. |
-| `docker.compose.service.containers.running` | gauge | | `host`, `compose_project`, `compose_service` | `2` | Running containers in one Compose service. |
-| `docker.compose.service.cpu.usage` | gauge | percent | `host`, `compose_project`, `compose_service` | `35.2` | Sum of current CPU usage across service containers. |
-| `docker.compose.service.memory.used` | gauge | bytes | `host`, `compose_project`, `compose_service` | `268435456` | Sum of memory used across service containers. |
-| `docker.compose.service.memory.limit` | gauge | bytes | `host`, `compose_project`, `compose_service` | `2147483648` | Sum of memory limits across service containers. |
-| `docker.compose.service.pids.current` | gauge | | `host`, `compose_project`, `compose_service` | `34` | Sum of current processes across service containers. |
+| `docker.compose.service.containers` | gauge | | `compose_project`, `compose_service` | `2` | Containers belonging to one Compose service. |
+| `docker.compose.service.containers.running` | gauge | | `compose_project`, `compose_service` | `2` | Running containers in one Compose service. |
+| `docker.compose.service.cpu.usage` | gauge | percent | `compose_project`, `compose_service` | `35.2` | Sum of current CPU usage across service containers. |
+| `docker.compose.service.memory.used` | gauge | bytes | `compose_project`, `compose_service` | `268435456` | Sum of memory used across service containers. |
+| `docker.compose.service.memory.limit` | gauge | bytes | `compose_project`, `compose_service` | `2147483648` | Sum of memory limits across service containers. |
+| `docker.compose.service.pids.current` | gauge | | `compose_project`, `compose_service` | `34` | Sum of current processes across service containers. |
 
 ### Docker image
 
@@ -118,10 +118,10 @@ Emitted once per Docker daemon.
 
 | Key | Value type | Dimensions | Example | Meaning |
 |---|---|---|---|---|
-| `docker.available` | boolean | `host` | `true` | Whether the Docker Engine API is reachable. |
-| `docker.version` | string | `host` | `26.1.4` | Docker Engine version. |
-| `docker.os` | string | `host` | `Docker Desktop` | Operating system reported by Docker. |
-| `docker.arch` | string | `host` | `aarch64` | Architecture reported by Docker. |
+| `docker.available` | boolean | — | `true` | Whether the Docker Engine API is reachable. |
+| `docker.version` | string | — | `26.1.4` | Docker Engine version. |
+| `docker.os` | string | — | `Docker Desktop` | Operating system reported by Docker. |
+| `docker.arch` | string | — | `aarch64` | Architecture reported by Docker. |
 
 ### Docker container
 
@@ -182,8 +182,8 @@ Emitted once for each discovered Compose resource.
 
 | Key | Resource | Value type | Dimensions | Example | Meaning |
 |---|---|---|---|---|---|
-| `docker.compose.project.present` | `docker-compose-project` | boolean | `host`, `compose_project` | `true` | Compose project appears in the current container inventory. |
-| `docker.compose.service.present` | `docker-compose-service` | boolean | `host`, `compose_project`, `compose_service` | `true` | Compose service appears in the current container inventory. |
+| `docker.compose.project.present` | `docker-compose-project` | boolean | `compose_project` | `true` | Compose project appears in the current container inventory. |
+| `docker.compose.service.present` | `docker-compose-service` | boolean | `compose_project`, `compose_service` | `true` | Compose service appears in the current container inventory. |
 
 ### Docker image
 
@@ -211,8 +211,8 @@ Errors are stored in `attributes.error`. The bounded failed operation remains a 
 
 | Kind | Resource | Dimensions | Attributes | Trigger |
 |---|---|---|---|---|
-| `docker.unavailable` | `docker-daemon` | `host`, `operation=version` | `error` | Docker version request failed. |
-| `docker.collect.failed` | `docker-daemon` | `host`, `operation=containers` | `error` | Container inventory failed. |
+| `docker.unavailable` | `docker-daemon` | `operation=version` | `error` | Docker version request failed. |
+| `docker.collect.failed` | `docker-daemon` | `operation=containers` | `error` | Container inventory failed. |
 | `docker.container.collect.failed` | `docker-container` | container, `operation=stats\|inspect` | `error` | Runtime stats or inspect failed for one container. |
 | `docker.image.collect.failed` | `docker-image` | image, `operation=inspect` | `error` | Local image inspection failed. |
 | `docker.image.registry.check.failed` | `docker-image` | image, registry, `operation=manifest` | `error` | Registry manifest lookup failed. |
@@ -228,7 +228,6 @@ Dimension sets used above:
 
 | Name | Example | Applies to | Meaning |
 |---|---|---|---|
-| `host` | `server-01` | all Docker signals | Stable configured host ID. |
 | `container` | `pulse-api-1` | container signals | Human-readable Docker container name. |
 | `compose_project` | `pulse` | Compose resources and containers | Compose project. |
 | `compose_service` | `api` | Compose services and containers | Compose service. |

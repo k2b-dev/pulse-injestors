@@ -76,7 +76,7 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 		}
 		if st.Files > 0 {
 			filesUsed := st.Files - st.Ffree
-			fb.Metric("system.filesystem.inodes.used", "gauge", float64(filesUsed), "count", dims)
+			fb.Metric("system.filesystem.inodes.used", "gauge", float64(filesUsed), "", dims)
 			fb.Metric("system.filesystem.inodes.usage", "gauge", (float64(filesUsed)/float64(st.Files))*100, "percent", dims)
 		}
 		fb.State("system.filesystem.readonly", strings.Contains(","+mount.Options+",", ",ro,"), dims)

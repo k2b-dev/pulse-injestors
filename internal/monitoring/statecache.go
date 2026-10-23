@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/k2b-dev/pulse-injestors/internal/pulse"
@@ -16,7 +17,8 @@ import (
 // StateCache suppresses unchanged states. Pulse keeps the current value of a
 // state without expiry, so repeating an equal value adds nothing but quota.
 // A state is sent when it changes or when Refresh has passed since it was last
-// sent. With Path set, the cache survives restarts.
+// sent (software.* keys refresh after seven days). With Path set, the cache
+// survives restarts.
 type StateCache struct {
 	Path    string
 	Refresh time.Duration
@@ -87,7 +89,11 @@ func (c *StateCache) Filter(states []pulse.State, now time.Time) ([]pulse.State,
 		hash := valueHash(state.Value)
 		entry, known := c.entries[id]
 		seen = append(seen, pending{id, hash})
-		if known && entry.Hash == hash && now.Sub(time.Unix(entry.Sent, 0)) < refresh {
+		keyRefresh := refresh
+		if strings.HasPrefix(state.Key, "software.") {
+			keyRefresh = 7 * 24 * time.Hour
+		}
+		if known && entry.Hash == hash && now.Sub(time.Unix(entry.Sent, 0)) < keyRefresh {
 			continue
 		}
 		send = append(send, state)

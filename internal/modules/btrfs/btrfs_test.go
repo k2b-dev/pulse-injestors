@@ -47,9 +47,6 @@ Overall:
 func TestBtrfsScopeUsesResourceEntity(t *testing.T) {
 	scope := btrfsScope(monitoring.Scope{
 		Resource: pulse.ResourceRef{Type: "host", ID: "server-01"},
-		Dimensions: map[string]string{
-			"host": "server-01",
-		},
 	}, filesystem.Mount{Point: "/data"})
 
 	if scope.Resource.Type != "filesystem" || scope.Resource.Key() != "filesystem:server-01:%2Fdata" {

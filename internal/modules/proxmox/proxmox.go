@@ -817,7 +817,7 @@ func collectCephPools(ctx context.Context, b *monitoring.Builder, client Client,
 			pb.State("system.ceph.pool.present", true, dims)
 			pb.Metric("system.ceph.pool.bytes.used", "gauge", pool.BytesUsed, "bytes", dims)
 			pb.Metric("system.ceph.pool.bytes.available", "gauge", pool.BytesAvailable, "bytes", dims)
-			pb.Metric("system.ceph.pool.objects", "gauge", pool.Objects, "count", dims)
+			pb.Metric("system.ceph.pool.objects", "gauge", pool.Objects, "", dims)
 			b.Merge(pb.Batch())
 		}
 		return

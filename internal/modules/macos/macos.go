@@ -90,9 +90,9 @@ func collectSystem(ctx context.Context, b *monitoring.Builder) error {
 	if load, err := macLoad(ctx); err != nil {
 		errs = append(errs, err)
 	} else {
-		b.Metric("system.load.1m", "gauge", load[0], "load", nil)
-		b.Metric("system.load.5m", "gauge", load[1], "load", nil)
-		b.Metric("system.load.15m", "gauge", load[2], "load", nil)
+		b.Metric("system.load.1m", "gauge", load[0], "", nil)
+		b.Metric("system.load.5m", "gauge", load[1], "", nil)
+		b.Metric("system.load.15m", "gauge", load[2], "", nil)
 	}
 	if v, err := sysctlUint(ctx, "hw.memsize"); err != nil {
 		errs = append(errs, err)

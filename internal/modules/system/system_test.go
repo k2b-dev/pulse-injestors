@@ -35,3 +35,53 @@ func TestCollectorReadsSystemStats(t *testing.T) {
 		t.Fatal("expected metrics")
 	}
 }
+
+func TestCPUModesExcludeGuestAndCountCores(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "stat"), []byte("cpu 100 200 300 400 500 600 700 800 90 10\ncpu0 1 2 3\ncpu1 1 2 3\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	sample, err := readCPUSample(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sample.total != 3600 || sample.idle != 900 || sample.cores != 2 {
+		t.Fatalf("sample=%+v", sample)
+	}
+	batch, err := (Collector{ProcRoot: root, CPUSampleTime: time.Nanosecond}).Collect(context.Background(), monitoring.Scope{Resource: pulse.ResourceRef{Type: "host", ID: "x"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	modes := map[string]float64{}
+	for _, m := range batch.Metrics {
+		if m.Name == "system.cpu.time" {
+			if m.Type != "counter" || m.Unit != "seconds" {
+				t.Fatalf("metric=%+v", m)
+			}
+			modes[m.Dimensions["mode"]] = m.Value
+		}
+	}
+	if len(modes) != 8 || modes["user"] != 1 || modes["steal"] != 8 {
+		t.Fatalf("modes=%v", modes)
+	}
+}
+
+func TestZeroAvailableMemoryIsValidButMissingIsNot(t *testing.T) {
+	root := t.TempDir()
+	for _, tc := range []struct {
+		body  string
+		valid bool
+	}{
+		{"MemTotal: 1000 kB\nMemAvailable: 0 kB\n", true},
+		{"MemTotal: 1000 kB\n", false},
+		{"MemTotal: 1000 kB\nMemAvailable: 1001 kB\n", false},
+	} {
+		if err := os.WriteFile(filepath.Join(root, "meminfo"), []byte(tc.body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := readMemInfo(root)
+		if (err == nil) != tc.valid {
+			t.Fatalf("%q: %v", tc.body, err)
+		}
+	}
+}

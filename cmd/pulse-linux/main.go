@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -15,10 +16,15 @@ import (
 	"github.com/k2b-dev/pulse-injestors/internal/agent"
 	"github.com/k2b-dev/pulse-injestors/internal/config"
 	"github.com/k2b-dev/pulse-injestors/internal/entity"
+	"github.com/k2b-dev/pulse-injestors/internal/modules/backup"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/btrfs"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/ceph"
+	"github.com/k2b-dev/pulse-injestors/internal/modules/certificates"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/diskhealth"
+	"github.com/k2b-dev/pulse-injestors/internal/modules/diskio"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/filesystem"
+	"github.com/k2b-dev/pulse-injestors/internal/modules/inventory"
+	"github.com/k2b-dev/pulse-injestors/internal/modules/kernel"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/linuxruntime"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/network"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/packages"
@@ -100,10 +106,8 @@ func main() {
 	defer cancel()
 
 	runner := &monitoring.Runner{
-		Resource: pulse.ResourceRef{Type: "host", ID: cfg.Resource.ID, Label: cfg.Resource.Label},
-		Dimensions: monitoring.MergeDimensions(cfg.Dimensions, map[string]string{
-			"host": cfg.Resource.ID,
-		}),
+		Resource:   pulse.ResourceRef{Type: "host", ID: cfg.Resource.ID, Label: cfg.Resource.Label},
+		Dimensions: cfg.Dimensions,
 		Collectors: collectors(cfg),
 		Timeout:    cfg.CollectorTimeout(),
 		Interval:   cfg.RunnerInterval(),
@@ -182,18 +186,21 @@ func loadConfig(c cli) (config.Config, error) {
 		return config.Config{}, fmt.Errorf("resource id is required")
 	}
 	cfg.Resource.Type = "host"
+	if err := validateCadenceNames(cfg); err != nil {
+		return config.Config{}, err
+	}
 	return cfg, nil
 }
 
 func collectors(cfg config.Config) []monitoring.Collector {
 	out := []monitoring.Collector{
 		system.Collector{ProcRoot: cfg.Host.ProcRoot, CPUSampleTime: cfg.CPUSampleWindow()},
-		filesystem.Collector{ProcRoot: cfg.Host.ProcRoot, HostRoot: cfg.Host.Root},
-		network.Collector{ProcRoot: cfg.Host.ProcRoot},
-		linuxruntime.Collector{ProcRoot: cfg.Host.ProcRoot},
-		packages.Collector{Timeout: time.Duration(cfg.Linux.PackageTimeoutSeconds) * time.Second},
 		systemd.Collector{Units: linuxSystemdUnits(cfg), Timeout: 5 * time.Second},
-		diskhealth.Collector{Timeout: time.Duration(cfg.Linux.DiskHealthTimeoutSeconds) * time.Second},
+		filesystem.Collector{ProcRoot: cfg.Host.ProcRoot, HostRoot: cfg.Host.Root},
+		network.Collector{ProcRoot: cfg.Host.ProcRoot, Exclude: cfg.Linux.NetworkExclude},
+		linuxruntime.Collector{ProcRoot: cfg.Host.ProcRoot},
+		&kernel.Collector{ProcRoot: cfg.Host.ProcRoot, StateDir: cfg.Pulse.SpoolDir},
+		diskio.Collector{ProcRoot: cfg.Host.ProcRoot, SysRoot: cfg.Host.SysRoot},
 	}
 	if cfg.ThermalEnabled() {
 		out = append(out, thermal.Collector{SysRoot: cfg.Host.SysRoot})
@@ -207,19 +214,41 @@ func collectors(cfg config.Config) []monitoring.Collector {
 	if cfg.CephEnabled() {
 		out = append(out, ceph.Collector{Timeout: 5 * time.Second})
 	}
-	if len(cfg.Scripts) > 0 {
-		scripts := make([]script.Script, 0, len(cfg.Scripts))
-		for _, s := range cfg.Scripts {
-			scripts = append(scripts, script.Script{
-				Name:           s.Name,
-				Command:        s.Command,
-				Timeout:        time.Duration(s.TimeoutSeconds) * time.Second,
-				MaxOutputBytes: s.MaxOutputBytes,
-				Dimensions:     s.Dimensions,
-			})
-		}
-		out = append(out, script.Collector{Scripts: scripts})
+	markers := make([]backup.Marker, 0, len(cfg.Backups))
+	for _, m := range cfg.Backups {
+		markers = append(markers, backup.Marker{Name: m.Name, MarkerFile: m.MarkerFile, Command: m.Command})
 	}
+	out = append(out,
+		backup.Collector{Markers: markers},
+		packages.Collector{HostRoot: cfg.Host.Root, Timeout: time.Duration(cfg.Linux.PackageTimeoutSeconds) * time.Second},
+		certificates.Collector{Paths: cfg.Linux.CertificatePaths},
+		diskhealth.Collector{Timeout: time.Duration(cfg.Linux.DiskHealthTimeoutSeconds) * time.Second},
+		inventory.Collector{HostRoot: cfg.Host.Root, ProcRoot: cfg.Host.ProcRoot, SysRoot: cfg.Host.SysRoot},
+	)
+	for i, c := range out {
+		every := linuxCadences[c.Name()]
+		if seconds, ok := cfg.Runner.Cadence[c.Name()]; ok {
+			every = time.Duration(seconds) * time.Second
+		}
+		out[i] = monitoring.WithCadence{Collector: c, Every: max(every, cfg.RunnerInterval())}
+	}
+	for _, s := range cfg.Scripts {
+		every := max(time.Duration(s.CadenceSeconds)*time.Second, cfg.RunnerInterval())
+		if seconds, ok := cfg.Runner.Cadence["script:"+s.Name]; ok {
+			every = time.Duration(seconds) * time.Second
+		}
+		out = append(out, monitoring.WithCadence{
+			Collector: script.Collector{
+				CollectorName: "script:" + s.Name,
+				Scripts: []script.Script{{
+					Name: s.Name, Command: s.Command,
+					Timeout:        time.Duration(s.TimeoutSeconds) * time.Second,
+					MaxOutputBytes: s.MaxOutputBytes, Dimensions: s.Dimensions,
+				}},
+			}, Every: every,
+		})
+	}
+
 	return out
 }
 
@@ -271,4 +300,42 @@ func splitCSV(value string) []string {
 		}
 	}
 	return out
+}
+
+// linuxCadences is the default sampling schedule; once still runs every collector.
+var linuxCadences = map[string]time.Duration{
+	"system": 60 * time.Second, "systemd": 60 * time.Second, "kernel": 60 * time.Second,
+	"filesystem": 300 * time.Second, "network": 300 * time.Second, "linuxruntime": 300 * time.Second,
+	"diskio": 300 * time.Second, "thermal": 300 * time.Second, "btrfs": 300 * time.Second,
+	"zfs": 300 * time.Second, "ceph": 300 * time.Second, "backup": 900 * time.Second,
+	"packages": 3600 * time.Second, "certificates": 3600 * time.Second, "diskhealth": 3600 * time.Second,
+	"inventory": 86400 * time.Second,
+}
+
+// validateCadenceNames accepts built-ins (including disabled optional modules)
+// and only the scripts configured for this host.
+func validateCadenceNames(cfg config.Config) error {
+	valid := make(map[string]bool, len(linuxCadences)+len(cfg.Scripts))
+	for name := range linuxCadences {
+		valid[name] = true
+	}
+	for _, script := range cfg.Scripts {
+		valid["script:"+script.Name] = true
+	}
+	names := make([]string, 0, len(valid))
+	for name := range valid {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var unknown []string
+	for name := range cfg.Runner.Cadence {
+		if !valid[name] {
+			unknown = append(unknown, name)
+		}
+	}
+	if len(unknown) > 0 {
+		sort.Strings(unknown)
+		return fmt.Errorf("unknown runner cadence collector(s): %s; valid names: %s", strings.Join(unknown, ", "), strings.Join(names, ", "))
+	}
+	return nil
 }
