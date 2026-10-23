@@ -43,9 +43,7 @@ func TestNestedNamespacesAndGroupLastBackup(t *testing.T) {
 			if ns != "" {
 				flags = " --ns " + ns
 			}
-			runner.responses["api get /admin/datastore/main/groups"+flags+" --output-format json"] = `[{"backup-type":"vm","backup-id":"101","last-backup":1700000900}]`
-			// Deliberately different timestamp: age must come from groups, not snapshots.
-			runner.responses["api get /admin/datastore/main/snapshots"+flags+" --output-format json"] = `[{"backup-type":"vm","backup-id":"101","backup-time":1700000000,"verification":{"state":"failed"}}]`
+			runner.responses["api get /admin/datastore/main/groups"+flags+" --output-format json"] = `[{"backup-type":"vm","backup-id":"101","backup-count": 1, "last-backup": 1700000900}]`
 		}
 		batch, _ := (&Collector{Runner: runner, Part: "groups"}).Collect(context.Background(), reviewScope())
 		if len(batch.Events) != 0 || countMetric(batch.Metrics, "pbs.group.last_snapshot.age") != 3 {
@@ -67,7 +65,7 @@ func TestNestedNamespacesAndGroupLastBackup(t *testing.T) {
 					t.Fatal(batch)
 				}
 			}
-			if (m.Name == "pbs.datastore.snapshots.total" || m.Name == "pbs.datastore.verify.failed_snapshots") && m.Value != 3 {
+			if m.Name == "pbs.datastore.snapshots.total" && m.Value != 3 {
 				t.Fatal(m)
 			}
 		}
@@ -85,21 +83,20 @@ func TestGroupCapAcrossNamespacesStillCountsSnapshots(t *testing.T) {
 	for _, ns := range []string{"", "k8s-1", "k8s-1/volumes"} {
 		var groups []string
 		for i := 0; i < 1000; i++ {
-			groups = append(groups, fmt.Sprintf(`{"backup-type":"vm","backup-id":"%d","last-backup":1700000000}`, i))
+			groups = append(groups, fmt.Sprintf(`{"backup-type":"vm","backup-id":"%d","backup-count": 1, "last-backup": 1700000000}`, i))
 		}
 		flags := ""
 		if ns != "" {
 			flags = " --ns " + ns
 		}
 		runner.responses["api get /admin/datastore/main/groups"+flags+" --output-format json"] = "[" + strings.Join(groups, ",") + "]"
-		runner.responses["api get /admin/datastore/main/snapshots"+flags+" --output-format json"] = `[{"verification":{"state":"failed"}}]`
 	}
 	batch, _ := (&Collector{Runner: runner, Part: "groups"}).Collect(context.Background(), reviewScope())
-	if len(batch.Events) != 0 || countMetric(batch.Metrics, "pbs.group.last_snapshot.age") != 2000 || stateValue(t, batch, "pbs.groups.truncated", "") != true {
+	if len(batch.Events) != 0 || countMetric(batch.Metrics, "pbs.group.last_snapshot.age") != 2000 || stateValue(t, batch, "pbs.groups.truncated", "") != true || stateValue(t, batch, "pbs.groups.complete", "") != true {
 		t.Fatal("namespace cap failed", batch.Events)
 	}
 	for _, m := range batch.Metrics {
-		if m.Name == "pbs.datastore.verify.failed_snapshots" && m.Value != 3 {
+		if m.Name == "pbs.datastore.snapshots.total" && m.Value != 3000 {
 			t.Fatal(m)
 		}
 	}
@@ -212,7 +209,7 @@ func (r *deadlineRunner) Run(ctx context.Context, _ string, _ ...string) ([]byte
 func TestListTimeoutAndNamespaceArgs(t *testing.T) {
 	r := &deadlineRunner{}
 	client, _ := (Collector{Runner: r, Timeout: 2 * time.Second, ListTimeout: 45 * time.Second}).client()
-	for path, want := range map[string]time.Duration{"/version": 2 * time.Second, "/admin/datastore/main/namespace?max-depth=7": 45 * time.Second, "/admin/datastore/main/groups?ns=k8s-1%2Fvolumes": 45 * time.Second, "/admin/datastore/main/snapshots?ns=k8s-1": 45 * time.Second} {
+	for path, want := range map[string]time.Duration{"/version": 2 * time.Second, "/admin/datastore/main/namespace?max-depth=7": 45 * time.Second, "/admin/datastore/main/groups?ns=k8s-1%2Fvolumes": 45 * time.Second} {
 		var rows []any
 		if err := client.get(context.Background(), path, &rows); err != nil {
 			t.Fatal(err)

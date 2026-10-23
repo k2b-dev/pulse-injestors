@@ -21,11 +21,8 @@ func TestPulseContractExport(t *testing.T) {
 		"api get /version --output-format json":                                      `{"version":"4.2","release":"4.2-1","repoid":"abc"}`,
 		"api get /status/datastore-usage --output-format json":                       `[{"store":"main","used":1000,"total":4000,"avail":3000,"estimated-full-date":2000000000}]`,
 		"api get /admin/datastore/main/namespace --max-depth 7 --output-format json": `[]`,
-		"api get /admin/datastore/main/groups --output-format json":                  `[{"backup-type": "vm", "backup-id": "100", "last-backup": 1700000000}, {"backup-type": "ct", "backup-id": "101", "last-backup": 1700000500}]`,
-		"api get /admin/datastore/main/snapshots --output-format json": `[
-			{"backup-type":"vm","backup-id":"100","backup-time":1700000000},
-			{"backup-type":"ct","backup-id":"101","backup-time":1700000500}
-		]`,
+		"api get /admin/datastore/main/groups --output-format json":                  `[{"backup-type": "vm", "backup-id": "100", "backup-count": 1, "last-backup": 1700000000}, {"backup-type": "ct", "backup-id": "101", "backup-count": 1, "last-backup": 1700000500}]`,
+
 		"api get /admin/gc --output-format json":     `[{"store":"main","schedule":"daily","last-run-state":"OK","last-run-endtime":1700000600,"next-run":2000000000}]`,
 		"api get /admin/prune --output-format json":  `[{"id":"prune-main","store":"main","schedule":"daily","last-run-state":"OK","last-run-endtime":1700000700}]`,
 		"api get /admin/sync --output-format json":   `[{"id":"sync-main","store":"main","disable":true,"last-run-state":"ERROR: sync failed","last-run-endtime":1700000800}]`,

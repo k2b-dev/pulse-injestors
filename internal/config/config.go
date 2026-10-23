@@ -119,9 +119,11 @@ type ProxmoxConfig struct {
 }
 
 type PBSConfig struct {
-	ListTimeoutSeconds int    `toml:"list_timeout_seconds"`
-	CommandPath        string `toml:"command_path"`
-	TimeoutSeconds     int    `toml:"timeout_seconds"`
+	GroupsTimeoutSeconds int    `toml:"groups_timeout_seconds"`
+	StaleAfterHours      int    `toml:"stale_after_hours"`
+	ListTimeoutSeconds   int    `toml:"list_timeout_seconds"`
+	CommandPath          string `toml:"command_path"`
+	TimeoutSeconds       int    `toml:"timeout_seconds"`
 }
 
 type UptimeConfig struct {
@@ -239,6 +241,12 @@ func LoadFile(path string, explicit bool) (Config, error) {
 	if metadata.IsDefined("proxmox", "list_timeout_seconds") && cfg.Proxmox.ListTimeoutSeconds <= 0 {
 		return cfg, errors.New("proxmox list_timeout_seconds must be positive")
 	}
+	if metadata.IsDefined("pbs", "groups_timeout_seconds") && cfg.PBS.GroupsTimeoutSeconds <= 0 {
+		return cfg, errors.New("pbs groups_timeout_seconds must be positive")
+	}
+	if metadata.IsDefined("pbs", "stale_after_hours") && cfg.PBS.StaleAfterHours <= 0 {
+		return cfg, errors.New("pbs stale_after_hours must be positive")
+	}
 	if metadata.IsDefined("pbs", "list_timeout_seconds") && cfg.PBS.ListTimeoutSeconds <= 0 {
 		return cfg, errors.New("pbs list_timeout_seconds must be positive")
 	}
@@ -353,6 +361,12 @@ func Resolve(file Config, overlay Overlay) (Config, error) {
 	}
 	if cfg.Proxmox.TimeoutSeconds <= 0 {
 		return cfg, errors.New("proxmox timeout_seconds must be positive")
+	}
+	if cfg.PBS.GroupsTimeoutSeconds <= 0 {
+		return cfg, errors.New("pbs groups_timeout_seconds must be positive")
+	}
+	if cfg.PBS.StaleAfterHours <= 0 {
+		return cfg, errors.New("pbs stale_after_hours must be positive")
 	}
 	if cfg.PBS.ListTimeoutSeconds <= 0 {
 		return cfg, errors.New("pbs list_timeout_seconds must be positive")
@@ -588,9 +602,11 @@ func defaults() Config {
 			TimeoutSeconds:       10,
 		},
 		PBS: PBSConfig{
-			ListTimeoutSeconds: 60,
-			CommandPath:        "proxmox-backup-debug",
-			TimeoutSeconds:     10,
+			GroupsTimeoutSeconds: 300,
+			StaleAfterHours:      168,
+			ListTimeoutSeconds:   120,
+			CommandPath:          "proxmox-backup-debug",
+			TimeoutSeconds:       10,
 		},
 		Uptime: UptimeConfig{
 			Concurrency:    4,
@@ -740,6 +756,12 @@ func merge(dst *Config, src Config) {
 	}
 	if src.PBS.CommandPath != "" {
 		dst.PBS.CommandPath = src.PBS.CommandPath
+	}
+	if src.PBS.GroupsTimeoutSeconds != 0 {
+		dst.PBS.GroupsTimeoutSeconds = src.PBS.GroupsTimeoutSeconds
+	}
+	if src.PBS.StaleAfterHours != 0 {
+		dst.PBS.StaleAfterHours = src.PBS.StaleAfterHours
 	}
 	if src.PBS.ListTimeoutSeconds != 0 {
 		dst.PBS.ListTimeoutSeconds = src.PBS.ListTimeoutSeconds
