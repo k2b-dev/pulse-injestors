@@ -1,6 +1,6 @@
 ---
 name: pulse-injestors
-description: Use this skill when working in the pulse-injestors repository: adding or changing Go ingestor binaries, collector modules, Pulse payload semantics, Fibel docs, local smoke tests, Docker packaging, or distribution. It captures the repository architecture, verification expectations, and current distribution constraints.
+description: "Use this skill when working in the pulse-injestors repository: adding or changing Go ingestor binaries, collector modules, Pulse payload semantics, Fibel docs, local smoke tests, Docker packaging, or distribution. It captures the repository architecture, verification expectations, and current distribution constraints."
 ---
 
 # Pulse Ingestors Repository Skill
@@ -9,7 +9,7 @@ Use this skill for code, docs, and packaging work in `pulse-injestors`.
 
 ## Project model
 
-Pulse ingestors are Go collectors with one-shot and bounded scheduled modes. Each binary collects telemetry and sends one JSON batch to a configured Pulse HTTP ingest endpoint.
+Pulse ingestors are Go collectors that run as supervised services (`run`) and offer `once` for manual checks. Collection queues batches in a bounded spool; a separate delivery loop sends them to the Pulse HTTP ingest endpoint.
 
 Current binaries:
 
@@ -23,8 +23,9 @@ Current binaries:
 
 Shared logic lives in:
 
-- `internal/pulse`: payload types and HTTP sender.
-- `internal/monitoring`: runner, builder, local output, pretty report.
+- `internal/pulse`: payload types, splitting, HTTP client with response classification, spool, delivery stats.
+- `internal/agent`: service and `once` loops, self-monitoring signals, sd_notify.
+- `internal/monitoring`: runner with collector cadences, state cache, builder, local output, pretty report.
 - `internal/config`: TOML/env/CLI config resolution.
 - `internal/validation`: semantic Pulse batch validation.
 - `internal/modules/*`: reusable collectors.
@@ -33,7 +34,9 @@ Shared logic lives in:
 
 - Keep binaries specialized. Do not turn them into one large multi-target CLI unless explicitly requested.
 - Keep collectors graceful-fail. Optional modules should be auto-enabled by default where a binary supports them. Missing tools, unsupported OS features, and expected absent services should emit concise availability states without collector failure events. Permission, timeout, parsing, and unexpected command failures should remain visible as events.
-- Keep collectors one-shot friendly. Native scheduling belongs to cron, systemd timers, or launchd. Docker executes the native `run` mode directly so signals reach the collector process and intervals do not add collection time.
+- Every signal answers a monitoring question and has a cadence: health every interval, capacity, backups and inventory less often (`monitoring.Cadenced`). States are sent on change and refreshed every 6 hours; `ingestor.heartbeat` carries liveness.
+- Collection never waits for Pulse. Delivery classifies responses: retry (408, 429, 5xx, transport), paused (401, 403, 404, 409; keep data), rejected (other 4xx; split to isolate the invalid item, quarantine it, report `ingestor.delivery.rejected`, block a refused metric for one hour).
+- Native installs run `run` under systemd (Type=notify, watchdog, hardening) or launchd (KeepAlive); cron is a fallback for `once`.
 - Do not log secrets. Token values must not appear in logs, events, or docs examples except as placeholders.
 - Prefer existing module patterns over new abstractions.
 - Use stable dot-notation signal names.
@@ -84,12 +87,11 @@ bun run docs:dev -- --port 5173
 - Fibel docs live in `docs/en/*.md`.
 - The shared telemetry contract lives in `docs/metrics.md` and `docs/en/telemetry-model.md`.
 - Exhaustive signal tables live on the Fibel module pages.
-- Reference Dashboard DSL files live in `examples/dashboards/`.
 - Example TOML files live in `configs/`.
 - Native releases are defined in `.goreleaser.yaml` and `.github/workflows/release.yml`.
 - Native enrollment lives in `scripts/install.sh`; Docker deployment lives in `deploy/docker/`.
 
-When changing a signal, resource, dimension, unit, event field, or failure mode, update the affected Fibel module and ingestor pages in the same change. Keep every module table exhaustive and include type, unit, dimensions, example, and concrete meaning. Compile reference dashboards when query semantics or signal names change.
+When changing a signal, resource, dimension, unit, event field, or failure mode, update the affected Fibel module and ingestor pages in the same change. Keep every module table exhaustive and include type, unit, dimensions, example, and concrete meaning. Update the SQL examples in `docs/en/dashboards.md` when signal names change.
 
 User-facing ingestor pages must lead with requirements, installation, enrollment, verification, scheduling, logs, updates, and removal. Put resource and signal details after that workflow. Unattended installer mode must never prompt and must validate required input before changing system files. Raw tokens must not be accepted as installer CLI arguments; prefer `--config-source` or `PULSE_INGEST_TOKEN_FILE`. Show the complete maintained Compose file on the Docker Fibel page.
 
@@ -112,10 +114,14 @@ components escape delimiters rather than replacing them with underscores.
 
 Before a release, run `PULSE_CLOUD_CHECKOUT=/absolute/cloud bun run check:pulse`
 with the target Cloud checkout and its dependencies installed. This exercises
-mocked collectors through the actual HTTP client and current Pulse schema, then
-compiles every example dashboard. Go tests alone do not prove Cloud compatibility.
+mocked collectors through the actual HTTP client and current Pulse schema. Go
+tests alone do not prove Cloud compatibility; also run a live test against a
+development Pulse (create a fictional base and source, send, check with SQL,
+delete the base). Pulse has no Dashboard DSL anymore; examples are SQL.
 
 Enable a bounded persistent spool for production. Keep its private directory on
 durable storage, bind it to one source, and document the configured disk budget.
+Tokens come from a private file (`ingest_token_file`, `PULSE_INGEST_TOKEN_FILE`
+or the systemd credential `pulse-ingest-token`), never from CLI flags.
 Calculate rates on individual container counters before grouping; never emit
 summed cumulative counters for changing Compose membership.

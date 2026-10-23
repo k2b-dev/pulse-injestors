@@ -13,7 +13,12 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-const DefaultConfigPath = "/etc/pulse/ingestor.toml"
+// DefaultConfigPath is where an ingestor looks for its config without --config,
+// for example /etc/pulse/pulse-linux.toml. Each ingestor has its own file so
+// several can run on one host.
+func DefaultConfigPath(binary string) string {
+	return "/etc/pulse/" + binary + ".toml"
+}
 
 type Config struct {
 	Pulse      PulseConfig       `toml:"pulse"`
@@ -36,6 +41,8 @@ type PulseConfig struct {
 	SpoolMaxBytes int64  `toml:"spool_max_bytes"`
 	IngestURL     string `toml:"ingest_url"`
 	IngestToken   string `toml:"ingest_token"`
+	// IngestTokenFile names a private file holding the token.
+	IngestTokenFile string `toml:"ingest_token_file"`
 }
 
 type ResourceConfig struct {
@@ -133,6 +140,7 @@ type Overlay struct {
 	ConfigPath                    string
 	IngestURL                     string
 	IngestToken                   string
+	IngestTokenFile               string
 	ResourceID                    string
 	ResourceLabel                 string
 	ResourceType                  string
@@ -192,6 +200,12 @@ func LoadFile(path string, explicit bool) (Config, error) {
 }
 
 func Resolve(file Config, overlay Overlay) (Config, error) {
+	if file.Pulse.IngestToken != "" && file.Pulse.IngestTokenFile != "" {
+		return file, errors.New("set either pulse ingest_token or ingest_token_file, not both")
+	}
+	if overlay.IngestToken != "" && overlay.IngestTokenFile != "" {
+		return file, errors.New("set either PULSE_INGEST_TOKEN or the ingest token file, not both")
+	}
 	cfg := defaults()
 	merge(&cfg, file)
 	applyOverlay(&cfg, overlay)
@@ -214,11 +228,14 @@ func Resolve(file Config, overlay Overlay) (Config, error) {
 		return cfg, err
 	}
 	if !overlay.AllowMissingPulse {
+		if err := resolveToken(&cfg.Pulse); err != nil {
+			return cfg, err
+		}
 		if cfg.Pulse.IngestURL == "" {
 			return cfg, errors.New("pulse ingest url is required")
 		}
 		if cfg.Pulse.IngestToken == "" {
-			return cfg, errors.New("pulse ingest token is required")
+			return cfg, errors.New("pulse ingest token is required: set ingest_token_file, PULSE_INGEST_TOKEN_FILE or PULSE_INGEST_TOKEN")
 		}
 		if err := validateHTTPURL(cfg.Pulse.IngestURL); err != nil {
 			return cfg, err
@@ -300,6 +317,52 @@ func Resolve(file Config, overlay Overlay) (Config, error) {
 		}
 	}
 	return cfg, nil
+}
+
+// CredentialName is the systemd credential that holds the ingest token
+// ($CREDENTIALS_DIRECTORY/pulse-ingest-token, set with LoadCredential=).
+const CredentialName = "pulse-ingest-token"
+
+func resolveToken(p *PulseConfig) error {
+	if p.IngestToken == "" && p.IngestTokenFile == "" {
+		if dir := os.Getenv("CREDENTIALS_DIRECTORY"); dir != "" {
+			if _, err := os.Stat(dir + "/" + CredentialName); err == nil {
+				p.IngestTokenFile = dir + "/" + CredentialName
+			}
+		}
+	}
+	if p.IngestTokenFile == "" {
+		return nil
+	}
+	token, err := ReadTokenFile(p.IngestTokenFile)
+	if err != nil {
+		return err
+	}
+	p.IngestToken = token
+	return nil
+}
+
+// ReadTokenFile reads a token from a file other users cannot access.
+func ReadTokenFile(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("ingest token file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", errors.New("ingest token file must be a regular file")
+	}
+	if info.Mode().Perm()&0007 != 0 {
+		return "", errors.New("ingest token file must not be accessible by other users (chmod 600 or 640)")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("ingest token file: %w", err)
+	}
+	token := strings.TrimSpace(string(data))
+	if token == "" || strings.ContainsAny(token, " \t\r\n") {
+		return "", errors.New("ingest token file must contain exactly one token")
+	}
+	return token, nil
 }
 
 func (c Config) HTTPTimeout() time.Duration {
@@ -450,6 +513,9 @@ func merge(dst *Config, src Config) {
 	if src.Pulse.IngestToken != "" {
 		dst.Pulse.IngestToken = src.Pulse.IngestToken
 	}
+	if src.Pulse.IngestTokenFile != "" {
+		dst.Pulse.IngestTokenFile = src.Pulse.IngestTokenFile
+	}
 	if src.Resource.ID != "" {
 		dst.Resource.ID = src.Resource.ID
 	}
@@ -592,8 +658,12 @@ func applyOverlay(dst *Config, o Overlay) {
 	if o.IngestURL != "" {
 		dst.Pulse.IngestURL = o.IngestURL
 	}
+	// A token source from the environment or CLI replaces both file settings.
 	if o.IngestToken != "" {
-		dst.Pulse.IngestToken = o.IngestToken
+		dst.Pulse.IngestToken, dst.Pulse.IngestTokenFile = o.IngestToken, ""
+	}
+	if o.IngestTokenFile != "" {
+		dst.Pulse.IngestToken, dst.Pulse.IngestTokenFile = "", o.IngestTokenFile
 	}
 	if o.ResourceID != "" {
 		dst.Resource.ID = o.ResourceID

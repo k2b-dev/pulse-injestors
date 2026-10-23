@@ -1,68 +1,45 @@
 # Current Pulse readiness
 
-Verified on 2026-09-15 against Cloud checkout
-`0764cd08692f41d8e903481da48938bfa02cfd38` using Bun 1.4.2.
+Verified on 2026-10-23 against Cloud `origin/main` (Pulse on ClickHouse, the
+0.49 line) and a development Pulse instance. Nothing in this file describes a
+production rollout.
 
-The ingestors use the current resource-only Pulse contract. Old identity fields,
-configuration sections, flags and ingest paths have no compatibility aliases.
-Use these binaries with the corresponding Cloud release.
+## Delivery contract
+
+- `POST /api/pulse/ingest` with the source token as Bearer credential and an
+  `Idempotency-Key` derived from the part body from the first attempt.
+- Parts stay within 500 items per collection, 1,500 items and 5 MiB.
+- 2xx is delivered. 408, 429, 5xx and transport errors are retried with backoff
+  and `Retry-After`. 3xx, 401, 403, 404 and non-idempotency 409 responses pause
+  delivery and keep the data; Pulse answers 404 for a disabled source.
+  Idempotency key conflicts and other 4xx reject the part: it is split until
+  the invalid item stands alone, that item goes to quarantine and is reported
+  as `ingestor.delivery.rejected`. A metric name with a type/unit definition
+  conflict is not sent for one hour. Split-budget exhaustion keeps the part
+  queued until the hourly budget resets.
+- The spool keeps parts for 23 hours, inside Pulse's 24-hour idempotency window,
+  and drops the oldest parts first when its byte budget is exhausted.
 
 ## Verification
 
-- `go test -race ./...`, `go vet ./...`, and `go build ./...` pass.
-- Linux amd64 and macOS amd64 cross-builds pass; macOS arm64 builds locally and
-  Linux arm64 builds in the Docker image.
-- `bun run check:pulse` passes against the checkout above. Six controlled
-  collector fixtures traverse the production HTTP client and are validated by
-  Pulse's actual request schema. All four dashboard examples compile.
-- Delivery tests cover restart, exact body/key replay, partial acceptance,
-  rejection of one chunk without losing later chunks, disabled-source recovery,
-  capacity refusal, locking, expiry, redirects, invalid acknowledgements and
-  cancellation during Retry-After.
-- Installer integration tests, ShellCheck and GoReleaser configuration checks
-  pass. Documentation builds and all 41 checked routes pass. Prose lint findings
-  were reviewed; domain vocabulary and existing sentence-case headings remain.
-- The Docker image builds. A read-only, network-isolated container starts and
-  produces schema-valid failure telemetry with no host mounts: four events and
-  twelve states. This checks packaging and unavailable-collector behavior, not
-  live Docker-host collection.
-- Independent review findings were fixed and re-reviewed with no remaining
-  actionable transport/outbox findings.
+- `go vet ./...` and `go test -race ./...` pass.
+- `PULSE_CLOUD_CHECKOUT=<cloud> bun run check:pulse` passes: six collector
+  fixtures traverse the HTTP client and are accepted by Pulse's request schema.
+- Live test against a development Pulse with a fictional base and source:
+  `pulse-linux run` with a token file and spool; a preloaded unit conflict was
+  isolated to one metric, quarantined, reported and then blocked; a disabled
+  source (404) kept all cycles queued and delivered them after re-enabling, with
+  one heartbeat per cycle, no gap and no duplicate; a restart delivered the
+  queued parts; 429 throttling was retried. The base was deleted afterwards.
+- `tests/install.sh` and ShellCheck pass for the installer, including the
+  hardened systemd service and the token file.
 
-## Measured fixture size
+## Known limits
 
-These counts describe selected fixtures, not a full production profile or
-throughput benchmark. Optional modules and additional objects increase volume.
-
-| Fixture | Metrics | Events | States |
-| --- | ---: | ---: | ---: |
-| Docker container and Compose renderers | 24 | 0 | 24 |
-| Proxmox node and guests | 52 | 2 | 35 |
-| PBS | 28 | 2 | 27 |
-| Linux system | 11 | 0 | 0 |
-| Linux runtime | 8 | 0 | 6 |
-| Uptime | 10 | 0 | 27 |
-
-The earlier Pulse scenario with 20 metric series per server does not establish
-capacity for these profiles. For 60-second sampling and 30-day raw retention,
-each continuously sampled series contributes 43,200 samples. Measure complete
-selected profiles and multiply by actual host, guest, container and device
-counts before sizing the production database.
-
-## Operator settings
-
-Production examples enable a 64 MiB persistent spool. The budget limits queued
-JSON; allow extra filesystem space for atomic rewrites and metadata. It does not
-guarantee a particular outage duration. Retained deliveries expire with a visible
-error after 23 hours, inside Pulse's 24-hour idempotency window. Keep the directory
-private and persistent, and use a separate directory per endpoint and source
-credential. Drain the queue before token rotation where possible.
-
-Current state in Pulse survives history retention. For short-lived resources,
-plan explicit inventory cleanup; retention alone does not bound current states.
-Website pageviews and conversions should continue to come from website backends
-with their own source tokens and stable website resources.
-
-No release, push, deployment, production ingestion, or full 20–50-server load test
-was performed. Live platform permissions and complete hardware-specific profiles
-must be checked during the controlled rollout of the matching Cloud release.
+- Volume: one development VM sent about 720 values per minute and a Docker host
+  with 70 containers about 5,800, against a default base quota of 2,000 values
+  per minute. Cadences and trimmed collectors follow in the next slice; the
+  base quota must be sized from those measurements.
+- Proxmox, PBS, Ceph, macOS and Docker delivery were not tested live.
+- The systemd unit runs root ingestors with `ProtectSystem=full`; finer
+  privileges follow with the collector work.

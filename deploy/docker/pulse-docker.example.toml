@@ -1,6 +1,6 @@
 [pulse]
 ingest_url = "https://pulse.example.com/api/pulse/ingest"
-ingest_token = "replace-me"
+# The token comes from the Compose secret ./pulse-docker.token.
 spool_dir = "/var/lib/pulse/pulse-docker"
 spool_max_bytes = 67108864
 
