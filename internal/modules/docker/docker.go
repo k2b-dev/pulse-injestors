@@ -3,16 +3,15 @@ package docker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/k2b-dev/pulse-injestors/internal/entity"
@@ -20,73 +19,89 @@ import (
 	"github.com/k2b-dev/pulse-injestors/internal/pulse"
 )
 
+// Collector collects lifecycle and health independently of the slower stats and
+// inventory phases. All phases use logical container identities.
 type Collector struct {
 	SocketPath       string
-	HostRoot         string
 	StableHostID     string
 	Timeout          time.Duration
 	ContainerTimeout time.Duration
 	Concurrency      int
+	StatsTimeout     time.Duration
 	RegistryChecks   bool
 	RegistryTimeout  time.Duration
 }
 
-func (c Collector) Name() string { return "docker" }
+func (c Collector) Name() string           { return "docker" }
+func (c Collector) Cadence() time.Duration { return time.Minute }
 
-func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.Batch, error) {
+// StatsCollector samples resource use without inspecting container metadata.
+type StatsCollector struct{ Collector }
+
+func (c StatsCollector) Name() string           { return "docker.stats" }
+func (c StatsCollector) Cadence() time.Duration { return 5 * time.Minute }
+func (c StatsCollector) CollectTimeout() time.Duration {
+	if c.StatsTimeout > 0 {
+		return c.StatsTimeout
+	}
+	return 2 * time.Minute
+}
+
+// InventoryCollector inspects only images referenced by existing containers.
+type InventoryCollector struct{ Collector }
+
+func (c InventoryCollector) Name() string           { return "docker.inventory" }
+func (c InventoryCollector) Cadence() time.Duration { return 24 * time.Hour }
+
+func (c Collector) api() apiClient {
 	socket := c.SocketPath
 	if socket == "" {
 		socket = "/var/run/docker.sock"
-	}
-	hostRoot := c.HostRoot
-	if hostRoot == "" {
-		hostRoot = "/host/root"
 	}
 	timeout := c.Timeout
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
-	containerTimeout := c.ContainerTimeout
-	if containerTimeout <= 0 {
-		containerTimeout = timeout
-	}
-	concurrency := c.Concurrency
-	if concurrency <= 0 {
-		concurrency = 4
-	}
-	registryTimeout := c.RegistryTimeout
-	if registryTimeout <= 0 {
-		registryTimeout = 10 * time.Second
-	}
-	client := newClient(socket, timeout)
-	api := apiClient{client: client}
-	stableHostID := NormalizeStableHostID(c.StableHostID)
-	if stableHostID == "" {
-		stableHostID = stableHostIDFromScope(scope)
-	}
-	daemonScope := withResourceLabel(scope, "docker-daemon", dockerDaemonResourceID(stableHostID), "Docker on "+stableHostID)
-	b := monitoring.NewBuilder(daemonScope)
+	return apiClient{client: newClient(socket, timeout)}
+}
 
-	version, err := api.version(ctx)
+func (c Collector) hostID(scope monitoring.Scope) string {
+	if id := NormalizeStableHostID(c.StableHostID); id != "" {
+		return id
+	}
+	return stableHostIDFromScope(scope)
+}
+
+func (c Collector) containerTimeout() time.Duration {
+	if c.ContainerTimeout > 0 {
+		return c.ContainerTimeout
+	}
+	return 10 * time.Second
+}
+
+func (c Collector) concurrency() int {
+	if c.Concurrency > 0 {
+		return c.Concurrency
+	}
+	return 4
+}
+
+func daemonScope(scope monitoring.Scope, hostID string) monitoring.Scope {
+	return withResourceLabel(scope, "docker-daemon", dockerDaemonResourceID(hostID), "Docker on "+hostID)
+}
+
+func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.Batch, error) {
+	api := c.api()
+	defer api.client.CloseIdleConnections()
+	hostID := c.hostID(scope)
+	b := monitoring.NewBuilder(daemonScope(scope, hostID))
+	containers, err := api.containers(ctx)
 	if err != nil {
 		b.State("docker.available", false, nil)
-		b.EventDetails("docker.unavailable", map[string]string{"operation": "version"}, monitoring.EventDetails{
-			Attributes: map[string]any{"error": err.Error()},
-		})
+		b.EventDetails("docker.unavailable", map[string]string{"operation": "containers"}, monitoring.EventDetails{Attributes: map[string]any{"error": err.Error()}})
 		return b.Batch(), nil
 	}
 	b.State("docker.available", true, nil)
-	b.State("docker.version", version.Version, nil)
-	b.State("docker.os", version.OperatingSystem, nil)
-	b.State("docker.arch", version.Architecture, nil)
-
-	containers, err := api.containers(ctx)
-	if err != nil {
-		b.EventDetails("docker.collect.failed", map[string]string{"operation": "containers"}, monitoring.EventDetails{
-			Attributes: map[string]any{"error": err.Error()},
-		})
-		return b.Batch(), nil
-	}
 	running := 0
 	for _, container := range containers {
 		if container.State == "running" {
@@ -95,101 +110,129 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 	}
 	b.Metric("docker.containers.total", "gauge", float64(len(containers)), "", nil)
 	b.Metric("docker.containers.running", "gauge", float64(running), "", nil)
-	final := b.Batch()
-	emitContainerSummary(&final, scope, stableHostID, containers)
-
-	var jobs []containerSummary
-	for _, container := range containers {
-		cb := monitoring.NewBuilder(containerScope(scope, stableHostID, container))
+	batch := b.Batch()
+	emitContainerSummary(&batch, scope, hostID, containers)
+	for _, part := range collectContainers(ctx, containers, c.concurrency(), func(container containerSummary) pulse.Batch {
+		cb := monitoring.NewBuilder(containerScope(scope, hostID, container))
 		dims := containerDims(container)
-		cb.State("docker.container.running", container.State == "running", dims)
-		cb.State("docker.container.status", container.Status, dims)
+		cb.State("docker.container.status", container.State, dims)
 		cb.State("docker.container.image", container.Image, dims)
-		cb.State("docker.container.runtime.id", container.ID, dims)
-		monitoring.Merge(&final, cb.Batch())
-		if container.State != "running" {
-			continue
+		inspectCtx, cancel := context.WithTimeout(ctx, c.containerTimeout())
+		defer cancel()
+		inspect, err := api.inspect(inspectCtx, container.ID)
+		if err != nil {
+			cb.EventDetails("docker.container.collect.failed", map[string]string{"operation": "inspect"}, monitoring.EventDetails{Attributes: map[string]any{"error": err.Error()}})
+		} else {
+			emitInspect(cb, dims, inspect)
 		}
-		jobs = append(jobs, container)
+		return cb.Batch()
+	}) {
+		monitoring.Merge(&batch, part)
 	}
-	results := collectContainers(ctx, api, scope, stableHostID, hostRoot, jobs, concurrency, containerTimeout)
-	for _, result := range results {
-		monitoring.Merge(&final, result.batch)
-	}
-	emitComposeUsageSummary(&final, scope, stableHostID)
-	imageResults := collectImages(ctx, api, scope, stableHostID, containers, concurrency, containerTimeout, c.RegistryChecks, registryTimeout)
-	for _, result := range imageResults {
-		monitoring.Merge(&final, result.batch)
-	}
-	emitDockerHealthSummary(&final, daemonScope)
-	return final, nil
+	return batch, nil
 }
 
-type containerResult struct {
-	batch pulse.Batch
+func (c StatsCollector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.Batch, error) {
+	// Also enforce the budget for callers outside Runner.
+	ctx, cancel := context.WithTimeout(ctx, c.CollectTimeout())
+	defer cancel()
+	api := c.api()
+	defer api.client.CloseIdleConnections()
+	hostID := c.hostID(scope)
+	containers, err := api.containers(ctx)
+	if err != nil {
+		b := monitoring.NewBuilder(daemonScope(scope, hostID))
+		b.EventDetails("docker.collect.failed", map[string]string{"operation": "containers"}, monitoring.EventDetails{Attributes: map[string]any{"error": err.Error()}})
+		return b.Batch(), nil
+	}
+	running := make([]containerSummary, 0, len(containers))
+	for _, container := range containers {
+		if container.State == "running" {
+			running = append(running, container)
+		}
+	}
+	var batch pulse.Batch
+	for _, part := range collectContainers(ctx, running, c.concurrency(), func(container containerSummary) pulse.Batch {
+		b := monitoring.NewBuilder(containerScope(scope, hostID, container))
+		statsCtx, cancel := context.WithTimeout(ctx, c.containerTimeout())
+		defer cancel()
+		stats, err := api.stats(statsCtx, container.ID)
+		if err != nil {
+			b.EventDetails("docker.container.collect.failed", map[string]string{"operation": "stats"}, monitoring.EventDetails{Attributes: map[string]any{"error": err.Error()}})
+		} else {
+			emitStats(b, containerDims(container), stats)
+		}
+		return b.Batch()
+	}) {
+		monitoring.Merge(&batch, part)
+	}
+	return batch, ctx.Err()
 }
 
-func collectContainers(ctx context.Context, api apiClient, scope monitoring.Scope, stableHostID string, hostRoot string, containers []containerSummary, concurrency int, timeout time.Duration) []containerResult {
-	if len(containers) == 0 {
-		return nil
+func (c InventoryCollector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.Batch, error) {
+	api := c.api()
+	defer api.client.CloseIdleConnections()
+	hostID := c.hostID(scope)
+	b := monitoring.NewBuilder(daemonScope(scope, hostID))
+	version, versionErr := api.version(ctx)
+	if versionErr != nil {
+		b.EventDetails("docker.collect.failed", map[string]string{"operation": "version"}, monitoring.EventDetails{Attributes: map[string]any{"error": versionErr.Error()}})
+	} else {
+		b.State("docker.version", version.Version, nil)
 	}
+	containers, err := api.containers(ctx)
+	if err != nil {
+		b.EventDetails("docker.collect.failed", map[string]string{"operation": "containers"}, monitoring.EventDetails{Attributes: map[string]any{"error": err.Error()}})
+		return b.Batch(), errors.Join(versionErr, err)
+	}
+	batch := b.Batch()
+	registryTimeout := c.RegistryTimeout
+	if registryTimeout <= 0 {
+		registryTimeout = 10 * time.Second
+	}
+	for _, result := range collectImages(ctx, api, scope, hostID, containers, c.concurrency(), c.containerTimeout(), c.RegistryChecks, registryTimeout) {
+		monitoring.Merge(&batch, result.batch)
+	}
+	return batch, errors.Join(versionErr, ctx.Err())
+}
+
+// Stop dispatching work when the phase budget is exhausted. In-flight requests
+// use the same context, so no worker outlives collection.
+func collectContainers(ctx context.Context, containers []containerSummary, concurrency int, collect func(containerSummary) pulse.Batch) []pulse.Batch {
 	jobs := make(chan containerSummary)
-	results := make(chan containerResult, len(containers))
-	workers := concurrency
-	if workers > len(containers) {
-		workers = len(containers)
-	}
+	results := make(chan pulse.Batch, len(containers))
 	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
+	for i := 0; i < min(concurrency, len(containers)); i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for container := range jobs {
-				results <- collectContainer(ctx, api, scope, stableHostID, hostRoot, container, timeout)
+				if ctx.Err() != nil {
+					return
+				}
+				results <- collect(container)
 			}
 		}()
 	}
+dispatch:
 	for _, container := range containers {
-		jobs <- container
+		select {
+		case jobs <- container:
+		case <-ctx.Done():
+			break dispatch
+		}
 	}
 	close(jobs)
 	wg.Wait()
 	close(results)
-
-	out := make([]containerResult, 0, len(containers))
-	for result := range results {
-		out = append(out, result)
+	out := make([]pulse.Batch, 0, len(containers))
+	for batch := range results {
+		out = append(out, batch)
 	}
 	return out
 }
 
-func collectContainer(ctx context.Context, api apiClient, scope monitoring.Scope, stableHostID string, hostRoot string, container containerSummary, timeout time.Duration) containerResult {
-	b := monitoring.NewBuilder(containerScope(scope, stableHostID, container))
-	dims := containerDims(container)
-	containerCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	stats, err := api.stats(containerCtx, container.ID)
-	if err != nil {
-		b.State("docker.container.stats.available", false, dims)
-		b.EventDetails("docker.container.collect.failed", map[string]string{"operation": "stats"}, monitoring.EventDetails{
-			Attributes: map[string]any{"error": err.Error()},
-		})
-		return containerResult{batch: b.Batch()}
-	}
-	b.State("docker.container.stats.available", true, dims)
-	emitStats(b, dims, stats)
-	inspect, err := api.inspect(containerCtx, container.ID)
-	if err != nil {
-		b.State("docker.container.inspect.available", false, dims)
-		b.EventDetails("docker.container.collect.failed", map[string]string{"operation": "inspect"}, monitoring.EventDetails{
-			Attributes: map[string]any{"error": err.Error()},
-		})
-		return containerResult{batch: b.Batch()}
-	}
-	b.State("docker.container.inspect.available", true, dims)
-	emitInspect(b, scope, stableHostID, container, dims, hostRoot, inspect)
-	return containerResult{batch: b.Batch()}
-}
+type containerResult struct{ batch pulse.Batch }
 
 type imageJob struct {
 	ID         string
@@ -213,12 +256,20 @@ func collectImages(ctx context.Context, api apiClient, scope monitoring.Scope, s
 		go func() {
 			defer wg.Done()
 			for image := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
 				results <- collectImage(ctx, api, scope, stableHostID, image, timeout, registryChecks, registryTimeout)
 			}
 		}()
 	}
+dispatch:
 	for _, image := range images {
-		jobs <- image
+		select {
+		case jobs <- image:
+		case <-ctx.Done():
+			break dispatch
+		}
 	}
 	close(jobs)
 	wg.Wait()
@@ -246,11 +297,11 @@ func collectImage(ctx context.Context, api apiClient, scope monitoring.Scope, st
 		return containerResult{batch: b.Batch()}
 	}
 	var batch pulse.Batch
-	identities := imageIdentitiesFrom(stableHostID, image.ID, image.References, inspect.RepoTags, inspect.RepoDigests)
+	identities := imageIdentitiesFrom(stableHostID, image.ID, image.References, nil, inspect.RepoDigests)
 	for _, identity := range identities {
 		b := monitoring.NewBuilder(imageScope(scope, identity))
 		dims := imageDims(identity)
-		emitImageInspect(b, dims, inspect)
+		emitImageInspect(b, dims, inspect, scope.Timestamp)
 		if registryChecks {
 			refs := imageReferences([]string{identity.Label})
 			emitRegistryChecks(ctx, b, dims, refs, inspect.RepoDigests, registryTimeout)
@@ -328,9 +379,7 @@ func (a apiClient) imageInspect(ctx context.Context, id string) (imageInspectRes
 }
 
 type versionResponse struct {
-	Version         string `json:"Version"`
-	OperatingSystem string `json:"OperatingSystem"`
-	Architecture    string `json:"Architecture"`
+	Version string `json:"Version"`
 }
 
 type infoResponse struct {
@@ -349,63 +398,12 @@ type containerSummary struct {
 }
 
 type inspectResponse struct {
-	ID           string `json:"Id"`
-	Created      string `json:"Created"`
-	Image        string `json:"Image"`
-	RestartCount int    `json:"RestartCount"`
+	RestartCount int `json:"RestartCount"`
 	State        struct {
-		Status     string `json:"Status"`
-		Running    bool   `json:"Running"`
-		Paused     bool   `json:"Paused"`
-		Restarting bool   `json:"Restarting"`
-		OOMKilled  bool   `json:"OOMKilled"`
-		Dead       bool   `json:"Dead"`
-		ExitCode   int    `json:"ExitCode"`
-		StartedAt  string `json:"StartedAt"`
-		FinishedAt string `json:"FinishedAt"`
-		Health     *struct {
-			Status        string `json:"Status"`
-			FailingStreak int    `json:"FailingStreak"`
+		Health *struct {
+			Status string `json:"Status"`
 		} `json:"Health"`
 	} `json:"State"`
-	Config struct {
-		Image    string            `json:"Image"`
-		Hostname string            `json:"Hostname"`
-		Labels   map[string]string `json:"Labels"`
-	} `json:"Config"`
-	HostConfig struct {
-		AutoRemove    bool   `json:"AutoRemove"`
-		Privileged    bool   `json:"Privileged"`
-		NetworkMode   string `json:"NetworkMode"`
-		Runtime       string `json:"Runtime"`
-		RestartPolicy struct {
-			Name              string `json:"Name"`
-			MaximumRetryCount int    `json:"MaximumRetryCount"`
-		} `json:"RestartPolicy"`
-	} `json:"HostConfig"`
-	Mounts          []dockerMount `json:"Mounts"`
-	NetworkSettings struct {
-		Networks map[string]struct {
-			NetworkID   string   `json:"NetworkID"`
-			EndpointID  string   `json:"EndpointID"`
-			Gateway     string   `json:"Gateway"`
-			IPAddress   string   `json:"IPAddress"`
-			IPPrefixLen int      `json:"IPPrefixLen"`
-			MacAddress  string   `json:"MacAddress"`
-			Aliases     []string `json:"Aliases"`
-		} `json:"Networks"`
-	} `json:"NetworkSettings"`
-}
-
-type dockerMount struct {
-	Type        string `json:"Type"`
-	Name        string `json:"Name"`
-	Source      string `json:"Source"`
-	Destination string `json:"Destination"`
-	Driver      string `json:"Driver"`
-	Mode        string `json:"Mode"`
-	Propagation string `json:"Propagation"`
-	RW          bool   `json:"RW"`
 }
 
 type imageInspectResponse struct {
@@ -439,14 +437,9 @@ type statsResponse struct {
 		Limit uint64            `json:"limit"`
 		Stats map[string]uint64 `json:"stats"`
 	} `json:"memory_stats"`
-	PidsStats struct {
-		Current uint64 `json:"current"`
-	} `json:"pids_stats"`
 	Networks map[string]struct {
-		RxBytes  uint64 `json:"rx_bytes"`
-		TxBytes  uint64 `json:"tx_bytes"`
-		RxErrors uint64 `json:"rx_errors"`
-		TxErrors uint64 `json:"tx_errors"`
+		RxBytes uint64 `json:"rx_bytes"`
+		TxBytes uint64 `json:"tx_bytes"`
 	} `json:"networks"`
 	BlkioStats struct {
 		IoServiceBytesRecursive []struct {
@@ -494,10 +487,6 @@ func stableHostIDFromScope(scope monitoring.Scope) string {
 		}
 	}
 	return NormalizeStableHostID(scope.Resource.ID)
-}
-
-func hostResourceID(stableHostID string) string {
-	return entityComponent(stableHostID)
 }
 
 func dockerDaemonResourceID(stableHostID string) string {
@@ -599,131 +588,70 @@ func containerLabel(c containerSummary) string {
 }
 
 func emitStats(b *monitoring.Builder, dims map[string]string, stats statsResponse) {
-	cpuDelta := stats.CPUStats.CPUUsage.TotalUsage - stats.PreCPUStats.CPUUsage.TotalUsage
-	systemDelta := stats.CPUStats.SystemUsage - stats.PreCPUStats.SystemUsage
 	online := stats.CPUStats.OnlineCPUs
 	if online == 0 {
 		online = uint64(len(stats.CPUStats.CPUUsage.PercpuUsage))
 	}
-	if systemDelta > 0 && online > 0 {
-		b.Metric("docker.container.cpu.usage", "gauge", (float64(cpuDelta)/float64(systemDelta))*float64(online)*100, "percent", dims)
+	// Counter resets must not underflow into enormous CPU percentages.
+	if stats.CPUStats.CPUUsage.TotalUsage >= stats.PreCPUStats.CPUUsage.TotalUsage && stats.CPUStats.SystemUsage > stats.PreCPUStats.SystemUsage && online > 0 {
+		cpuDelta := stats.CPUStats.CPUUsage.TotalUsage - stats.PreCPUStats.CPUUsage.TotalUsage
+		systemDelta := stats.CPUStats.SystemUsage - stats.PreCPUStats.SystemUsage
+		b.Metric("docker.container.cpu.usage", "gauge", float64(cpuDelta)/float64(systemDelta)*float64(online)*100, "percent", dims)
 	}
 	usage := dockerMemoryUsage(stats.MemoryStats.Usage, stats.MemoryStats.Stats)
 	b.Metric("docker.container.memory.used", "gauge", float64(usage), "bytes", dims)
-	if stats.MemoryStats.Limit > 0 {
-		b.Metric("docker.container.memory.limit", "gauge", float64(stats.MemoryStats.Limit), "bytes", dims)
-		b.Metric("docker.container.memory.usage", "gauge", (float64(usage)/float64(stats.MemoryStats.Limit))*100, "percent", dims)
+	b.Metric("docker.container.memory.limit", "gauge", float64(stats.MemoryStats.Limit), "bytes", dims)
+	var rx, tx uint64
+	for _, network := range stats.Networks {
+		rx += network.RxBytes
+		tx += network.TxBytes
 	}
-	b.Metric("docker.container.pids.current", "gauge", float64(stats.PidsStats.Current), "", dims)
-	for iface, netStats := range stats.Networks {
-		nd := copyDims(dims)
-		nd["interface"] = iface
-		b.Metric("docker.container.network.rx", "counter", float64(netStats.RxBytes), "bytes", nd)
-		b.Metric("docker.container.network.tx", "counter", float64(netStats.TxBytes), "bytes", nd)
-		b.Metric("docker.container.network.rx_errors", "counter", float64(netStats.RxErrors), "", nd)
-		b.Metric("docker.container.network.tx_errors", "counter", float64(netStats.TxErrors), "", nd)
-	}
-	blockRead, blockWrite := dockerBlockIO(stats)
-	b.Metric("docker.container.blockio.read", "counter", float64(blockRead), "bytes", dims)
-	b.Metric("docker.container.blockio.write", "counter", float64(blockWrite), "bytes", dims)
+	b.Metric("docker.container.network.rx", "counter", float64(rx), "bytes", dims)
+	b.Metric("docker.container.network.tx", "counter", float64(tx), "bytes", dims)
+	read, write := dockerBlockIO(stats)
+	b.Metric("docker.container.blockio.read", "counter", float64(read), "bytes", dims)
+	b.Metric("docker.container.blockio.write", "counter", float64(write), "bytes", dims)
 }
 
 func emitContainerSummary(batch *pulse.Batch, scope monitoring.Scope, stableHostID string, containers []containerSummary) {
-	projects := map[string]int{}
-	services := map[string]int{}
-	servicesRunning := map[string]int{}
+	type counts struct{ total, running int }
+	projects := map[string]counts{}
+	services := map[string]counts{}
 	for _, container := range containers {
 		project := container.Labels["com.docker.compose.project"]
 		service := container.Labels["com.docker.compose.service"]
-		if project != "" {
-			projects[project]++
-			if service != "" {
-				key := project + "\x00" + service
-				services[key]++
-				if container.State == "running" {
-					servicesRunning[key]++
-				}
+		if project == "" {
+			continue
+		}
+		p := projects[project]
+		p.total++
+		if container.State == "running" {
+			p.running++
+		}
+		projects[project] = p
+		if service != "" {
+			key := project + "\x00" + service
+			s := services[key]
+			s.total++
+			if container.State == "running" {
+				s.running++
 			}
+			services[key] = s
 		}
 	}
 	for project, count := range projects {
-		projectBuilder := monitoring.NewBuilder(composeProjectScope(scope, stableHostID, project))
+		b := monitoring.NewBuilder(composeProjectScope(scope, stableHostID, project))
 		dims := map[string]string{"compose_project": project}
-		projectBuilder.State("docker.compose.project.present", true, dims)
-		projectBuilder.Metric("docker.compose.project.containers", "gauge", float64(count), "", dims)
-		monitoring.Merge(batch, projectBuilder.Batch())
+		b.State("docker.compose.project.containers", fmt.Sprintf("%d/%d", count.running, count.total), dims)
+		monitoring.Merge(batch, b.Batch())
 	}
 	for key, count := range services {
-		parts := strings.SplitN(key, "\x00", 2)
-		service := monitoring.NewBuilder(composeServiceScope(scope, stableHostID, parts[0], parts[1]))
-		dims := map[string]string{"compose_project": parts[0], "compose_service": parts[1]}
-		service.State("docker.compose.service.present", true, dims)
-		service.Metric("docker.compose.service.containers", "gauge", float64(count), "", dims)
-		service.Metric("docker.compose.service.containers.running", "gauge", float64(servicesRunning[key]), "", dims)
-		monitoring.Merge(batch, service.Batch())
+		project, service, _ := strings.Cut(key, "\x00")
+		b := monitoring.NewBuilder(composeServiceScope(scope, stableHostID, project, service))
+		dims := map[string]string{"compose_project": project, "compose_service": service}
+		b.State("docker.compose.service.containers", fmt.Sprintf("%d/%d", count.running, count.total), dims)
+		monitoring.Merge(batch, b.Batch())
 	}
-}
-
-func emitComposeUsageSummary(batch *pulse.Batch, scope monitoring.Scope, stableHostID string) {
-	names := map[string]string{
-		"docker.container.cpu.usage":    "docker.compose.service.cpu.usage",
-		"docker.container.memory.used":  "docker.compose.service.memory.used",
-		"docker.container.memory.limit": "docker.compose.service.memory.limit",
-		"docker.container.pids.current": "docker.compose.service.pids.current",
-	}
-	type key struct {
-		project string
-		service string
-		name    string
-		typ     string
-		unit    string
-	}
-	values := map[key]float64{}
-	for _, metric := range batch.Metrics {
-		name := names[metric.Name]
-		project := metric.Dimensions["compose_project"]
-		service := metric.Dimensions["compose_service"]
-		if name == "" || project == "" || service == "" {
-			continue
-		}
-		values[key{project: project, service: service, name: name, typ: metric.Type, unit: metric.Unit}] += metric.Value
-	}
-	for item, value := range values {
-		builder := monitoring.NewBuilder(composeServiceScope(scope, stableHostID, item.project, item.service))
-		dims := map[string]string{"compose_project": item.project, "compose_service": item.service}
-		builder.Metric(item.name, item.typ, value, item.unit, dims)
-		monitoring.Merge(batch, builder.Batch())
-	}
-}
-
-func emitDockerHealthSummary(batch *pulse.Batch, daemonScope monitoring.Scope) {
-	updates := map[string]bool{}
-	healthy := map[string]bool{}
-	unhealthy := map[string]bool{}
-	for _, state := range batch.States {
-		if state.Resource == nil {
-			continue
-		}
-		switch state.Key {
-		case "docker.image.update_available":
-			if value, ok := state.Value.(bool); ok && value {
-				updates[state.Resource.Key()] = true
-			}
-		case "docker.container.health.healthy":
-			if value, ok := state.Value.(bool); ok {
-				if value {
-					healthy[state.Resource.Key()] = true
-				} else {
-					unhealthy[state.Resource.Key()] = true
-				}
-			}
-		}
-	}
-	builder := monitoring.NewBuilder(daemonScope)
-	builder.Metric("docker.images.updates_available", "gauge", float64(len(updates)), "", nil)
-	builder.Metric("docker.containers.healthy", "gauge", float64(len(healthy)), "", nil)
-	builder.Metric("docker.containers.unhealthy", "gauge", float64(len(unhealthy)), "", nil)
-	monitoring.Merge(batch, builder.Batch())
 }
 
 func dockerMemoryUsage(usage uint64, stats map[string]uint64) uint64 {
@@ -731,7 +659,7 @@ func dockerMemoryUsage(usage uint64, stats map[string]uint64) uint64 {
 	if cache == 0 {
 		cache = stats["cache"]
 	}
-	if cache > 0 && usage > cache {
+	if cache > 0 && usage >= cache {
 		usage -= cache
 	}
 	return usage
@@ -750,177 +678,24 @@ func dockerBlockIO(stats statsResponse) (read, write uint64) {
 	return read, write
 }
 
-func emitInspect(b *monitoring.Builder, scope monitoring.Scope, stableHostID string, container containerSummary, dims map[string]string, hostRoot string, inspect inspectResponse) {
-	b.Metric("docker.container.restart_count", "gauge", float64(inspect.RestartCount), "", dims)
-	b.Metric("docker.container.exit_code", "gauge", float64(inspect.State.ExitCode), "", dims)
-	b.State("docker.container.lifecycle.status", inspect.State.Status, dims)
-	b.State("docker.container.paused", inspect.State.Paused, dims)
-	b.State("docker.container.restarting", inspect.State.Restarting, dims)
-	b.State("docker.container.oom_killed", inspect.State.OOMKilled, dims)
-	b.State("docker.container.dead", inspect.State.Dead, dims)
-	b.State("docker.container.autoremove", inspect.HostConfig.AutoRemove, dims)
-	b.State("docker.container.privileged", inspect.HostConfig.Privileged, dims)
-	if inspect.Created != "" {
-		b.State("docker.container.created_at", inspect.Created, dims)
+func emitInspect(b *monitoring.Builder, dims map[string]string, inspect inspectResponse) {
+	b.Metric("docker.container.restarts", "counter", float64(inspect.RestartCount), "", dims)
+	health := "none"
+	if inspect.State.Health != nil {
+		switch inspect.State.Health.Status {
+		case "starting", "healthy", "unhealthy":
+			health = inspect.State.Health.Status
+		}
 	}
-	if inspect.State.StartedAt != "" {
-		b.State("docker.container.started_at", inspect.State.StartedAt, dims)
-	}
-	if inspect.State.FinishedAt != "" {
-		b.State("docker.container.finished_at", inspect.State.FinishedAt, dims)
-	}
-	if inspect.Image != "" {
-		b.State("docker.container.image.id", inspect.Image, dims)
-	}
-	if inspect.ID != "" {
-		b.State("docker.container.runtime.id", inspect.ID, dims)
-	}
-	if inspect.Config.Image != "" {
-		b.State("docker.container.image.reference", inspect.Config.Image, dims)
-	}
-	if inspect.Config.Hostname != "" {
-		b.State("docker.container.hostname", inspect.Config.Hostname, dims)
-	}
-	if inspect.HostConfig.NetworkMode != "" {
-		b.State("docker.container.network_mode", inspect.HostConfig.NetworkMode, dims)
-	}
-	if inspect.HostConfig.Runtime != "" {
-		b.State("docker.container.runtime", inspect.HostConfig.Runtime, dims)
-	}
-	if inspect.HostConfig.RestartPolicy.Name != "" {
-		b.State("docker.container.restart_policy", inspect.HostConfig.RestartPolicy.Name, dims)
-		b.Metric("docker.container.restart_policy.maximum_retry_count", "gauge", float64(inspect.HostConfig.RestartPolicy.MaximumRetryCount), "", dims)
-	}
-	if startedAt, ok := parseDockerTime(inspect.State.StartedAt); ok && inspect.State.Running {
-		b.Metric("docker.container.uptime", "gauge", time.Since(startedAt).Seconds(), "seconds", dims)
-	}
-	emitHealth(b, dims, inspect)
-	emitComposeLabels(b, dims, inspect.Config.Labels)
-	emitNetworks(b, container, inspect)
-	emitMounts(b, container, dims, hostRoot, inspect.Mounts)
+	b.State("docker.container.health", health, dims)
 }
 
-func emitHealth(b *monitoring.Builder, dims map[string]string, inspect inspectResponse) {
-	if inspect.State.Health == nil {
-		b.State("docker.container.health.available", false, dims)
-		return
-	}
-	b.State("docker.container.health.available", true, dims)
-	b.State("docker.container.health.status", inspect.State.Health.Status, dims)
-	b.State("docker.container.health.healthy", inspect.State.Health.Status == "healthy", dims)
-	b.Metric("docker.container.health.failing_streak", "gauge", float64(inspect.State.Health.FailingStreak), "", dims)
-}
-
-func emitComposeLabels(b *monitoring.Builder, dims map[string]string, labels map[string]string) {
-	if len(labels) == 0 {
-		b.State("docker.container.compose.available", false, dims)
-		return
-	}
-	project := labels["com.docker.compose.project"]
-	service := labels["com.docker.compose.service"]
-	if project == "" && service == "" {
-		b.State("docker.container.compose.available", false, dims)
-		return
-	}
-	b.State("docker.container.compose.available", true, dims)
-	emitLabelState(b, dims, labels, "com.docker.compose.project", "docker.container.compose.project")
-	emitLabelState(b, dims, labels, "com.docker.compose.service", "docker.container.compose.service")
-	emitLabelState(b, dims, labels, "com.docker.compose.container-number", "docker.container.compose.container_number")
-	emitLabelState(b, dims, labels, "com.docker.compose.version", "docker.container.compose.version")
-	emitLabelState(b, dims, labels, "com.docker.compose.config-hash", "docker.container.compose.config_hash")
-	emitLabelState(b, dims, labels, "com.docker.compose.project.working_dir", "docker.container.compose.working_dir")
-	emitLabelState(b, dims, labels, "com.docker.compose.project.config_files", "docker.container.compose.config_files")
-}
-
-func emitLabelState(b *monitoring.Builder, dims map[string]string, labels map[string]string, label, key string) {
-	if value := labels[label]; value != "" {
-		b.State(key, value, dims)
-	}
-}
-
-func emitNetworks(b *monitoring.Builder, container containerSummary, inspect inspectResponse) {
-	for network, data := range inspect.NetworkSettings.Networks {
-		nd := networkDims(container, network)
-		b.State("docker.container.network.connected", true, nd)
-		if data.NetworkID != "" {
-			b.State("docker.container.network.id", data.NetworkID, nd)
-		}
-		if data.EndpointID != "" {
-			b.State("docker.container.network.endpoint_id", data.EndpointID, nd)
-		}
-		if data.Gateway != "" {
-			b.State("docker.container.network.gateway", data.Gateway, nd)
-		}
-		if data.IPAddress != "" {
-			b.State("docker.container.network.ip_address", data.IPAddress, nd)
-		}
-		if data.IPPrefixLen > 0 {
-			b.Metric("docker.container.network.ip_prefix_len", "gauge", float64(data.IPPrefixLen), "bits", nd)
-		}
-		if data.MacAddress != "" {
-			b.State("docker.container.network.mac_address", data.MacAddress, nd)
-		}
-		if len(data.Aliases) > 0 {
-			b.State("docker.container.network.aliases", strings.Join(data.Aliases, ","), nd)
-			b.Metric("docker.container.network.aliases.count", "gauge", float64(len(data.Aliases)), "", nd)
-		}
-	}
-}
-
-func emitMounts(b *monitoring.Builder, container containerSummary, dims map[string]string, hostRoot string, mounts []dockerMount) {
-	b.Metric("docker.container.mounts.total", "gauge", float64(len(mounts)), "", dims)
-	counts := map[string]int{}
-	for _, mount := range mounts {
-		counts[mount.Type]++
-		md := mountDims(container, mount)
-		if mount.Name != "" {
-			b.State("docker.container.mount.volume", mount.Name, md)
-		}
-		if mount.Driver != "" {
-			b.State("docker.container.mount.driver", mount.Driver, md)
-		}
-		b.State("docker.container.mount.rw", mount.RW, md)
-		if mount.Source != "" {
-			b.State("docker.container.mount.source", mount.Source, md)
-		}
-		if mount.Mode != "" {
-			b.State("docker.container.mount.mode", mount.Mode, md)
-		}
-		if mount.Propagation != "" {
-			b.State("docker.container.mount.propagation", mount.Propagation, md)
-		}
-		if mount.Source == "" {
-			continue
-		}
-		path := filepath.Join(hostRoot, strings.TrimPrefix(mount.Source, "/"))
-		var st syscall.Statfs_t
-		if err := syscall.Statfs(path, &st); err != nil {
-			continue
-		}
-		total := st.Blocks * uint64(st.Bsize)
-		avail := st.Bavail * uint64(st.Bsize)
-		used := total - st.Bfree*uint64(st.Bsize)
-		b.Metric("docker.container.mount.filesystem.total", "gauge", float64(total), "bytes", md)
-		b.Metric("docker.container.mount.filesystem.available", "gauge", float64(avail), "bytes", md)
-		b.Metric("docker.container.mount.filesystem.used", "gauge", float64(used), "bytes", md)
-		if total > 0 {
-			b.Metric("docker.container.mount.filesystem.usage", "gauge", (float64(used)/float64(total))*100, "percent", md)
-		}
-	}
-	for typ, count := range counts {
-		b.Metric("docker.container.mounts.by_type", "gauge", float64(count), "", mergeMountType(dims, typ))
-	}
-}
-
-func emitImageInspect(b *monitoring.Builder, dims map[string]string, inspect imageInspectResponse) {
-	if inspect.ID != "" {
-		b.State("docker.image.id", inspect.ID, dims)
-	}
+func emitImageInspect(b *monitoring.Builder, dims map[string]string, inspect imageInspectResponse, now time.Time) {
 	b.State("docker.image.inspect.available", true, dims)
 	if inspect.Created != "" {
 		b.State("docker.image.created_at", inspect.Created, dims)
 		if createdAt, ok := parseDockerTime(inspect.Created); ok {
-			b.Metric("docker.image.age", "gauge", time.Since(createdAt).Seconds(), "seconds", dims)
+			b.Metric("docker.image.age", "gauge", max(0, now.Sub(createdAt).Seconds()), "seconds", dims)
 		}
 	}
 	if len(inspect.RepoTags) > 0 {
@@ -946,12 +721,34 @@ func emitImageInspect(b *monitoring.Builder, dims map[string]string, inspect ima
 }
 
 func uniqueImageJobs(containers []containerSummary) []imageJob {
+	// A tag can refer to an old stopped container and its replacement. Emit one
+	// logical image series, preferring running containers, with a stable tie break.
+	containers = append([]containerSummary(nil), containers...)
+	sort.Slice(containers, func(i, j int) bool {
+		runningI, runningJ := containers[i].State == "running", containers[j].State == "running"
+		if runningI != runningJ {
+			return runningI
+		}
+		return containers[i].ImageID < containers[j].ImageID
+	})
 	seen := map[string]map[string]bool{}
+	references := map[string]bool{}
 	for _, container := range containers {
 		id := container.ImageID
 		if id == "" {
 			continue
 		}
+		key := container.Image
+		if ref, ok := parseImageReference(key); ok {
+			key = ref.Registry + "/" + ref.Repository + ":" + ref.Tag
+		}
+		if key == "" {
+			key = id
+		}
+		if references[key] {
+			continue
+		}
+		references[key] = true
 		if seen[id] == nil {
 			seen[id] = map[string]bool{}
 		}
@@ -1071,28 +868,6 @@ func shortDigest(digest string) string {
 func copyStrings(values []string) []string {
 	out := make([]string, len(values))
 	copy(out, values)
-	return out
-}
-
-func mountDims(container containerSummary, mount dockerMount) map[string]string {
-	dims := containerDims(container)
-	dims["mount_type"] = mount.Type
-	dims["mount_destination"] = mount.Destination
-	if mount.Name != "" {
-		dims["volume"] = mount.Name
-	}
-	return dims
-}
-
-func networkDims(container containerSummary, network string) map[string]string {
-	dims := containerDims(container)
-	dims["network"] = network
-	return dims
-}
-
-func mergeMountType(dims map[string]string, typ string) map[string]string {
-	out := copyDims(dims)
-	out["mount_type"] = typ
 	return out
 }
 

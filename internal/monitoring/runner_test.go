@@ -23,7 +23,7 @@ type recordingSender struct{ batch pulse.Batch }
 
 func (s *recordingSender) PostBatch(_ context.Context, b pulse.Batch) error { s.batch = b; return nil }
 
-func TestRunnerSharesCycleDeadlineAndStopsStartingCollectors(t *testing.T) {
+func TestRunnerGrantsEachCollectorItsBudget(t *testing.T) {
 	calls := 0
 	sender := &recordingSender{}
 	runner := Runner{Resource: pulse.ResourceRef{Type: "host", ID: "test"}, Interval: 20 * time.Millisecond, Timeout: 20 * time.Millisecond, Sender: sender, Collectors: []Collector{deadlineCollector{&calls}, deadlineCollector{&calls}}}
@@ -32,13 +32,13 @@ func TestRunnerSharesCycleDeadlineAndStopsStartingCollectors(t *testing.T) {
 	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal(err)
 	}
-	if calls != 1 {
+	if calls != 2 {
 		t.Fatalf("started %d collectors", calls)
 	}
 	if time.Since(start) > time.Second {
 		t.Fatal("cycle exceeded budget")
 	}
-	if len(sender.batch.Events) != 1 {
+	if len(sender.batch.Events) != 2 {
 		t.Fatalf("failure events: %d", len(sender.batch.Events))
 	}
 }
@@ -216,7 +216,7 @@ func TestRunnerCollectorAndCycleBudgets(t *testing.T) {
 	health := probe("health", &healthDeadline)
 	backup := ScopedCollector{Collector: WithCadence{Every: 15 * time.Minute, Collector: budgetCollector{probe("backup", &backupDeadline), 180 * time.Second}}}
 	runner := Runner{Interval: time.Minute, Timeout: 10 * time.Second, Now: func() time.Time { return now }, Collectors: []Collector{backup, health}}
-	if got := runner.LongestCollectTimeout(); got != 180*time.Second {
+	if got := runner.MaxCycleTimeout(); got != 190*time.Second {
 		t.Fatalf("wrapped timeout=%s", got)
 	}
 	for _, all := range []bool{false, true} {
@@ -254,5 +254,41 @@ func TestRunnerCollectorAndCycleBudgets(t *testing.T) {
 	runner.Collect(ctx, true)
 	if !backupDeadline.Equal(parentDeadline) {
 		t.Fatal("parent deadline ignored")
+	}
+}
+
+func TestSlowTimeoutKeepsCadenceAndDoesNotShortenFollowingBudgets(t *testing.T) {
+	now := time.Date(2026, 7, 23, 0, 0, 0, 0, time.UTC)
+	fast, slow := 0, 0
+	var healthDeadline time.Time
+	health := budgetCollector{callbackCollector{name: "health", collect: func(ctx context.Context, _ Scope) (pulse.Batch, error) {
+		fast++
+		healthDeadline, _ = ctx.Deadline()
+		return pulse.Batch{}, nil
+	}}, 20 * time.Millisecond}
+	daily := WithCadence{Every: 24 * time.Hour, Collector: budgetCollector{callbackCollector{name: "daily", collect: func(ctx context.Context, _ Scope) (pulse.Batch, error) {
+		slow++
+		deadline, _ := ctx.Deadline()
+		if !deadline.After(healthDeadline) {
+			t.Fatal("earlier health collection shortened slow budget")
+		}
+		<-ctx.Done()
+		return pulse.Batch{}, ctx.Err()
+	}}, 20 * time.Millisecond}}
+	r := Runner{Interval: time.Millisecond, Now: func() time.Time { return now }, Collectors: []Collector{health, daily}}
+	for i := 0; i < 3; i++ {
+		r.Collect(context.Background(), false)
+		now = now.Add(time.Minute)
+	}
+	if fast != 3 || slow != 1 {
+		t.Fatalf("health=%d daily=%d", fast, slow)
+	}
+	if _, ok := r.lastRun["daily"]; ok {
+		t.Fatal("timeout marked successful")
+	}
+	now = now.Add(24 * time.Hour)
+	r.Collect(context.Background(), false)
+	if slow != 2 {
+		t.Fatal("timed-out phase never retried")
 	}
 }

@@ -52,8 +52,8 @@ func TestConfiguredBackupBudgetSurvivesWrappers(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := monitoring.Runner{Timeout: cfg.CollectorTimeout(), Collectors: collectors(cfg)}
-	if got := r.LongestCollectTimeout(); got != 240*time.Second {
-		t.Fatalf("longest budget: %s", got)
+	if got := r.MaxCycleTimeout(); got != 240*time.Second+time.Duration(len(r.Collectors)-1)*cfg.CollectorTimeout() {
+		t.Fatalf("cycle budget: %s", got)
 	}
 	for _, c := range r.Collectors {
 		want := time.Duration(0)

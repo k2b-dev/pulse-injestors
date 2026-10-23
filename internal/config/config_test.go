@@ -578,3 +578,81 @@ func TestProxmoxBackupTimeoutConfig(t *testing.T) {
 		t.Fatal("negative timeout accepted")
 	}
 }
+
+func TestUptimeScriptReplacementConfigValidation(t *testing.T) {
+	valid := []UptimeTargetConfig{
+		{ID: "ports", Label: "Ports", Kind: "ports", Address: "[2001:db8::1]", Expected: []int{22, 443}},
+		{ID: "records", Label: "Records", Kind: "dns_records", Name: "_dmarc.example.test", Records: []UptimeRecordConfig{{Type: "TXT", Contains: "v=DMARC1"}}, Resolver: "[::1]:53"},
+		{ID: "tls", Label: "TLS", Kind: "tls", Address: "example.test:443", WarnDays: 14},
+		{ID: "dnsbl", Label: "DNSBL", Kind: "dnsbl", Address: "192.0.2.1", Lists: []string{"bl.example.test"}},
+	}
+	if err := validateUptimeTargets(valid); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name   string
+		target UptimeTargetConfig
+		mutate func(*UptimeTargetConfig)
+	}{
+		{"range", valid[0], func(c *UptimeTargetConfig) { c.Range = "0-70000" }},
+		{"outside range", valid[0], func(c *UptimeTargetConfig) { c.Range = "100-1000" }},
+		{"cadence", valid[0], func(c *UptimeTargetConfig) { c.CadenceSeconds = -1 }},
+		{"record type", valid[1], func(c *UptimeTargetConfig) { c.Records = []UptimeRecordConfig{{Type: "CAA", Expect: []string{"x"}}} }},
+		{"record empty", valid[1], func(c *UptimeTargetConfig) { c.Records = []UptimeRecordConfig{{Type: "A"}} }},
+		{"contains and expect", valid[1], func(c *UptimeTargetConfig) {
+			c.Records = []UptimeRecordConfig{{Type: "TXT", Contains: "v=spf1", Expect: []string{"v=spf1"}}}
+		}},
+		{"contains on A", valid[1], func(c *UptimeTargetConfig) { c.Records = []UptimeRecordConfig{{Type: "A", Contains: "192"}} }},
+		{"resolver hostname", valid[1], func(c *UptimeTargetConfig) { c.Resolver = "resolver.test:53" }},
+		{"resolver port", valid[1], func(c *UptimeTargetConfig) { c.Resolver = "127.0.0.1:0" }},
+		{"warning", valid[2], func(c *UptimeTargetConfig) { c.WarnDays = -1 }},
+		{"TLS port", valid[2], func(c *UptimeTargetConfig) { c.Address = "example.test" }},
+		{"DNSBL IPv6", valid[3], func(c *UptimeTargetConfig) { c.Address = "2001:db8::1" }},
+		{"DNSBL empty", valid[3], func(c *UptimeTargetConfig) { c.Lists = nil }},
+		{"DNSBL duplicate", valid[3], func(c *UptimeTargetConfig) { c.Lists = []string{"bl.test", "BL.test."} }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.mutate(&tc.target)
+			if validateUptimeTargets([]UptimeTargetConfig{tc.target}) == nil {
+				t.Fatal("accepted invalid target")
+			}
+		})
+	}
+}
+
+func TestDockerStatsBudgetConfig(t *testing.T) {
+	for _, seconds := range []int{0, 25, -1} {
+		cfg, err := Resolve(Config{Docker: DockerConfig{StatsTimeoutSeconds: seconds}}, Overlay{ResourceID: "test", AllowMissingPulse: true})
+		if seconds < 0 {
+			if err == nil {
+				t.Fatal("negative stats budget accepted")
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := seconds
+		if want == 0 {
+			want = 120
+		}
+		if cfg.Docker.StatsTimeoutSeconds != want {
+			t.Fatalf("stats budget=%d want%d", cfg.Docker.StatsTimeoutSeconds, want)
+		}
+	}
+}
+
+func TestRejectIrrelevantUptimeOptions(t *testing.T) {
+	for _, mutate := range []func(*UptimeTargetConfig){
+		func(c *UptimeTargetConfig) { c.ExpectedStatus = 200 }, func(c *UptimeTargetConfig) { c.Lists = []string{"bl.test"} }, func(c *UptimeTargetConfig) {
+			c.Records = []UptimeRecordConfig{{Type: "A", Expect: []string{"127.0.0.1"}}}
+		}, func(c *UptimeTargetConfig) { c.Expected = []int{22} }, func(c *UptimeTargetConfig) { c.ServerName = "example.test" }, func(c *UptimeTargetConfig) { c.Resolver = "127.0.0.1:53" },
+	} {
+		target := UptimeTargetConfig{ID: "test", Label: "Test", Kind: "icmp", Address: "127.0.0.1"}
+		mutate(&target)
+		if validateUptimeTargets([]UptimeTargetConfig{target}) == nil {
+			t.Fatal("accepted irrelevant options")
+		}
+	}
+}

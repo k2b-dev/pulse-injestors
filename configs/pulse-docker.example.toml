@@ -38,9 +38,10 @@ enable_zfs = true
 
 [docker]
 socket_path = "/var/run/docker.sock"
-host_root = "/host/root"
 concurrency = 4
 container_timeout_seconds = 10
+# Total budget for the 5-minute stats phase, independent of runner timeout.
+stats_timeout_seconds = 120
 enable_registry_checks = false
 registry_timeout_seconds = 10
 

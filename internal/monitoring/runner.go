@@ -89,7 +89,8 @@ type Runner struct {
 	Logger     *slog.Logger
 	Now        func() time.Time
 
-	lastRun map[string]time.Time
+	lastRun     map[string]time.Time
+	lastTimeout map[string]time.Time
 }
 
 func (r *Runner) collectorTimeout(c Collector) time.Duration {
@@ -99,14 +100,15 @@ func (r *Runner) collectorTimeout(c Collector) time.Duration {
 	return r.Timeout
 }
 
-// LongestCollectTimeout is the longest effective budget of configured collectors.
-// It also supplies the watchdog's collection grace period.
-func (r *Runner) LongestCollectTimeout() time.Duration {
-	var longest time.Duration
+// MaxCycleTimeout bounds a cycle containing every collector. Each collector
+// gets its full budget even after earlier collectors have used theirs.
+// The watchdog must allow this same worst-case collection duration.
+func (r *Runner) MaxCycleTimeout() time.Duration {
+	var total time.Duration
 	for _, c := range r.Collectors {
-		longest = max(longest, r.collectorTimeout(c))
+		total += max(0, r.collectorTimeout(c))
 	}
-	return longest
+	return max(r.Interval, total)
 }
 
 // Once collects every collector and hands the batch to Sender.
@@ -133,12 +135,13 @@ func (r *Runner) Collect(ctx context.Context, all bool) pulse.Batch {
 	}
 	scope := r.Scope(now())
 	// Only due collectors may extend this cycle. Once includes all collectors.
-	cycleBudget := r.Interval
+	var cycleBudget time.Duration
 	for _, c := range r.Collectors {
 		if all || r.due(c, scope.Timestamp) {
-			cycleBudget = max(cycleBudget, r.collectorTimeout(c))
+			cycleBudget += max(0, r.collectorTimeout(c))
 		}
 	}
+	cycleBudget = max(r.Interval, cycleBudget)
 	if cycleBudget > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, cycleBudget)
@@ -176,6 +179,14 @@ func (r *Runner) Collect(ctx context.Context, all bool) pulse.Batch {
 			batch = candidate
 		}
 		if err != nil {
+			// Retrying a long timed-out phase every minute can monopolize the
+			// process. Keep its configured cadence; ordinary failures retry next tick.
+			if errors.Is(err, context.DeadlineExceeded) && cadenceOf(collector) > r.Interval {
+				if r.lastTimeout == nil {
+					r.lastTimeout = map[string]time.Time{}
+				}
+				r.lastTimeout[collector.Name()] = scope.Timestamp
+			}
 			log.Warn("collector failed", "collector", collector.Name(), "err", err)
 			builder.State("ingestor.collector.ok", false, map[string]string{"collector": collector.Name()})
 			builder.EventDetails("ingestor.collector.failed", map[string]string{"collector": collector.Name()}, EventDetails{
@@ -183,6 +194,7 @@ func (r *Runner) Collect(ctx context.Context, all bool) pulse.Batch {
 			})
 			continue
 		}
+		delete(r.lastTimeout, collector.Name())
 		r.lastRun[collector.Name()] = scope.Timestamp
 		builder.State("ingestor.collector.ok", true, map[string]string{"collector": collector.Name()})
 	}
@@ -202,6 +214,9 @@ func (r *Runner) due(c Collector, now time.Time) bool {
 		return true
 	}
 	last, ok := r.lastRun[c.Name()]
+	if timedOut, exists := r.lastTimeout[c.Name()]; exists && (!ok || timedOut.After(last)) {
+		last, ok = timedOut, true
+	}
 	return !ok || now.Sub(last) >= cadence-r.Interval/2
 }
 

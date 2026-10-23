@@ -82,6 +82,7 @@ type HostConfig struct {
 }
 
 type DockerConfig struct {
+	StatsTimeoutSeconds     int    `toml:"stats_timeout_seconds"`
 	SocketPath              string `toml:"socket_path"`
 	HostRoot                string `toml:"host_root"`
 	Concurrency             int    `toml:"concurrency"`
@@ -130,13 +131,29 @@ type UptimeConfig struct {
 	Targets        []UptimeTargetConfig `toml:"target"`
 }
 
+type UptimeRecordConfig struct {
+	Type     string   `toml:"type"`
+	Expect   []string `toml:"expect"`
+	Contains string   `toml:"contains"`
+}
+
 type UptimeTargetConfig struct {
-	ID             string `toml:"id"`
-	Label          string `toml:"label"`
-	Kind           string `toml:"kind"`
-	Address        string `toml:"address"`
-	ExpectedStatus int    `toml:"expected_status"`
-	TimeoutSeconds int    `toml:"timeout_seconds"`
+	CadenceSeconds int                  `toml:"cadence_seconds"`
+	Name           string               `toml:"name"`
+	Resolver       string               `toml:"resolver"`
+	Expected       []int                `toml:"expected"`
+	Range          string               `toml:"range"`
+	Records        []UptimeRecordConfig `toml:"records"`
+	CAFile         string               `toml:"ca_file"`
+	ServerName     string               `toml:"server_name"`
+	WarnDays       int                  `toml:"warn_days"`
+	Lists          []string             `toml:"lists"`
+	ID             string               `toml:"id"`
+	Label          string               `toml:"label"`
+	Kind           string               `toml:"kind"`
+	Address        string               `toml:"address"`
+	ExpectedStatus int                  `toml:"expected_status"`
+	TimeoutSeconds int                  `toml:"timeout_seconds"`
 }
 
 type BackupConfig struct {
@@ -315,6 +332,9 @@ func Resolve(file Config, overlay Overlay) (Config, error) {
 	}
 	if cfg.MacOS.SystemProfilerTimeoutSeconds <= 0 {
 		return cfg, errors.New("macos system_profiler_timeout_seconds must be positive")
+	}
+	if cfg.Docker.StatsTimeoutSeconds <= 0 {
+		return cfg, errors.New("docker stats_timeout_seconds must be positive")
 	}
 	if cfg.Docker.Concurrency <= 0 {
 		return cfg, errors.New("docker concurrency must be positive")
@@ -545,6 +565,7 @@ func defaults() Config {
 			CPUSampleMS: 250,
 		},
 		Docker: DockerConfig{
+			StatsTimeoutSeconds:     120,
 			SocketPath:              "/var/run/docker.sock",
 			HostRoot:                "/host/root",
 			Concurrency:             4,
@@ -647,6 +668,9 @@ func merge(dst *Config, src Config) {
 	}
 	if src.Host.EnableCeph != nil {
 		dst.Host.EnableCeph = src.Host.EnableCeph
+	}
+	if src.Docker.StatsTimeoutSeconds != 0 {
+		dst.Docker.StatsTimeoutSeconds = src.Docker.StatsTimeoutSeconds
 	}
 	if src.Docker.SocketPath != "" {
 		dst.Docker.SocketPath = src.Docker.SocketPath
@@ -880,28 +904,22 @@ func validateUptimeTargets(targets []UptimeTargetConfig) error {
 		if strings.TrimSpace(target.Label) == "" {
 			return fmt.Errorf("uptime target %q label is required", target.ID)
 		}
-		if strings.TrimSpace(target.Address) == "" {
+		if strings.TrimSpace(target.Address) == "" && strings.ToLower(strings.TrimSpace(target.Kind)) != "dns_records" {
 			return fmt.Errorf("uptime target %q address is required", target.ID)
+		}
+		if strings.ToLower(strings.TrimSpace(target.Kind)) != "http" && target.ExpectedStatus != 0 {
+			return fmt.Errorf("uptime target %q expected_status is only valid for http checks", target.ID)
 		}
 		switch strings.ToLower(strings.TrimSpace(target.Kind)) {
 		case "icmp":
-			if target.ExpectedStatus != 0 {
-				return fmt.Errorf("uptime target %q expected_status is only valid for http checks", target.ID)
-			}
 			if net.ParseIP(target.Address) == nil {
 				return fmt.Errorf("uptime target %q ICMP address must be an IP address", target.ID)
 			}
 		case "dns":
-			if target.ExpectedStatus != 0 {
-				return fmt.Errorf("uptime target %q expected_status is only valid for http checks", target.ID)
-			}
 			if strings.ContainsAny(target.Address, "/: \t\r\n") {
 				return fmt.Errorf("uptime target %q DNS address must be a hostname", target.ID)
 			}
-		case "tcp":
-			if target.ExpectedStatus != 0 {
-				return fmt.Errorf("uptime target %q expected_status is only valid for http checks", target.ID)
-			}
+		case "tcp", "tls":
 			host, port, err := net.SplitHostPort(target.Address)
 			portNumber, portErr := strconv.Atoi(port)
 			if err != nil || host == "" || portErr != nil || portNumber < 1 || portNumber > 65535 {
@@ -918,8 +936,65 @@ func validateUptimeTargets(targets []UptimeTargetConfig) error {
 			if target.ExpectedStatus != 0 && (target.ExpectedStatus < 100 || target.ExpectedStatus > 599) {
 				return fmt.Errorf("uptime target %q expected_status must be between 100 and 599", target.ID)
 			}
+		case "ports":
+			host := strings.Trim(target.Address, "[]")
+			if host == "" || strings.ContainsAny(host, "/ \t\r\n") || (strings.Contains(host, ":") && net.ParseIP(host) == nil) {
+				return fmt.Errorf("uptime target %q ports address must be a host", target.ID)
+			}
+			lo, hi, err := uptimePortRange(target.Range)
+			if err != nil {
+				return fmt.Errorf("uptime target %q: %w", target.ID, err)
+			}
+			for _, port := range target.Expected {
+				if port < lo || port > hi {
+					return fmt.Errorf("uptime target %q expected port %d outside scan range", target.ID, port)
+				}
+			}
+		case "dns_records":
+			if !validDNSName(target.Name) || len(target.Records) == 0 {
+				return fmt.Errorf("uptime target %q requires name and records", target.ID)
+			}
+			for _, record := range target.Records {
+				switch strings.ToUpper(record.Type) {
+				case "A", "AAAA", "MX", "NS", "TXT", "CNAME":
+				default:
+					return fmt.Errorf("uptime target %q unsupported record type %q", target.ID, record.Type)
+				}
+				if (len(record.Expect) == 0) == (record.Contains == "") || (record.Contains != "" && strings.ToUpper(record.Type) != "TXT") {
+					return fmt.Errorf("uptime target %q record requires expect or TXT contains", target.ID)
+				}
+			}
+		case "dnsbl":
+			if ip := net.ParseIP(target.Address); ip == nil || ip.To4() == nil {
+				return fmt.Errorf("uptime target %q DNSBL address must be IPv4", target.ID)
+			}
+			if len(target.Lists) == 0 {
+				return fmt.Errorf("uptime target %q DNSBL lists required", target.ID)
+			}
+			seenLists := map[string]bool{}
+			for _, list := range target.Lists {
+				key := strings.ToLower(strings.TrimSuffix(list, "."))
+				if !validDNSName(list) || seenLists[key] {
+					return fmt.Errorf("uptime target %q invalid or duplicate DNSBL list", target.ID)
+				}
+				seenLists[key] = true
+			}
 		default:
-			return fmt.Errorf("uptime target %q kind must be icmp, dns, tcp, or http", target.ID)
+			return fmt.Errorf("uptime target %q unsupported kind %q", target.ID, target.Kind)
+		}
+		kind := strings.ToLower(strings.TrimSpace(target.Kind))
+		if (len(target.Expected) > 0 || target.Range != "") && kind != "ports" || (len(target.Records) > 0 || target.Name != "") && kind != "dns_records" || len(target.Lists) > 0 && kind != "dnsbl" || (target.CAFile != "" || target.ServerName != "" || target.WarnDays != 0) && kind != "tls" || target.Resolver != "" && kind != "dns_records" && kind != "dnsbl" {
+			return fmt.Errorf("uptime target %q has options that do not apply to kind %q", target.ID, kind)
+		}
+		if target.CadenceSeconds < 0 || target.WarnDays < 0 {
+			return fmt.Errorf("uptime target %q cadence_seconds and warn_days must not be negative", target.ID)
+		}
+		if target.Resolver != "" {
+			host, port, err := net.SplitHostPort(target.Resolver)
+			n, pe := strconv.Atoi(port)
+			if err != nil || net.ParseIP(host) == nil || pe != nil || n < 1 || n > 65535 {
+				return fmt.Errorf("uptime target %q resolver must use ip:port", target.ID)
+			}
 		}
 		if target.TimeoutSeconds < 0 {
 			return fmt.Errorf("uptime target %q timeout_seconds must not be negative", target.ID)
@@ -1018,4 +1093,34 @@ func validateHTTPURL(raw string) error {
 		return errors.New("pulse ingest url path must be /api/pulse/ingest")
 	}
 	return nil
+}
+
+func validDNSName(name string) bool {
+	name = strings.TrimSuffix(name, ".")
+	if len(name) == 0 || len(name) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(name, ".") {
+		if len(label) == 0 || len(label) > 63 {
+			return false
+		}
+		for _, c := range label {
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+				return false
+			}
+		}
+	}
+	return true
+}
+func uptimePortRange(value string) (int, int, error) {
+	if value == "" {
+		return 1, 10000, nil
+	}
+	a, z, ok := strings.Cut(value, "-")
+	lo, e1 := strconv.Atoi(a)
+	hi, e2 := strconv.Atoi(z)
+	if !ok || e1 != nil || e2 != nil || lo < 1 || hi > 65535 || lo > hi {
+		return 0, 0, errors.New("range must be first-last within 1-65535")
+	}
+	return lo, hi, nil
 }

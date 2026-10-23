@@ -3,6 +3,7 @@ package uptime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/k2b-dev/pulse-injestors/internal/entity"
@@ -18,13 +20,32 @@ import (
 )
 
 const (
-	KindICMP = "icmp"
-	KindDNS  = "dns"
-	KindTCP  = "tcp"
-	KindHTTP = "http"
+	KindICMP       = "icmp"
+	KindDNS        = "dns"
+	KindTCP        = "tcp"
+	KindHTTP       = "http"
+	KindPorts      = "ports"
+	KindDNSRecords = "dns_records"
+	KindTLS        = "tls"
+	KindDNSBL      = "dnsbl"
 )
 
+type Record struct {
+	Type     string
+	Expect   []string
+	Contains string
+}
 type Target struct {
+	Cadence        time.Duration
+	Name           string
+	Resolver       string
+	Expected       []int
+	Range          string
+	Records        []Record
+	CAFile         string
+	ServerName     string
+	WarnDays       int
+	Lists          []string
 	ID             string
 	Label          string
 	Kind           string
@@ -34,31 +55,131 @@ type Target struct {
 }
 
 type Collector struct {
+	Every       time.Duration
+	Now         func() time.Time
 	Targets     []Target
 	Concurrency int
 	Timeout     time.Duration
 	Resolver    *net.Resolver
 	HTTPClient  *http.Client
 	Ping        func(context.Context, string) error
+	PortDial    func(context.Context, string) (net.Conn, error)
 }
 
 type result struct {
-	measured      bool
-	success       bool
-	duration      time.Duration
-	err           string
-	addresses     []string
-	statusCode    int
-	finalURL      string
-	httpProtocol  string
-	tlsServerName string
-	tlsIssuer     string
-	tlsExpiresAt  time.Time
+	unexpected, missing []int
+	open, filtered      int
+	lists               []listResult
+	measured            bool
+	success             bool
+	duration            time.Duration
+	err                 string
+	addresses           []string
+	statusCode          int
+	finalURL            string
+	httpProtocol        string
+	tlsServerName       string
+	tlsIssuer           string
+	tlsExpiresAt        time.Time
 }
 
-func (c Collector) Name() string { return "uptime" }
+func (c Collector) Name() string {
+	if c.Every > 0 {
+		return fmt.Sprintf("uptime-%ds", int(c.Every.Seconds()))
+	}
+	return "uptime"
+}
+func (c Collector) Cadence() time.Duration { return c.Every }
+func (c Collector) CollectTimeout() time.Duration {
+	// Include every target even when a worker exhausts its individual budget.
+	var total time.Duration
+	for _, target := range c.Targets {
+		total += c.targetTimeout(target)
+	}
+	return total
+}
+func DefaultCadence(kind string) time.Duration {
+	switch kind {
+	case KindPorts:
+		return 24 * time.Hour
+	case KindDNSRecords, KindTLS, KindDNSBL:
+		return time.Hour
+	default:
+		return time.Minute
+	}
+}
+
+// Scheduled groups checks with the same cadence, preserving bounded parallelism.
+func (c Collector) Scheduled() []monitoring.Collector {
+	groups := map[time.Duration][]Target{}
+	for _, target := range c.Targets {
+		every := target.Cadence
+		if every <= 0 {
+			every = DefaultCadence(target.Kind)
+		}
+		groups[every] = append(groups[every], target)
+	}
+	var cadences []time.Duration
+	for every := range groups {
+		cadences = append(cadences, every)
+	}
+	sort.Slice(cadences, func(i, j int) bool { return cadences[i] < cadences[j] })
+	var collectors []monitoring.Collector
+	for _, every := range cadences {
+		group := c
+		group.Every = every
+		group.Targets = groups[every]
+		collectors = append(collectors, group)
+	}
+	return collectors
+}
+func (c Collector) targetTimeout(target Target) time.Duration {
+	if target.Timeout > 0 {
+		return target.Timeout
+	}
+	if target.Kind == KindPorts {
+		return 900 * time.Second
+	}
+	if c.Timeout > 0 {
+		return c.Timeout
+	}
+	return 5 * time.Second
+}
+func (r result) state() string {
+	if !r.measured {
+		return "error"
+	}
+	if !r.success {
+		return "failed"
+	}
+	return "ok"
+}
+func bounded(value string) string {
+	runes := []rune(value)
+	if len(runes) > 500 {
+		return string(runes[:499]) + "…"
+	}
+	return value
+}
+func emitResult(b *monitoring.Builder, r result, dims map[string]string) {
+	b.State("uptime.check.result", r.state(), dims)
+	b.State("uptime.check.message", bounded(r.err), dims)
+	if r.measured {
+		value := 0.0
+		if r.success {
+			value = 1
+		}
+		b.Metric("uptime.check.success", "gauge", value, "", dims)
+	}
+}
 
 func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.Batch, error) {
+	if scope.Timestamp.IsZero() {
+		scope.Timestamp = time.Now()
+		if c.Now != nil {
+			scope.Timestamp = c.Now()
+		}
+	}
 	if len(c.Targets) == 0 {
 		return pulse.Batch{}, errors.New("no uptime targets configured")
 	}
@@ -95,19 +216,34 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 			"check_type": target.Kind,
 		}
 		outcome := results[i]
-		tb.State("uptime.check.measured", outcome.measured, dims)
-		tb.State("uptime.check.success", outcome.success, dims)
+		emitResult(tb, outcome, dims)
 		tb.State("uptime.check.type", target.Kind, dims)
-		tb.State("uptime.check.target", target.Address, dims)
-		tb.State("uptime.check.error", outcome.err, dims)
-		if outcome.measured {
-			availability := 0.0
-			if outcome.success {
-				availability = 1
-			}
-			tb.Metric("uptime.check.availability", "gauge", availability, "", dims)
-			tb.Metric("uptime.check.duration", "gauge", durationMilliseconds(outcome.duration), "milliseconds", dims)
+		address := target.Address
+		if target.Kind == KindDNSRecords {
+			address = target.Name
 		}
+		tb.State("uptime.check.target", address, dims)
+		tb.Metric("uptime.check.duration", "gauge", durationMilliseconds(outcome.duration), "milliseconds", dims)
+		if target.Kind == KindPorts {
+			if outcome.measured || len(outcome.unexpected) > 0 {
+				tb.State("uptime.ports.unexpected", bounded(portList(outcome.unexpected)), dims)
+			}
+			if outcome.measured || len(outcome.missing) > 0 {
+				tb.State("uptime.ports.missing", bounded(portList(outcome.missing)), dims)
+			}
+			if outcome.measured {
+				tb.Metric("uptime.ports.open", "gauge", float64(outcome.open), "", dims)
+				tb.Metric("uptime.ports.filtered", "gauge", float64(outcome.filtered), "", dims)
+			}
+		}
+		for _, list := range outcome.lists {
+			ld := monitoring.MergeDimensions(dims, map[string]string{"list": list.name})
+			emitResult(tb, list.result, ld)
+			if list.measured {
+				tb.State("uptime.dnsbl.listed", !list.success, ld)
+			}
+		}
+
 		if target.Kind == KindDNS {
 			tb.State("uptime.dns.addresses", strings.Join(outcome.addresses, ", "), dims)
 			if outcome.measured {
@@ -118,6 +254,8 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 			tb.State("uptime.http.status_code", outcome.statusCode, dims)
 			tb.State("uptime.http.final_url", outcome.finalURL, dims)
 			tb.State("uptime.http.protocol", outcome.httpProtocol, dims)
+		}
+		if target.Kind == KindHTTP || target.Kind == KindTLS {
 			tb.State("uptime.tls.server_name", outcome.tlsServerName, dims)
 			tb.State("uptime.tls.issuer", outcome.tlsIssuer, dims)
 			expiresAt := ""
@@ -134,13 +272,7 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 }
 
 func (c Collector) check(parent context.Context, target Target) result {
-	timeout := target.Timeout
-	if timeout <= 0 {
-		timeout = c.Timeout
-	}
-	if timeout <= 0 {
-		timeout = 5 * time.Second
-	}
+	timeout := c.targetTimeout(target)
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	start := time.Now()
@@ -155,8 +287,21 @@ func (c Collector) check(parent context.Context, target Target) result {
 		outcome = c.checkTCP(ctx, target.Address)
 	case KindHTTP:
 		outcome = c.checkHTTP(ctx, target)
+	case KindPorts:
+		outcome = c.checkPorts(ctx, target)
+	case KindDNSRecords:
+		outcome = c.checkRecords(ctx, target)
+	case KindTLS:
+		outcome = c.checkTLS(ctx, target)
+	case KindDNSBL:
+		outcome = c.checkDNSBL(ctx, target)
 	default:
 		outcome = result{err: "unsupported check type"}
+	}
+	if ctx.Err() != nil {
+		outcome.measured = false
+		outcome.success = false
+		outcome.err = "timeout or cancellation"
 	}
 	outcome.duration = time.Since(start)
 	return outcome
@@ -175,13 +320,16 @@ func (c Collector) checkICMP(ctx context.Context, address string) result {
 		return result{measured: false, success: false, err: "ping command unavailable"}
 	}
 	if ctx.Err() != nil {
-		return result{measured: true, success: false, err: "timeout"}
+		return result{err: "timeout"}
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) && exitErr.ExitCode() == 2 {
 		return result{measured: false, success: false, err: "ping command failed"}
 	}
-	return result{measured: true, success: false, err: "ping failed"}
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return result{measured: true, err: "ping failed"}
+	}
+	return result{err: "ping command failed"}
 }
 
 func (c Collector) checkDNS(ctx context.Context, address string) result {
@@ -192,9 +340,12 @@ func (c Collector) checkDNS(ctx context.Context, address string) result {
 	addresses, err := resolver.LookupHost(ctx, address)
 	if err != nil {
 		if ctx.Err() != nil {
-			return result{measured: true, success: false, err: "timeout"}
+			return result{err: "timeout"}
 		}
-		return result{measured: true, success: false, err: "DNS lookup failed"}
+		return result{err: "DNS lookup failed"}
+	}
+	if len(addresses) == 0 {
+		return result{err: "DNS answer missing"}
 	}
 	sort.Strings(addresses)
 	return result{measured: true, success: len(addresses) > 0, addresses: addresses}
@@ -204,9 +355,9 @@ func (c Collector) checkTCP(ctx context.Context, address string) result {
 	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", address)
 	if err != nil {
 		if ctx.Err() != nil {
-			return result{measured: true, success: false, err: "timeout"}
+			return result{err: "timeout"}
 		}
-		return result{measured: true, success: false, err: "TCP connection failed"}
+		return result{measured: errors.Is(err, syscall.ECONNREFUSED), err: "TCP connection failed"}
 	}
 	_ = conn.Close()
 	return result{measured: true, success: true}
@@ -222,12 +373,14 @@ func (c Collector) checkHTTP(ctx context.Context, target Target) result {
 	response, err := client.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
-			return result{measured: true, success: false, err: "timeout"}
+			return result{err: "timeout"}
 		}
-		return result{measured: true, success: false, err: "HTTP request failed"}
+		return result{measured: errors.Is(err, syscall.ECONNREFUSED), err: "HTTP request failed"}
 	}
 	defer response.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64*1024))
+	if _, err := io.Copy(io.Discard, io.LimitReader(response.Body, 64*1024)); err != nil {
+		return result{err: "HTTP response read failed"}
+	}
 
 	success := response.StatusCode >= 200 && response.StatusCode < 400
 	if target.ExpectedStatus != 0 {

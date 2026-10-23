@@ -41,13 +41,14 @@ func TestPulseContractExport(t *testing.T) {
 		Timestamp:  time.Date(2026, 7, 23, 18, 0, 0, 0, time.UTC),
 	}
 	collector := Collector{
+		Resolver:    localTestResolver(t),
 		Concurrency: 4,
 		Timeout:     time.Second,
 		HTTPClient:  httpServer.Client(),
 		Ping:        func(context.Context, string) error { return nil },
 		Targets: []Target{
 			{ID: "router", Label: "Router", Kind: KindICMP, Address: "192.0.2.1"},
-			{ID: "resolver", Label: "Resolver", Kind: KindDNS, Address: "localhost"},
+			{ID: "resolver", Label: "Resolver", Kind: KindDNS, Address: "fixture.test"},
 			{ID: "database", Label: "Database", Kind: KindTCP, Address: tcpListener.Addr().String()},
 			{ID: "pulse", Label: "Pulse", Kind: KindHTTP, Address: httpServer.URL, ExpectedStatus: http.StatusNoContent},
 		},

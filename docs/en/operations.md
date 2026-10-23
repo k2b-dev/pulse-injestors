@@ -51,7 +51,7 @@ journalctl -u pulse-linux.service -n 100
 
 Replace `pulse-linux` with the installed binary name. Reinstalling removes the old `.timer` unit.
 
-The service uses `Type=notify` with readiness notifications and a fixed `WatchdogSec=120s`. A separate loop pings the watchdog while the time since the last completed collection stays within 2 × interval + collector timeout + 60 seconds. If collection stalls beyond that limit, pings stop and systemd restarts the service after the watchdog timeout. `Restart=always` also restarts an exited process. The installer also sets:
+The service uses `Type=notify` with readiness notifications and a fixed `WatchdogSec=120s`. A separate loop pings the watchdog while the time since the last completed collection stays within 2 × interval + maximum cycle budget + 60 seconds (the cycle budget is at least one interval and includes the sum of configured collector timeout budgets). If collection stalls beyond that limit, pings stop and systemd restarts the service after the watchdog timeout. `Restart=always` also restarts an exited process. The installer also sets:
 
 - `NoNewPrivileges=yes` and `MemoryMax=256M`;
 - `StateDirectory=pulse/<binary>` with mode `0700`;

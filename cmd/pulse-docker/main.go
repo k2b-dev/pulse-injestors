@@ -48,8 +48,8 @@ type cli struct {
 	HostRoot                      string `name:"host-root" help:"Host root filesystem mount." env:"PULSE_HOST_ROOT"`
 	CPUSampleMS                   int    `name:"cpu-sample-ms" help:"CPU usage sample window in milliseconds." env:"PULSE_HOST_CPU_SAMPLE_MS"`
 	DockerSocketPath              string `name:"docker-socket" help:"Docker Engine unix socket." env:"PULSE_DOCKER_SOCKET"`
-	DockerHostRoot                string `name:"docker-host-root" help:"Host root used to stat Docker mount sources." env:"PULSE_DOCKER_HOST_ROOT"`
-	DockerConcurrency             int    `name:"docker-concurrency" help:"Max concurrent Docker container stats requests." env:"PULSE_DOCKER_CONCURRENCY"`
+	DockerHostRoot                string `name:"docker-host-root" help:"Deprecated; Docker mount source collection has been removed." env:"PULSE_DOCKER_HOST_ROOT"`
+	DockerConcurrency             int    `name:"docker-concurrency" help:"Max concurrent Docker container/image requests." env:"PULSE_DOCKER_CONCURRENCY"`
 	DockerContainerTimeoutSeconds int    `name:"docker-container-timeout-seconds" help:"Per-container Docker stats/inspect timeout." env:"PULSE_DOCKER_CONTAINER_TIMEOUT_SECONDS"`
 	DockerEnableRegistryChecks    bool   `name:"docker-enable-registry-checks" help:"Check remote registry digests for tagged images." env:"PULSE_DOCKER_ENABLE_REGISTRY_CHECKS"`
 	DockerRegistryTimeoutSeconds  int    `name:"docker-registry-timeout-seconds" help:"Per-image registry manifest check timeout." env:"PULSE_DOCKER_REGISTRY_TIMEOUT_SECONDS"`
@@ -195,20 +195,24 @@ func dockerSocketPath(c cli, fileCfg config.Config) string {
 
 func collectors(cfg config.Config) []monitoring.Collector {
 	stableHostID := dockermodule.NormalizeStableHostID(cfg.Resource.ID)
+	docker := dockermodule.Collector{
+		SocketPath:       cfg.Docker.SocketPath,
+		StableHostID:     stableHostID,
+		Timeout:          cfg.HTTPTimeout(),
+		ContainerTimeout: time.Duration(cfg.Docker.ContainerTimeoutSeconds) * time.Second,
+		Concurrency:      cfg.Docker.Concurrency,
+		StatsTimeout:     time.Duration(cfg.Docker.StatsTimeoutSeconds) * time.Second,
+		RegistryChecks:   cfg.Docker.EnableRegistryChecks,
+		RegistryTimeout:  time.Duration(cfg.Docker.RegistryTimeoutSeconds) * time.Second,
+	}
 	out := []monitoring.Collector{
 		system.Collector{ProcRoot: cfg.Host.ProcRoot, CPUSampleTime: cfg.CPUSampleWindow()},
 		filesystem.Collector{ProcRoot: cfg.Host.ProcRoot, HostRoot: cfg.Host.Root},
-		dockermodule.Collector{
-			SocketPath:       cfg.Docker.SocketPath,
-			HostRoot:         cfg.Docker.HostRoot,
-			StableHostID:     stableHostID,
-			Timeout:          cfg.HTTPTimeout(),
-			ContainerTimeout: time.Duration(cfg.Docker.ContainerTimeoutSeconds) * time.Second,
-			Concurrency:      cfg.Docker.Concurrency,
-			RegistryChecks:   cfg.Docker.EnableRegistryChecks,
-			RegistryTimeout:  time.Duration(cfg.Docker.RegistryTimeoutSeconds) * time.Second,
-		},
+		docker,
+		dockermodule.StatsCollector{Collector: docker},
+		dockermodule.InventoryCollector{Collector: docker},
 	}
+
 	if cfg.ThermalEnabled() {
 		out = append(out, thermal.Collector{SysRoot: cfg.Host.SysRoot})
 	}

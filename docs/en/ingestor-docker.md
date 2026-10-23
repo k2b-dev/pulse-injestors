@@ -168,26 +168,32 @@ enable_zfs = true
 
 [docker]
 socket_path = "/var/run/docker.sock"
-host_root = "/host/root"
 concurrency = 4
 container_timeout_seconds = 10
+stats_timeout_seconds = 120
 enable_registry_checks = false
 registry_timeout_seconds = 10
 ```
 
-Registry checks are disabled by default because private registries may need credentials and public registries may rate-limit manifest requests.
+Container status, health, image references, restart counters, and Compose counts are checked every 60 seconds. Running-container CPU, memory, network, and block I/O are sampled every 300 seconds. Daemon version and images referenced by existing containers are inspected daily. `once` includes every phase.
+
+States are sent on change and refreshed after six hours when next collected. Daily inventory states refresh daily. The stats phase uses its own 120-second budget (`docker.stats_timeout_seconds`) and at most four concurrent container requests. Each container request has a 10-second timeout. Raise the stats budget when large hosts cannot complete their stats phase; a slow phase can delay the next cycle.
+
+Registry checks are disabled by default. If enabled, they run daily for checkable image references in use. Private registries may require credentials that the ingestor does not have, and public registries may rate-limit manifest requests.
 
 ## Collected data
 
 | Area | Pulse resources | Data |
 |---|---|---|
 | Host | `host`, `filesystem` | CPU, memory, swap, load, uptime, mount capacity, inodes, and optional storage data |
-| Docker daemon | `docker-daemon` | Version, inventory, daemon health, and image update totals |
-| Containers | `docker-container` | Lifecycle, health, CPU, memory, PIDs, network, block I/O, mounts, and attachments |
-| Compose | `docker-compose-project`, `docker-compose-service` | Project inventory, replicas, and aggregate service usage |
+| Docker daemon | `docker-daemon` | Availability, daily version, and running/total container counts |
+| Containers | `docker-container` | Lifecycle, health, image reference, restarts, CPU, memory used/limit, and aggregate network/block I/O counters |
+| Compose | `docker-compose-project`, `docker-compose-service` | One `running/total` string state per project and service |
 | Images | `docker-image` | Repository/tag identity, age, size, architecture, OS, tags, digests, and optional registry freshness |
 
-Container identity remains stable across normal updates and recreation. Runtime IDs and mutable image details are reported as current facts instead of resource identity.
+Named-container identity remains stable across normal updates and recreation. Runtime container and image IDs, mount details, and network attachment details are not emitted as signals. Container network counters sum all interfaces. For Compose throughput, calculate rates on container counters before grouping by project or service.
+
+For 70 running containers, regular Docker metrics average 170 values/minute before changed states, refreshes, daily inventory, and ingestor self-monitoring. The 70-container fake-socket regression checks a Docker-only average below 400 values/minute; live-host measurement is separate.
 
 The [Docker module reference](/en/module-docker) lists every metric, state, event, dimension, type, unit, and example.
 
