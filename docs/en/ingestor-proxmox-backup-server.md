@@ -5,7 +5,7 @@ section: Ingestors
 order: 150
 description: Enroll a local PBS host and monitor its system, datastores, snapshots, jobs, and tasks.
 tags: [pbs, ingestor]
-updated: 2026-07-23
+updated: 2026-10-23
 ---
 
 # Proxmox Backup Server ingestor
@@ -30,7 +30,9 @@ curl -fsSL \
   | sh -s -- --ingestor=pbs
 ```
 
-The installer writes `/etc/pulse/ingestor.toml`, verifies local collection, sends the first batch, and enables `pulse-proxmox-backup-server.timer`.
+The installer writes `/etc/pulse/pulse-proxmox-backup-server.toml`, verifies local collection, sends the first batch, and enables `pulse-proxmox-backup-server.service`.
+
+The generated config references `/etc/pulse/pulse-proxmox-backup-server.token`. systemd loads this private file as a credential. The service runs `run`; cron remains a fallback that runs `once`.
 
 ## Enroll unattended
 
@@ -52,14 +54,14 @@ See [Native installation](/en/installation#unattended-enrollment) for token-file
 
 ```sh
 sudo pulse-proxmox-backup-server \
-  --config /etc/pulse/ingestor.toml \
+  --config /etc/pulse/pulse-proxmox-backup-server.toml \
   --local --pretty once
 
-systemctl status pulse-proxmox-backup-server.timer
+systemctl status pulse-proxmox-backup-server.service
 journalctl -u pulse-proxmox-backup-server.service -n 100
 ```
 
-Update by running the installer again. Remove the binary and timer while preserving the config:
+Update by running the installer again. Remove the binary and service while preserving the config, token, and spool:
 
 ```sh
 curl -fsSL \

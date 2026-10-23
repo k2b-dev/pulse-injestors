@@ -5,7 +5,7 @@ section: Ingestors
 order: 110
 description: Deploy and operate Docker host, container, Compose, and image monitoring.
 tags: [docker, ingestor]
-updated: 2026-07-23
+updated: 2026-10-23
 ---
 
 # Docker ingestor
@@ -39,15 +39,23 @@ sudo chmod 600 pulse-docker.toml
 Edit `pulse-docker.toml` and set:
 
 - `[pulse].ingest_url`;
-- `[pulse].ingest_token`;
 - `[resource].id` to the stable physical host or Docker VM ID;
 - `[resource].label` to the name users should see in Pulse.
+
+Store the source token as exactly one line in `pulse-docker.token`. Create the private file first, then edit it without putting the token in shell arguments:
+
+```sh
+sudo install -m 0600 /dev/null pulse-docker.token
+sudoedit pulse-docker.token
+```
+
+Compose mounts it at `/run/secrets/pulse-ingest-token` and sets `PULSE_INGEST_TOKEN_FILE` to that path. Keep the file for updates; do not recreate it with the command above once it holds a token.
 
 Validate collection without sending:
 
 ```sh
 sudo docker compose run --rm \
-  pulse-docker pulse-injestor --local --pretty once
+  pulse-docker --local --pretty once
 ```
 
 Send the first batch:
@@ -56,11 +64,28 @@ Send the first batch:
 sudo docker compose run --rm pulse-docker once
 ```
 
-Start scheduled collection:
+Start the service:
 
 ```sh
 sudo docker compose up -d
 sudo docker compose ps
+```
+
+`run` collects on the configured interval and delivers queued parts independently. The `pulse-spool` volume preserves queued data across container recreation. For later manual authenticated checks, stop the service first to release its spool. Local checks do not open the spool.
+
+## Operate and update
+
+```sh
+cd /opt/pulse-docker
+sudo docker compose logs -f pulse-docker
+sudo docker compose pull
+sudo docker compose up -d
+```
+
+Stop and remove the ingestor while keeping its config, token, and named spool volume:
+
+```sh
+sudo docker compose down
 ```
 
 ## Compose file
@@ -76,19 +101,27 @@ services:
     command: ["run"]
     environment:
       PULSE_INTERVAL_SECONDS: ${PULSE_INTERVAL_SECONDS:-60}
+      PULSE_INGEST_TOKEN_FILE: /run/secrets/pulse-ingest-token
+    secrets:
+      - pulse-ingest-token
     read_only: true
     security_opt:
       - no-new-privileges:true
     volumes:
-      - pulse-outbox:/var/lib/pulse/pulse-docker
-      - ./pulse-docker.toml:/etc/pulse/ingestor.toml:ro
+      - pulse-spool:/var/lib/pulse/pulse-docker
+      - ./pulse-docker.toml:/etc/pulse/pulse-docker.toml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/host/root:ro
 
 volumes:
-  pulse-outbox:
+  pulse-spool:
+
+secrets:
+  # One line with the source token; keep the file private (chmod 600).
+  pulse-ingest-token:
+    file: ./pulse-docker.token
 ```
 
 Create an optional `.env` file to change the collection interval:
@@ -97,14 +130,14 @@ Create an optional `.env` file to change the collection interval:
 PULSE_INTERVAL_SECONDS=60
 ```
 
-The Pulse token remains in the mode-`0600` TOML file and is not exposed as a container environment variable.
+The mode-`0600` token file is a Compose secret. The container environment contains its path, not the token value.
 
 ## Default config
 
 ```toml
 [pulse]
 ingest_url = "https://pulse.example.com/api/pulse/ingest"
-ingest_token = "replace-me"
+ingest_token_file = "/run/secrets/pulse-ingest-token"
 spool_dir = "/var/lib/pulse/pulse-docker"
 spool_max_bytes = 67108864
 
@@ -143,21 +176,6 @@ registry_timeout_seconds = 10
 ```
 
 Registry checks are disabled by default because private registries may need credentials and public registries may rate-limit manifest requests.
-
-## Operate and update
-
-```sh
-cd /opt/pulse-docker
-sudo docker compose logs -f pulse-docker
-sudo docker compose pull
-sudo docker compose up -d
-```
-
-Stop and remove the ingestor without deleting its config:
-
-```sh
-sudo docker compose down
-```
 
 ## Collected data
 

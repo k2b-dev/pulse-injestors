@@ -5,7 +5,7 @@ section: Ingestors
 order: 120
 description: Enroll and monitor Linux servers, desktops, and Raspberry Pi systems.
 tags: [linux, ingestor]
-updated: 2026-07-23
+updated: 2026-10-23
 ---
 
 # Linux ingestor
@@ -34,7 +34,9 @@ curl -fsSL \
   | sh -s -- --ingestor=linux
 ```
 
-The installer writes `/etc/pulse/ingestor.toml`, verifies a local collection, sends the first batch, and enables a systemd timer. It falls back to cron when systemd is unavailable.
+The installer writes `/etc/pulse/pulse-linux.toml`, verifies a local collection, sends the first batch, and enables a systemd service running `run`. It falls back to cron when systemd is unavailable.
+
+The generated config references `/etc/pulse/pulse-linux.token`. systemd loads this private file as a credential. cron runs `once` when used as a fallback.
 
 ## Enroll unattended
 
@@ -55,12 +57,12 @@ See [Native installation](/en/installation#unattended-enrollment) for provisioni
 ## Verify and operate
 
 ```sh
-sudo pulse-linux --config /etc/pulse/ingestor.toml --local --pretty once
-systemctl status pulse-linux.timer
+sudo pulse-linux --config /etc/pulse/pulse-linux.toml --local --pretty once
+systemctl status pulse-linux.service
 journalctl -u pulse-linux.service -n 100
 ```
 
-Update by running the same installer command again. Remove the binary and scheduler while preserving the config:
+Update by running the same installer command again. Remove the binary and scheduler while preserving the config, token, and spool:
 
 ```sh
 curl -fsSL \

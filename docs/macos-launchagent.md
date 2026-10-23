@@ -11,8 +11,8 @@ curl -fsSL \
 It installs:
 
 - `/usr/local/bin/pulse-macos`
-- `~/Library/Application Support/Pulse/ingestor.toml`
-- `~/Library/LaunchAgents/dev.pulse.pulse-macos.plist`
+- `~/Library/Application Support/Pulse/pulse-macos.toml` and the token file `pulse-macos.token` next to it
+- `~/Library/LaunchAgents/dev.pulse.pulse-macos.plist`, which keeps `pulse-macos run` running
 - logs under `~/Library/Logs/Pulse/`
 
 Run the installer as the target user, not as root. It requests `sudo` only while installing the system binary.

@@ -12,7 +12,7 @@ curl -fsSL \
   | sh
 ```
 
-It installs the selected binary, writes a protected config, verifies local collection, sends the first Pulse batch, and enables systemd, cron, or launchd. It also supports fully unattended enrollment with `--config-source` or provisioning environment variables.
+It installs the selected binary, writes a per-binary config and separate private token file, verifies local collection, sends the first Pulse batch, and starts a supervised `run` service under systemd or launchd. cron is a fallback that runs `once`. It also supports fully unattended enrollment with `--config-source` or provisioning environment variables.
 
 ## Docker
 
@@ -22,8 +22,14 @@ Docker is deployed with the maintained Compose files:
 cd deploy/docker
 cp pulse-docker.example.toml pulse-docker.toml
 chmod 600 pulse-docker.toml
+# Set the ingest URL and stable resource identity in pulse-docker.toml.
+# Create a private file, then enter the source token as one line in your editor.
+install -m 0600 /dev/null pulse-docker.token
+${EDITOR:-vi} pulse-docker.token
 docker compose up -d
 ```
+
+Compose mounts the token as a secret and keeps queued telemetry in the `pulse-spool` volume. See [Docker enrollment](docs/en/ingestor-docker.md) for local verification before starting the service.
 
 ## Release channels
 
@@ -97,10 +103,16 @@ PULSE_CLOUD_CHECKOUT=/absolute/path/to/cloud bun run check:pulse
 The contract check requires the target Cloud checkout with its dependencies
 installed and its supported Bun version. It runs mocked collector fixtures
 through the HTTP client, validates the wire payloads with Pulse's current
-schema, and compiles all dashboard examples. It does not access live servers.
+schema. It does not access live servers. Pulse uses SQL; see the untested
+[SQL query examples](docs/en/dashboards.md).
 
-Production examples enable a private, bounded delivery spool. See
-[configuration](docs/en/configuration.md) for disk budgets, expiry, token
-rotation and recovery. Measure the complete selected collector profile before
-choosing capacity: one rich Proxmox fixture already emits 52 metrics per cycle,
-without the additional host modules or a full guest fleet.
+Production examples enable a private, bounded spool. Collection and delivery
+run independently. Parts expire after 23 hours; a full budget drops the oldest
+parts first. See [configuration](docs/en/configuration.md) for response handling,
+quarantine, token rotation, and recovery.
+
+States are sent on change and refreshed after six hours when observed again.
+Use `ingestor.heartbeat` for liveness and set the source's **Expected data** in
+Pulse. Measure the selected collector profile before choosing a source/base
+quota and spool budget. See [current readiness](PRODUCTION-READINESS.md) for
+verification scope and known limits.

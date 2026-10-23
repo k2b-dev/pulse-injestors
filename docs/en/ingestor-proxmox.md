@@ -5,7 +5,7 @@ section: Ingestors
 order: 140
 description: Enroll a local Proxmox VE node and monitor its host, guests, tasks, backups, and Ceph.
 tags: [proxmox, ceph, ingestor]
-updated: 2026-07-23
+updated: 2026-10-23
 ---
 
 # Proxmox VE ingestor
@@ -32,9 +32,11 @@ curl -fsSL \
   | sh -s -- --ingestor=proxmox
 ```
 
-The installer writes `/etc/pulse/ingestor.toml`, validates host and Proxmox collection, sends the first batch, and enables `pulse-proxmox.timer`.
+The installer writes `/etc/pulse/pulse-proxmox.toml`, validates host and Proxmox collection, sends the first batch, and enables `pulse-proxmox.service`.
 
 Use a stable resource ID unique to the physical node. In a cluster, each node uses its own host ID while cluster and guest resources are derived consistently from Proxmox data.
+
+The generated config references `/etc/pulse/pulse-proxmox.token`. systemd loads this private file as a credential. The service runs `run`; cron remains a fallback that runs `once`.
 
 ## Enroll unattended
 
@@ -55,12 +57,12 @@ See [Native installation](/en/installation#unattended-enrollment) for token-file
 ## Verify and operate
 
 ```sh
-sudo pulse-proxmox --config /etc/pulse/ingestor.toml --local --pretty once
-systemctl status pulse-proxmox.timer
+sudo pulse-proxmox --config /etc/pulse/pulse-proxmox.toml --local --pretty once
+systemctl status pulse-proxmox.service
 journalctl -u pulse-proxmox.service -n 100
 ```
 
-Update by running the installer again. Remove the binary and timer while preserving the config:
+Update by running the installer again. Remove the binary and service while preserving the config, token, and spool:
 
 ```sh
 curl -fsSL \

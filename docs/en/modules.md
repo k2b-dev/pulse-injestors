@@ -5,7 +5,7 @@ section: Reference
 order: 200
 description: Reusable collector modules used by the Pulse ingestor binaries.
 tags: [modules, reference]
-updated: 2026-07-23
+updated: 2026-10-23
 ---
 
 # Modules
@@ -48,11 +48,25 @@ Optional modules are best-effort and auto-enabled by default when their binary i
 
 ## Runner signals
 
-The shared runner emits these signals on the ingestor's root resource:
+These signals use the ingestor's root resource: `host` for host ingestors and `uptime-probe` for `pulse-uptime`. Common dimensions are `host` or `probe`, respectively, plus configured global dimensions. The table lists additional dimensions: self-monitoring adds `ingestor=<binary>`, while collector results add `collector=<name>`.
 
-| Name | Signal type | Dimensions | Example | Meaning |
-|---|---|---|---|---|
-| `ingestor.collector.ok` | state boolean | `host`, `collector` | `true` | Whether one collector completed without returning an error. |
-| `ingestor.collector.failed` | event | `host`, `collector` | `attributes.error` | One collector returned an error. |
-| `ingestor.collect.ok` | state boolean | `host` | `false` | No collector produced a signal. |
-| `ingestor.collect.empty` | event | `host` | none | The complete run produced no signals. |
+| Name | Signal type | Unit | Added dimensions | Example | Meaning |
+|---|---|---|---|---|---|
+| `ingestor.heartbeat` | gauge | none | `ingestor` | `1` | One sample per collection cycle; use it for liveness. |
+| `ingestor.cycle.duration` | gauge | `seconds` | `ingestor` | `0.8` | Duration of the previous collection and queue write; absent in the first cycle. |
+| `ingestor.spool.bytes` | gauge | `bytes` | `ingestor` | `16384` | Queued bytes before the current collection is enqueued. |
+| `ingestor.spool.parts` | gauge | none | `ingestor` | `2` | Number of queued parts before enqueueing this collection. |
+| `ingestor.spool.oldest_age` | gauge | `seconds` | `ingestor` | `120` | Age of the oldest queued part; zero for an empty queue. |
+| `ingestor.delivery.failures` | counter | none | `ingestor` | `3` | Failed delivery attempts since process start, including invalid acknowledgements. |
+| `ingestor.clock.skew` | gauge | `seconds` | `ingestor` | `-130` | Pulse server time minus local time, estimated from the HTTP Date header; absent until known. |
+| `ingestor.version` | state string | none | `ingestor` | `v0.1.0` | Running binary version. |
+| `ingestor.delivery.rejected` | event | none | `ingestor`, `reason` | `attributes.item` | Rejected telemetry; includes status, message, item when isolated, and item counts. `reason` is Pulse's error code. |
+| `ingestor.telemetry.dropped` | event | none | `ingestor`, `reason` | `reason=budget` | Parts lost to the byte budget or expiry; attributes include parts and bytes. |
+| `ingestor.collector.ok` | state boolean | none | `collector` | `true` | Whether one collector completed without returning an error. |
+| `ingestor.collector.failed` | event | none | `collector` | `attributes.error` | One collector returned an error. |
+
+States are queued on value changes and refreshed after six hours when observed again. With a persistent spool, `<spool_dir>/.states` preserves this cache across restarts. A state timestamp is the last change or refresh, not the last check.
+
+After the spool drops or rejects data, all states observed in the next collection cycle are sent again.
+
+Local output includes collector results but bypasses delivery self-monitoring and state suppression. Delivery events also travel through the queue; during an outage, inspect local logs. The removed `ingestor.collect.ok` and `ingestor.collect.empty` signals are no longer emitted.

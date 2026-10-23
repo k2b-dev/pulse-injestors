@@ -5,12 +5,12 @@ section: Ingestors
 order: 160
 description: Monitor internet connectivity and named ICMP, DNS, TCP, and HTTP endpoints.
 tags: [uptime, internet, ingestor]
-updated: 2026-07-23
+updated: 2026-10-23
 ---
 
 # Uptime ingestor
 
-`pulse-uptime` checks internet connectivity and named endpoints from one Linux or macOS probe. Each run sends availability, duration, current diagnostics, HTTP status, and TLS certificate lifetime to Pulse.
+`pulse-uptime` checks internet connectivity and named endpoints from one Linux or macOS probe. Each collection records availability, duration, current diagnostics, HTTP status, and TLS certificate lifetime for delivery to Pulse.
 
 ## Requirements
 
@@ -36,10 +36,12 @@ On macOS, run the same command as the user who should own the LaunchAgent. Do no
 The installer asks for the Pulse source, token, stable probe ID, label, dimensions, and interval. It then:
 
 1. installs the signed `pulse-uptime` release;
-2. writes a protected config;
+2. writes a protected config and a separate token file;
 3. runs all checks locally;
 4. sends the first Pulse batch;
-5. enables systemd, cron, or a per-user LaunchAgent.
+5. starts a systemd service or a per-user LaunchAgent, with cron as a Linux fallback.
+
+The default config is `/etc/pulse/pulse-uptime.toml` on Linux and `~/Library/Application Support/Pulse/pulse-uptime.toml` on macOS. The token uses the same path with `.token` instead of `.toml`. systemd runs the service with `DynamicUser=yes` and `ProtectSystem=strict`; launchd uses `KeepAlive`. Both run `run`.
 
 ## Enroll unattended
 
@@ -64,8 +66,8 @@ On macOS, omit `sudo` and use `--scheduler=launchd`. See [Native installation](/
 Linux:
 
 ```sh
-sudo pulse-uptime --config /etc/pulse/ingestor.toml --local --pretty once
-systemctl status pulse-uptime.timer
+sudo pulse-uptime --config /etc/pulse/pulse-uptime.toml --local --pretty once
+systemctl status pulse-uptime.service
 journalctl -u pulse-uptime.service -n 100
 ```
 
@@ -73,14 +75,14 @@ macOS:
 
 ```sh
 pulse-uptime \
-  --config "$HOME/Library/Application Support/Pulse/ingestor.toml" \
+  --config "$HOME/Library/Application Support/Pulse/pulse-uptime.toml" \
   --local --pretty once
 
 launchctl print "gui/$(id -u)/dev.pulse.pulse-uptime"
 tail -n 100 "$HOME/Library/Logs/Pulse/pulse-uptime.err.log"
 ```
 
-Update by running the installer again. Remove the binary and managed scheduler while preserving the config:
+Update by running the installer again. Remove the binary and managed scheduler while preserving the config, token, and spool:
 
 ```sh
 curl -fsSL \
