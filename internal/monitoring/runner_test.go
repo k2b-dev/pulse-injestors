@@ -3,7 +3,9 @@ package monitoring
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/k2b-dev/pulse-injestors/internal/pulse"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -98,5 +100,93 @@ func TestRunnerRunsCollectorsOnTheirCadence(t *testing.T) {
 	runner.Collect(context.Background(), true)
 	if slow != 4 {
 		t.Fatal("collect all skipped a slow collector")
+	}
+}
+
+type callbackCollector struct {
+	name    string
+	collect func(context.Context, Scope) (pulse.Batch, error)
+}
+
+func (c callbackCollector) Name() string { return c.name }
+func (c callbackCollector) Collect(ctx context.Context, scope Scope) (pulse.Batch, error) {
+	return c.collect(ctx, scope)
+}
+
+func TestRunnerRetriesUnsuccessfulCollectorsNextTick(t *testing.T) {
+	for _, failure := range []string{"error", "cancelled with nil error", "invalid batch"} {
+		t.Run(failure, func(t *testing.T) {
+			now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			calls := 0
+			c := callbackCollector{name: "daily", collect: func(_ context.Context, scope Scope) (pulse.Batch, error) {
+				calls++
+				if calls == 1 {
+					switch failure {
+					case "error":
+						return pulse.Batch{}, errors.New("failed")
+					case "cancelled with nil error":
+						cancel()
+					case "invalid batch":
+						b := NewBuilder(scope)
+						b.Metric("test.invalid", "invalid", 1, "", nil)
+						return b.Batch(), nil
+					}
+				}
+				return pulse.Batch{}, nil
+			}}
+			r := Runner{Interval: time.Minute, Now: func() time.Time { return now },
+				Collectors: []Collector{WithCadence{Collector: c, Every: 24 * time.Hour}}}
+			b := r.Collect(ctx, false)
+			if len(b.Events) != 1 || len(r.lastRun) != 0 {
+				t.Fatalf("failure was marked successful: events=%v lastRun=%v", b.Events, r.lastRun)
+			}
+			now = now.Add(time.Minute)
+			r.Collect(context.Background(), false)
+			if calls != 2 || r.lastRun["daily"] != now {
+				t.Fatalf("not retried next tick: calls=%d lastRun=%v", calls, r.lastRun)
+			}
+			now = now.Add(time.Minute)
+			r.Collect(context.Background(), false)
+			if calls != 2 {
+				t.Fatal("successful collector ignored its cadence")
+			}
+		})
+	}
+}
+
+func TestRunnerPrioritizesHealthCollectorsWithStableOrder(t *testing.T) {
+	for _, exhaustBudget := range []bool{false, true} {
+		t.Run(fmt.Sprint(exhaustBudget), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var order []string
+			makeCollector := func(name string, cadence time.Duration) Collector {
+				return WithCadence{Every: cadence, Collector: callbackCollector{name: name,
+					collect: func(context.Context, Scope) (pulse.Batch, error) {
+						order = append(order, name)
+						if exhaustBudget && name == "daily" {
+							cancel()
+						}
+						return pulse.Batch{}, nil
+					}}}
+			}
+			r := Runner{Interval: time.Minute, Collectors: []Collector{
+				makeCollector("daily", 24*time.Hour), makeCollector("health-a", time.Minute),
+				makeCollector("hourly", time.Hour), makeCollector("health-b", 30*time.Second),
+			}}
+			r.Collect(ctx, false)
+			want := []string{"health-a", "health-b", "daily", "hourly"}
+			if exhaustBudget {
+				want = want[:3]
+			}
+			if !reflect.DeepEqual(order, want) {
+				t.Fatalf("order=%v want=%v", order, want)
+			}
+			if r.Collectors[0].Name() != "daily" {
+				t.Fatal("runner mutated configured collector order")
+			}
+		})
 	}
 }

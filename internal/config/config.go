@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +34,7 @@ type Config struct {
 	Proxmox    ProxmoxConfig     `toml:"proxmox"`
 	PBS        PBSConfig         `toml:"pbs"`
 	Uptime     UptimeConfig      `toml:"uptime"`
+	Backups    []BackupConfig    `toml:"backup"`
 	Scripts    []ScriptConfig    `toml:"script"`
 }
 
@@ -58,8 +60,9 @@ type HTTPConfig struct {
 }
 
 type RunnerConfig struct {
-	IntervalSeconds         int `toml:"interval_seconds"`
-	CollectorTimeoutSeconds int `toml:"collector_timeout_seconds"`
+	Cadence                 map[string]int `toml:"cadence"`
+	IntervalSeconds         int            `toml:"interval_seconds"`
+	CollectorTimeoutSeconds int            `toml:"collector_timeout_seconds"`
 }
 
 type HostConfig struct {
@@ -83,6 +86,8 @@ type DockerConfig struct {
 }
 
 type LinuxConfig struct {
+	NetworkExclude           []string `toml:"network_exclude"`
+	CertificatePaths         []string `toml:"certificate_paths"`
 	Profile                  string   `toml:"profile"`
 	SystemdUnits             []string `toml:"systemd_units"`
 	PackageTimeoutSeconds    int      `toml:"package_timeout_seconds"`
@@ -126,7 +131,14 @@ type UptimeTargetConfig struct {
 	TimeoutSeconds int    `toml:"timeout_seconds"`
 }
 
+type BackupConfig struct {
+	Name       string   `toml:"name"`
+	MarkerFile string   `toml:"marker_file"`
+	Command    []string `toml:"command"`
+}
+
 type ScriptConfig struct {
+	CadenceSeconds int               `toml:"cadence_seconds"`
 	Name           string            `toml:"name"`
 	Command        []string          `toml:"command"`
 	TimeoutSeconds int               `toml:"timeout_seconds"`
@@ -200,6 +212,12 @@ func LoadFile(path string, explicit bool) (Config, error) {
 }
 
 func Resolve(file Config, overlay Overlay) (Config, error) {
+	// Check before merging: even an empty reserved value is invalid.
+	for _, dimensions := range []map[string]string{file.Dimensions, overlay.Dimensions} {
+		if _, ok := dimensions["host"]; ok {
+			return file, errors.New("dimension 'host' is reserved; the resource id identifies the host")
+		}
+	}
 	if file.Pulse.IngestToken != "" && file.Pulse.IngestTokenFile != "" {
 		return file, errors.New("set either pulse ingest_token or ingest_token_file, not both")
 	}
@@ -308,7 +326,35 @@ func Resolve(file Config, overlay Overlay) (Config, error) {
 	if cfg.Linux.DiskHealthTimeoutSeconds <= 0 {
 		return cfg, errors.New("linux disk_health_timeout_seconds must be positive")
 	}
+	for name, seconds := range cfg.Runner.Cadence {
+		if strings.TrimSpace(name) == "" || seconds < cfg.Runner.IntervalSeconds || int64(seconds) > int64((1<<63-1)/time.Second) {
+			return cfg, fmt.Errorf("runner cadence %q must be >= interval_seconds and fit a duration", name)
+		}
+	}
+	for _, pattern := range append(append([]string{}, cfg.Linux.NetworkExclude...), cfg.Linux.CertificatePaths...) {
+		if _, err := filepath.Match(pattern, ""); err != nil {
+			return cfg, fmt.Errorf("invalid glob %q: %w", pattern, err)
+		}
+	}
+	backupNames := map[string]bool{}
+	for _, backup := range cfg.Backups {
+		if strings.TrimSpace(backup.Name) == "" || backupNames[backup.Name] {
+			return cfg, errors.New("backup names must be nonempty and unique")
+		}
+		backupNames[backup.Name] = true
+		if (backup.MarkerFile == "") == (len(backup.Command) == 0) || (len(backup.Command) > 0 && strings.TrimSpace(backup.Command[0]) == "") {
+			return cfg, fmt.Errorf("backup %q requires exactly one marker_file or command", backup.Name)
+		}
+	}
+	scriptNames := map[string]bool{}
 	for _, script := range cfg.Scripts {
+		if scriptNames[script.Name] {
+			return cfg, fmt.Errorf("duplicate script %q", script.Name)
+		}
+		scriptNames[script.Name] = true
+		if script.CadenceSeconds != 0 && (script.CadenceSeconds < cfg.Runner.IntervalSeconds || int64(script.CadenceSeconds) > int64((1<<63-1)/time.Second)) {
+			return cfg, fmt.Errorf("script %q cadence_seconds must be >= interval_seconds and fit a duration", script.Name)
+		}
 		if script.Name == "" {
 			return cfg, errors.New("script name is required")
 		}
@@ -501,6 +547,10 @@ func defaults() Config {
 }
 
 func merge(dst *Config, src Config) {
+	dst.Runner.Cadence = src.Runner.Cadence
+	dst.Linux.NetworkExclude = src.Linux.NetworkExclude
+	dst.Linux.CertificatePaths = src.Linux.CertificatePaths
+	dst.Backups = src.Backups
 	if src.Pulse.SpoolDir != "" {
 		dst.Pulse.SpoolDir = src.Pulse.SpoolDir
 	}
@@ -875,6 +925,9 @@ func validateDimensions(dimensions map[string]string) error {
 		return errors.New("dimensions cannot exceed 32 keys")
 	}
 	for key, value := range dimensions {
+		if key == "host" {
+			return errors.New("dimension 'host' is reserved; the resource id identifies the host")
+		}
 		if key == "" || len(key) > 80 {
 			return fmt.Errorf("invalid dimension key %q", key)
 		}

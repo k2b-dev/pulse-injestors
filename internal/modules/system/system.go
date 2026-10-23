@@ -37,9 +37,9 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 	if load, err := readLoadAvg(proc); err != nil {
 		errs = append(errs, fmt.Errorf("loadavg: %w", err))
 	} else {
-		b.Metric("system.load.1m", "gauge", load[0], "load", nil)
-		b.Metric("system.load.5m", "gauge", load[1], "load", nil)
-		b.Metric("system.load.15m", "gauge", load[2], "load", nil)
+		b.Metric("system.load.1m", "gauge", load[0], "", nil)
+		b.Metric("system.load.5m", "gauge", load[1], "", nil)
+		b.Metric("system.load.15m", "gauge", load[2], "", nil)
 	}
 	if uptime, err := readUptime(proc); err != nil {
 		errs = append(errs, fmt.Errorf("uptime: %w", err))
@@ -61,6 +61,16 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 			b.Metric("system.swap.used", "gauge", float64(swapUsed), "bytes", nil)
 			b.Metric("system.swap.usage", "gauge", (float64(swapUsed)/float64(mem.swapTotal))*100, "percent", nil)
 		}
+	}
+	if sample, err := readCPUSample(proc); err == nil {
+		for i, mode := range []string{"user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal"} {
+			b.Metric("system.cpu.time", "counter", float64(sample.modes[i])/100, "seconds", map[string]string{"mode": mode})
+		}
+		if sample.cores > 0 {
+			b.Metric("system.cpu.cores", "gauge", float64(sample.cores), "", nil)
+		}
+	} else {
+		errs = append(errs, err)
 	}
 	if usage, err := sampleCPUUsage(ctx, proc, window); err != nil {
 		errs = append(errs, fmt.Errorf("cpu: %w", err))
@@ -121,6 +131,7 @@ func readMemInfo(procRoot string) (memInfo, error) {
 	defer f.Close()
 
 	var out memInfo
+	availableSeen := false
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		key, value, ok := strings.Cut(sc.Text(), ":")
@@ -139,6 +150,7 @@ func readMemInfo(procRoot string) (memInfo, error) {
 		case "MemTotal":
 			out.total = kb * 1024
 		case "MemAvailable":
+			availableSeen = true
 			out.available = kb * 1024
 		case "SwapTotal":
 			out.swapTotal = kb * 1024
@@ -149,13 +161,15 @@ func readMemInfo(procRoot string) (memInfo, error) {
 	if err := sc.Err(); err != nil {
 		return memInfo{}, err
 	}
-	if out.total == 0 || out.available == 0 {
-		return memInfo{}, errors.New("MemTotal or MemAvailable missing")
+	if out.total == 0 || !availableSeen || out.available > out.total || out.swapFree > out.swapTotal {
+		return memInfo{}, errors.New("missing or inconsistent memory totals")
 	}
 	return out, nil
 }
 
 type cpuSample struct {
+	modes [8]uint64
+	cores int
 	idle  uint64
 	total uint64
 }
@@ -176,6 +190,9 @@ func sampleCPUUsage(ctx context.Context, procRoot string, window time.Duration) 
 	if err != nil {
 		return 0, err
 	}
+	if second.total < first.total || second.idle < first.idle {
+		return 0, errors.New("cpu counters reset")
+	}
 	total := second.total - first.total
 	if total == 0 {
 		return 0, errors.New("zero cpu delta")
@@ -189,28 +206,37 @@ func readCPUSample(procRoot string) (cpuSample, error) {
 	if err != nil {
 		return cpuSample{}, err
 	}
+	var sample cpuSample
+	found := false
 	for _, line := range strings.Split(string(raw), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 8 || fields[0] != "cpu" {
+		if len(fields) == 0 {
 			continue
 		}
-		vals := make([]uint64, 0, len(fields)-1)
-		for _, field := range fields[1:] {
-			v, err := strconv.ParseUint(field, 10, 64)
+		if strings.HasPrefix(fields[0], "cpu") && fields[0] != "cpu" {
+			sample.cores++
+			continue
+		}
+		if fields[0] != "cpu" {
+			continue
+		}
+		if len(fields) < 9 {
+			return sample, errors.New("expected eight CPU modes")
+		}
+		found = true
+		// Guest time is already included in user/nice; do not count it twice.
+		for i := range sample.modes {
+			value, err := strconv.ParseUint(fields[i+1], 10, 64)
 			if err != nil {
-				return cpuSample{}, err
+				return sample, err
 			}
-			vals = append(vals, v)
+			sample.modes[i] = value
+			sample.total += value
 		}
-		var total uint64
-		for _, v := range vals {
-			total += v
-		}
-		idle := vals[3]
-		if len(vals) > 4 {
-			idle += vals[4]
-		}
-		return cpuSample{idle: idle, total: total}, nil
+		sample.idle = sample.modes[3] + sample.modes[4]
 	}
-	return cpuSample{}, errors.New("aggregate cpu row missing")
+	if !found {
+		return sample, errors.New("aggregate cpu row missing")
+	}
+	return sample, nil
 }

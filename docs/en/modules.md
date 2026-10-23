@@ -18,6 +18,8 @@ Collector modules live under `internal/modules` and are reused by the specialize
 - [`filesystem`](/en/module-filesystem): mount and filesystem usage data.
 - [`network`](/en/module-network): Linux interface counters.
 - [`linuxruntime`](/en/module-linuxruntime): Linux pressure, process counts, and socket summaries.
+- [`kernel`](/en/module-kernel): OOM kills, boot time, recent boots, and kernel errors.
+- [`inventory`](/en/module-inventory): daily OS, kernel, hardware, and installed package versions.
 - [`thermal`](/en/module-thermal): hwmon/sysfs thermal zones where available.
 
 ## Platform modules
@@ -32,9 +34,12 @@ Collector modules live under `internal/modules` and are reused by the specialize
 - [`btrfs`](/en/module-btrfs): Btrfs mount presence and usage data.
 - [`zfs`](/en/module-zfs): ZFS pool, dataset, and snapshot data through ZFS tools.
 - [`ceph`](/en/module-ceph): local Ceph CLI health, OSD, PG, and pool data.
+- [`diskio`](/en/module-diskio): whole-device I/O, operation, and busy-time counters.
+- [`certificates`](/en/module-certificates): local PEM certificate expiration.
+- [`backup`](/en/module-backup): last successful backup from marker files or commands.
 - [`diskhealth`](/en/module-diskhealth): SMART and NVMe disk health through host tools.
 - [`packages`](/en/module-packages): package update counts for supported Linux package managers.
-- [`systemd`](/en/module-systemd): configured systemd unit states.
+- [`systemd`](/en/module-systemd): configured systemd unit states and all failed units.
 
 ## Extension module
 
@@ -48,7 +53,7 @@ Optional modules are best-effort and auto-enabled by default when their binary i
 
 ## Runner signals
 
-These signals use the ingestor's root resource: `host` for host ingestors and `uptime-probe` for `pulse-uptime`. Common dimensions are `host` or `probe`, respectively, plus configured global dimensions. The table lists additional dimensions: self-monitoring adds `ingestor=<binary>`, while collector results add `collector=<name>`.
+These signals use the ingestor's root resource: `host` for host ingestors and `uptime-probe` for `pulse-uptime`. Host ingestors add no automatic `host` dimension. `pulse-uptime` retains `probe`; configured global dimensions remain supported. The table lists additional dimensions: self-monitoring adds `ingestor=<binary>`, while collector results add `collector=<name>`.
 
 | Name | Signal type | Unit | Added dimensions | Example | Meaning |
 |---|---|---|---|---|---|
@@ -65,7 +70,7 @@ These signals use the ingestor's root resource: `host` for host ingestors and `u
 | `ingestor.collector.ok` | state boolean | none | `collector` | `true` | Whether one collector completed without returning an error. |
 | `ingestor.collector.failed` | event | none | `collector` | `attributes.error` | One collector returned an error. |
 
-States are queued on value changes and refreshed after six hours when observed again. With a persistent spool, `<spool_dir>/.states` preserves this cache across restarts. A state timestamp is the last change or refresh, not the last check.
+States are queued on value changes and refreshed after six hours when observed again, except `software.*` states, which refresh after seven days. Daily observations keep software entries alive; cache entries are forgotten only after seven days without observation. With a persistent spool, `<spool_dir>/.states` preserves this cache across restarts. A state timestamp is the last change or refresh, not the last check.
 
 After the spool drops or rejects data, all states observed in the next collection cycle are sent again.
 

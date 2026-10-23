@@ -74,14 +74,14 @@ ID# ATTRIBUTE_NAME          FLAG     VALUE WORST THRESH TYPE      UPDATED  WHEN_
 		metrics[metric.Name]++
 		values[metric.Name] = metric.Value
 	}
-	if metrics["system.disk.smart.attribute.raw"] != 3 {
+	if metrics["system.disk.smart.attribute.raw"] != 0 {
 		t.Fatalf("attribute metrics = %d", metrics["system.disk.smart.attribute.raw"])
 	}
 	if values["system.disk.smart.reallocated_sectors"] != 2 {
 		t.Fatalf("reallocated metric = %v", values["system.disk.smart.reallocated_sectors"])
 	}
-	if values["system.disk.smart.power_on_hours"] != 12345 {
-		t.Fatalf("power hours metric = %v", values["system.disk.smart.power_on_hours"])
+	if values["system.disk.smart.power_on_time"] != 12345*3600 {
+		t.Fatalf("power hours metric = %v", values["system.disk.smart.power_on_time"])
 	}
 	if values["system.disk.smart.temperature"] != 36 {
 		t.Fatalf("temperature metric = %v", values["system.disk.smart.temperature"])
@@ -112,7 +112,7 @@ func TestEmitNVMeSmartAddsCelsiusTemperature(t *testing.T) {
 	for _, metric := range builder.Batch().Metrics {
 		metrics[metric.Name] = metric.Value
 	}
-	if metrics["system.disk.nvme.temperature"] != 300 {
+	if metrics["system.disk.nvme.temperature"] != 0 {
 		t.Fatalf("kelvin = %v", metrics["system.disk.nvme.temperature"])
 	}
 	if metrics["system.disk.nvme.temperature.celsius"] < 26.84 || metrics["system.disk.nvme.temperature.celsius"] > 26.86 {
@@ -123,9 +123,6 @@ func TestEmitNVMeSmartAddsCelsiusTemperature(t *testing.T) {
 func TestDiskScopeUsesResourceEntity(t *testing.T) {
 	scope := diskScope(monitoring.Scope{
 		Resource: pulse.ResourceRef{Type: "host", ID: "server-01"},
-		Dimensions: map[string]string{
-			"host": "server-01",
-		},
 	}, "/dev/nvme0n1", "S7ABC123456", diskLabel("/dev/nvme0n1", "Samsung SSD 990 PRO", "S7ABC123456"))
 
 	if scope.Resource.Type != "disk" || scope.Resource.Key() != "disk:server-01:S7ABC123456" {

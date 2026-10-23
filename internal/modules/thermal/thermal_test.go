@@ -25,9 +25,6 @@ func TestThermalSensorsRemainOnHostResource(t *testing.T) {
 
 	batch, err := Collector{SysRoot: sys}.Collect(context.Background(), monitoring.Scope{
 		Resource: pulse.ResourceRef{Type: "host", ID: "server-01"},
-		Dimensions: map[string]string{
-			"host": "server-01",
-		},
 	})
 	if err != nil {
 		t.Fatal(err)

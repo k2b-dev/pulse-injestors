@@ -5,12 +5,14 @@ section: Modules
 order: 330
 description: Host mount and filesystem usage collection.
 tags: [filesystem, modules, reference]
-updated: 2026-07-23
+updated: 2026-10-23
 ---
 
 # Filesystem module
 
 The filesystem module reports mounted filesystems and their capacity.
+
+In `pulse-linux`, this collector runs every 300 seconds by default. Override `filesystem` in `[runner.cadence]`. States are sent on change and refreshed after six hours when checked again; table cadences describe collection. Other binaries retain their own schedules.
 
 ## Resource types
 
@@ -21,22 +23,22 @@ The filesystem module reports mounted filesystems and their capacity.
 
 ## Metrics
 
-| Name | Type | Unit | Dimensions | Example | Meaning |
-|---|---|---:|---|---:|---|
-| `system.filesystem.total` | gauge | bytes | `host`, `mount` | `107374182400` | Total capacity in bytes for one mounted filesystem. |
-| `system.filesystem.available` | gauge | bytes | `host`, `mount` | `64424509440` | Bytes available to unprivileged users on one mounted filesystem. |
-| `system.filesystem.used` | gauge | bytes | `host`, `mount` | `42949672960` | Used bytes on one mounted filesystem. |
-| `system.filesystem.usage` | gauge | percent | `host`, `mount` | `40` | Used bytes as a percentage of total bytes for one mount. |
-| `system.filesystem.inodes.used` | gauge | count | `host`, `mount` | `180322` | Used inode count for one mount when reported by the OS. |
-| `system.filesystem.inodes.usage` | gauge | percent | `host`, `mount` | `6.1` | Used inodes as a percentage of total inodes for one mount. |
+| Signal | Type | Unit | Dimensions | Example | Meaning | Cadence |
+|---|---|---|---|---|---|---|
+| `system.filesystem.total` | gauge | bytes | `mount` | `107374182400` | Total capacity in bytes for one mounted filesystem. | 300 s |
+| `system.filesystem.available` | gauge | bytes | `mount` | `64424509440` | Bytes available to unprivileged users on one mounted filesystem. | 300 s |
+| `system.filesystem.used` | gauge | bytes | `mount` | `42949672960` | Used bytes on one mounted filesystem. | 300 s |
+| `system.filesystem.usage` | gauge | percent | `mount` | `40` | Used bytes as a percentage of total bytes for one mount. | 300 s |
+| `system.filesystem.inodes.used` | gauge | — | `mount` | `180322` | Used inode count for one mount when reported by the OS. | 300 s |
+| `system.filesystem.inodes.usage` | gauge | percent | `mount` | `6.1` | Used inodes as a percentage of total inodes for one mount. | 300 s |
 
 ## States
 
-| Key | Value type | Dimensions | Example | Meaning |
-|---|---|---|---|---|
-| `system.filesystem.type` | string | `host`, `mount` | `ext4` | Filesystem type reported by the OS. |
-| `system.filesystem.source` | string | `host`, `mount` | `/dev/nvme0n1p2` | Kernel or operating-system mount source. |
-| `system.filesystem.readonly` | boolean | `host`, `mount` | `false` | Whether the mount is read-only. |
+| Signal | Type | Unit | Dimensions | Example | Meaning | Cadence |
+|---|---|---|---|---|---|---|
+| `system.filesystem.type` | state string | — | `mount` | `ext4` | Filesystem type reported by the OS. | 300 s; change / 6 h |
+| `system.filesystem.source` | state string | — | `mount` | `/dev/nvme0n1p2` | Kernel or operating-system mount source. | 300 s; change / 6 h |
+| `system.filesystem.readonly` | state boolean | — | `mount` | `false` | Whether the mount is read-only. | 300 s; change / 6 h |
 
 ## Events
 
@@ -46,7 +48,6 @@ This module does not emit events directly. Mountinfo or `statfs` failures are re
 
 | Name | Example | Applies to | Meaning |
 |---|---|---|---|
-| `host` | `server-01` | all signals | Stable host id from configuration. |
 | `mount` | `/var/lib/docker` | filesystem signals | Mount point on the host. |
 
 ## Requirements

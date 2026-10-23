@@ -15,8 +15,12 @@ import (
 	"github.com/k2b-dev/pulse-injestors/internal/pulse"
 )
 
+// DefaultExclude removes transient container links while retaining host bridges and VPNs.
+var DefaultExclude = []string{"lo", "veth*", "docker*", "br-*", "virbr*", "cni*", "flannel*", "cali*", "vxlan*", "tap*", "fwbr*", "fwpr*", "fwln*", "kube-*", "cilium*", "lxc*"}
+
 type Collector struct {
 	ProcRoot string
+	Exclude  []string
 }
 
 func (c Collector) Name() string { return "network" }
@@ -34,17 +38,30 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 		return b.Batch(), err
 	}
 	b.State("system.network.available", true, nil)
+	exclude := c.Exclude
+	if exclude == nil {
+		exclude = DefaultExclude
+	}
 	for _, row := range rows {
+		skip := false
+		for _, pattern := range exclude {
+			match, err := filepath.Match(pattern, row.Interface)
+			if err != nil {
+				return b.Batch(), err
+			}
+			skip = skip || match
+		}
+		if skip {
+			continue
+		}
 		dims := map[string]string{"interface": row.Interface}
 		ib := monitoring.NewBuilder(interfaceScope(scope, row.Interface))
 		ib.Metric("system.network.rx", "counter", float64(row.RxBytes), "bytes", dims)
-		ib.Metric("system.network.rx_packets", "counter", float64(row.RxPackets), "count", dims)
-		ib.Metric("system.network.rx_errors", "counter", float64(row.RxErrors), "count", dims)
-		ib.Metric("system.network.rx_dropped", "counter", float64(row.RxDropped), "count", dims)
+		ib.Metric("system.network.rx_errors", "counter", float64(row.RxErrors), "", dims)
+		ib.Metric("system.network.rx_dropped", "counter", float64(row.RxDropped), "", dims)
 		ib.Metric("system.network.tx", "counter", float64(row.TxBytes), "bytes", dims)
-		ib.Metric("system.network.tx_packets", "counter", float64(row.TxPackets), "count", dims)
-		ib.Metric("system.network.tx_errors", "counter", float64(row.TxErrors), "count", dims)
-		ib.Metric("system.network.tx_dropped", "counter", float64(row.TxDropped), "count", dims)
+		ib.Metric("system.network.tx_errors", "counter", float64(row.TxErrors), "", dims)
+		ib.Metric("system.network.tx_dropped", "counter", float64(row.TxDropped), "", dims)
 		b.Merge(ib.Batch())
 	}
 	return b.Batch(), nil

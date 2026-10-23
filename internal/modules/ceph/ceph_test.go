@@ -75,9 +75,6 @@ func TestCephUnavailableMarkers(t *testing.T) {
 func TestCephScopesUseResourceEntities(t *testing.T) {
 	scope := monitoring.Scope{
 		Resource: pulse.ResourceRef{Type: "host", ID: "server-01"},
-		Dimensions: map[string]string{
-			"host": "server-01",
-		},
 	}
 
 	cluster := cephClusterScope(scope, "abcd-1234")

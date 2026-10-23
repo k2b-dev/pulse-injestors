@@ -30,9 +30,6 @@ func TestReadMounts(t *testing.T) {
 func TestFilesystemScopeUsesResourceEntity(t *testing.T) {
 	scope := filesystemScope(monitoring.Scope{
 		Resource: pulse.ResourceRef{Type: "host", ID: "server-01"},
-		Dimensions: map[string]string{
-			"host": "server-01",
-		},
 	}, Mount{Point: "/var/lib/docker"})
 
 	if scope.Resource.Type != "filesystem" || scope.Resource.Key() != "filesystem:server-01:%2Fvar%2Flib%2Fdocker" {

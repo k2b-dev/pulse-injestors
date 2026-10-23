@@ -5,12 +5,14 @@ section: Modules
 order: 360
 description: Host thermal sensor collection through sysfs.
 tags: [thermal, modules, reference]
-updated: 2026-07-23
+updated: 2026-10-23
 ---
 
 # Thermal module
 
 The thermal module reads host temperature sensors from sysfs.
+
+In `pulse-linux`, this collector runs every 300 seconds by default. Override `thermal` in `[runner.cadence]`. States are sent on change and refreshed after six hours when checked again; table cadences describe collection. Other binaries retain their own schedules.
 
 ## Resource types
 
@@ -22,16 +24,16 @@ Each temperature series is distinguished by bounded sensor dimensions on the hos
 
 ## Metrics
 
-| Name | Type | Unit | Dimensions | Example | Meaning |
-|---|---|---:|---|---:|---|
-| `system.temperature` | gauge | celsius | `host`, `sensor`, `type` | `51.2` | Temperature in Celsius for one thermal-zone sensor. Emitted on `host`. |
-| `system.temperature` | gauge | celsius | `host`, `sensor`, `chip`, `label` | `43.0` | Temperature in Celsius for one hwmon sensor. Emitted on `host`. |
+| Signal | Type | Unit | Dimensions | Example | Meaning | Cadence |
+|---|---|---|---|---|---|---|
+| `system.temperature` | gauge | celsius | `sensor`, `type` | `51.2` | Temperature in Celsius for one thermal-zone sensor. Emitted on `host`. | 300 s |
+| `system.temperature` | gauge | celsius | `sensor`, `chip`, `label` | `43.0` | Temperature in Celsius for one hwmon sensor. Emitted on `host`. | 300 s |
 
 ## States
 
-| Key | Value type | Dimensions | Example | Meaning |
-|---|---|---|---|---|
-| `system.temperature.available` | boolean | `host` | `true` | Whether at least one temperature sensor was collected. |
+| Signal | Type | Unit | Dimensions | Example | Meaning | Cadence |
+|---|---|---|---|---|---|---|
+| `system.temperature.available` | state boolean | — | — | `true` | Whether at least one temperature sensor was collected. | 300 s; change / 6 h |
 
 ## Events
 
@@ -41,7 +43,6 @@ This module does not emit events directly. If no sensor can be read and sysfs re
 
 | Name | Example | Applies to | Meaning |
 |---|---|---|---|
-| `host` | `server-01` | all signals | Stable host id from configuration. |
 | `sensor` | `thermal_zone0` | temperature metrics | Sensor id from sysfs. |
 | `type` | `x86_pkg_temp` | thermal-zone metrics | Thermal zone type. |
 | `chip` | `coretemp` | hwmon metrics | Hardware monitoring chip name. |

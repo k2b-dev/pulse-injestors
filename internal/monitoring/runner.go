@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/k2b-dev/pulse-injestors/internal/pulse"
@@ -105,20 +106,25 @@ func (r *Runner) Collect(ctx context.Context, all bool) pulse.Batch {
 	batch := pulse.Batch{Metrics: []pulse.Metric{}, Events: []pulse.Event{}, States: []pulse.State{}}
 	builder := NewBuilder(scope)
 
-	for _, collector := range r.Collectors {
+	// Health collectors must run before work that can consume the cycle budget.
+	collectors := append([]Collector(nil), r.Collectors...)
+	sort.SliceStable(collectors, func(i, j int) bool {
+		return cadenceOf(collectors[i]) <= r.Interval && cadenceOf(collectors[j]) > r.Interval
+	})
+	for _, collector := range collectors {
 		if ctx.Err() != nil {
 			break
 		}
 		if !all && !r.due(collector, scope.Timestamp) {
 			continue
 		}
-		r.lastRun[collector.Name()] = scope.Timestamp
 		collectCtx := ctx
 		cancel := func() {}
 		if r.Timeout > 0 {
 			collectCtx, cancel = context.WithTimeout(ctx, r.Timeout)
 		}
 		part, err := collector.Collect(collectCtx, scope)
+		err = errors.Join(err, collectCtx.Err())
 		cancel()
 		part = Inject(part, scope, nil)
 		candidate := batch
@@ -136,6 +142,7 @@ func (r *Runner) Collect(ctx context.Context, all bool) pulse.Batch {
 			})
 			continue
 		}
+		r.lastRun[collector.Name()] = scope.Timestamp
 		builder.State("ingestor.collector.ok", true, map[string]string{"collector": collector.Name()})
 	}
 	Merge(&batch, builder.Batch())

@@ -117,7 +117,7 @@ func collectDF(ctx context.Context, b *monitoring.Builder, scope monitoring.Scop
 		pb.State("system.ceph.pool.present", true, dims)
 		pb.Metric("system.ceph.pool.bytes.used", "gauge", float64(pool.BytesUsed), "bytes", dims)
 		pb.Metric("system.ceph.pool.bytes.available", "gauge", float64(pool.BytesAvailable), "bytes", dims)
-		pb.Metric("system.ceph.pool.objects", "gauge", float64(pool.Objects), "count", dims)
+		pb.Metric("system.ceph.pool.objects", "gauge", float64(pool.Objects), "", dims)
 		b.Merge(pb.Batch())
 	}
 }

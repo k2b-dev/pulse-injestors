@@ -101,8 +101,7 @@ Proxmox and PBS task events use `actorId` for the task user and `correlationId` 
 - `seconds` for uptime, age, and duration.
 - `milliseconds` only for values measured in milliseconds.
 - `celsius` or `kelvin` for temperature.
-- `count` for counters where the counted item is part of the metric meaning.
-- Empty unit for plain cardinalities such as cores, containers, processes, or updates.
+- Empty unit (`""`) for counts, load averages, and dimensionless ratios. Cumulative error and event counts use type `counter`.
 
 ## Complete signal catalog
 

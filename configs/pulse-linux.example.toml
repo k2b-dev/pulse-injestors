@@ -19,6 +19,13 @@ environment = "production"
 interval_seconds = 60
 collector_timeout_seconds = 60
 
+# Optional overrides by collector name, in seconds; each must be >= interval_seconds.
+# [runner.cadence]
+# filesystem = 600
+# network = 600
+# inventory = 86400
+# "script:custom" = 300
+
 [http]
 timeout_seconds = 10
 max_retries = 3
@@ -39,3 +46,22 @@ profile = "docker-host"
 systemd_units = ["ssh.service", "docker.service"]
 package_timeout_seconds = 20
 disk_health_timeout_seconds = 20
+# Local PEM certificate paths/globs; empty by default.
+# certificate_paths = ["/etc/ssl/local/*.pem"]
+# Replace the complete default exclusion list. [] includes all interfaces.
+# network_exclude = ["lo", "veth*", "docker*", "br-*", "virbr*", "cni*", "flannel*", "cali*", "vxlan*", "tap*", "fwbr*", "fwpr*", "fwln*", "kube-*", "cilium*", "lxc*"]
+
+# A marker's modification time records the last successful backup.
+# [[backup]]
+# name = "database"
+# marker_file = "/var/lib/backup/database.ok"
+
+# Alternatively, a command prints RFC3339 or Unix seconds (30 s, 4 KiB max).
+# [[backup]]
+# name = "offsite"
+# command = ["/usr/local/bin/backup-last-success", "offsite"]
+
+# [[script]]
+# name = "custom"
+# command = ["/usr/local/bin/pulse-custom"]
+# cadence_seconds = 300 # omitted: runner interval

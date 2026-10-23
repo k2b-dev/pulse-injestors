@@ -62,7 +62,6 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 		dims := map[string]string{"mount": mount.Point}
 		fb := monitoring.NewBuilder(btrfsScope(scope, mount))
 		fb.State("system.btrfs.mount.present", true, dims)
-		fb.State("system.filesystem.source", mount.Source, dims)
 		path := filepath.Join(hostRoot, strings.TrimPrefix(mount.Point, "/"))
 		collectCtx, cancel := context.WithTimeout(ctx, timeout)
 		out, err := exec.CommandContext(collectCtx, "btrfs", "filesystem", "usage", "-b", path).Output()

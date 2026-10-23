@@ -94,10 +94,8 @@ func main() {
 	defer cancel()
 
 	runner := &monitoring.Runner{
-		Resource: pulse.ResourceRef{Type: "host", ID: cfg.Resource.ID, Label: cfg.Resource.Label},
-		Dimensions: monitoring.MergeDimensions(cfg.Dimensions, map[string]string{
-			"host": cfg.Resource.ID,
-		}),
+		Resource:   pulse.ResourceRef{Type: "host", ID: cfg.Resource.ID, Label: cfg.Resource.Label},
+		Dimensions: cfg.Dimensions,
 		Collectors: collectors(cfg),
 		Timeout:    cfg.CollectorTimeout(),
 		Interval:   cfg.RunnerInterval(),
