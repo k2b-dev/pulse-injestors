@@ -11,15 +11,13 @@ import (
 	"github.com/k2b-dev/pulse-injestors/internal/pulse"
 )
 
-func TestGroupsAndFailedVerification(t *testing.T) {
+func TestGroupsAndSnapshotCounts(t *testing.T) {
 	runner := &fakeRunner{responses: map[string]string{
 		"api get /admin/datastore --output-format json":                              `[{"store":"s3"},{"store":"main"}]`,
 		"api get /admin/datastore/main/namespace --max-depth 7 --output-format json": `[]`,
-		"api get /admin/datastore/main/groups --output-format json":                  `[{"backup-type": "vm", "backup-id": "101", "last-backup": 1700000900}, {"backup-type": "ct", "backup-id": "203", "last-backup": 1700000800}, {"backup-type": "host", "backup-id": "x", "last-backup": 1700000700}]`,
-		"api get /admin/datastore/main/snapshots --output-format json":               `[{"backup-type":"vm","backup-id":"101","backup-time":1700000000,"verification":{"state":"failed"}},{"backup-type":"vm","backup-id":"101","backup-time":1700000900,"verification":{"state":"ok"}},{"backup-type":"ct","backup-id":"203","backup-time":1700000800},{"backup-type":"host","backup-id":"x","backup-time":1700000700}]`,
+		"api get /admin/datastore/main/groups --output-format json":                  `[{"backup-type": "vm", "backup-id": "101", "backup-count": 1, "last-backup": 1700000900}, {"backup-type": "ct", "backup-id": "203", "backup-count": 1, "last-backup": 1700000800}, {"backup-type": "host", "backup-id": "x", "backup-count": 1, "last-backup": 1700000700}]`,
 		"api get /admin/datastore/s3/namespace --max-depth 7 --output-format json":   `[]`,
-		"api get /admin/datastore/s3/groups --output-format json":                    `[{"backup-type": "vm", "backup-id": "101", "last-backup": 1700000500}]`,
-		"api get /admin/datastore/s3/snapshots --output-format json":                 `[{"backup-type":"vm","backup-id":"101","backup-time":1700000500,"verification":{"state":"failed"}}]`,
+		"api get /admin/datastore/s3/groups --output-format json":                    `[{"backup-type": "vm", "backup-id": "101", "backup-count": 1, "last-backup": 1700000500}]`,
 	}}
 	scope := monitoring.Scope{Resource: pulse.ResourceRef{Type: "proxmox-backup-server", ID: "backup"}, Timestamp: time.Unix(1700001000, 0)}
 	batch, _ := (&Collector{Runner: runner, Part: "groups"}).Collect(context.Background(), scope)
@@ -30,7 +28,7 @@ func TestGroupsAndFailedVerification(t *testing.T) {
 		if m.Name == "pbs.group.last_snapshot.age" && m.Resource.ID == "backup:main:vm%2F101" && m.Value != 100 {
 			t.Fatal(m)
 		}
-		if m.Name == "pbs.datastore.verify.failed_snapshots" && m.Value != 1 {
+		if m.Name == "pbs.datastore.verify.failed_snapshots" {
 			t.Fatal(m)
 		}
 	}
@@ -42,16 +40,14 @@ func TestGroupsAndFailedVerification(t *testing.T) {
 func TestGroupsBoundAcrossDatastores(t *testing.T) {
 	var rows []string
 	for i := 0; i < 2001; i++ {
-		rows = append(rows, fmt.Sprintf(`{"backup-type":"vm","backup-id":"%d","last-backup":1700000000}`, i))
+		rows = append(rows, fmt.Sprintf(`{"backup-type":"vm","backup-id":"%d","backup-count": 1, "last-backup": 1700000000}`, i))
 	}
 	runner := &fakeRunner{responses: map[string]string{
 		"api get /admin/datastore --output-format json":                           `[{"store":"b"},{"store":"a"}]`,
 		"api get /admin/datastore/a/namespace --max-depth 7 --output-format json": `[]`,
-		"api get /admin/datastore/a/snapshots --output-format json":               `[]`,
 		"api get /admin/datastore/a/groups --output-format json":                  "[" + strings.Join(rows, ",") + "]",
 		"api get /admin/datastore/b/namespace --max-depth 7 --output-format json": `[]`,
-		"api get /admin/datastore/b/groups --output-format json":                  `[{"backup-type": "host", "backup-id": "x", "last-backup": 1700000000}]`,
-		"api get /admin/datastore/b/snapshots --output-format json":               `[{"backup-type":"host","backup-id":"x","backup-time":1700000000}]`,
+		"api get /admin/datastore/b/groups --output-format json":                  `[{"backup-type": "host", "backup-id": "x", "backup-count": 1, "last-backup": 1700000000}]`,
 	}}
 	batch, _ := (&Collector{Runner: runner, Part: "groups"}).Collect(context.Background(), monitoring.Scope{Resource: pulse.ResourceRef{Type: "proxmox-backup-server", ID: "backup"}, Timestamp: time.Unix(1700001000, 0)})
 	if countMetric(batch.Metrics, "pbs.group.last_snapshot.age") != 2000 {

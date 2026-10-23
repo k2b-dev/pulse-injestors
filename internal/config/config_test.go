@@ -519,7 +519,7 @@ func TestReservedHostDimension(t *testing.T) {
 
 func TestProxmoxPBSListTimeouts(t *testing.T) {
 	cfg, err := Resolve(Config{}, Overlay{AllowMissingPulse: true})
-	if err != nil || cfg.Proxmox.ListTimeoutSeconds != 120 || cfg.PBS.ListTimeoutSeconds != 60 {
+	if err != nil || cfg.Proxmox.ListTimeoutSeconds != 120 || cfg.PBS.ListTimeoutSeconds != 120 {
 		t.Fatal(cfg.Proxmox, cfg.PBS, err)
 	}
 	for _, section := range []string{"proxmox", "pbs"} {

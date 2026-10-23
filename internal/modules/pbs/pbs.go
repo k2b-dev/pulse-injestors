@@ -21,13 +21,15 @@ import (
 var ErrCommandNotFound = errors.New("pbs command not found")
 
 type Collector struct {
-	ListTimeout time.Duration
-	seenTasks   map[string]bool
-	seenJobs    map[string]bool
-	CommandPath string
-	Timeout     time.Duration
-	Runner      CommandRunner
-	Part        string
+	GroupsTimeout time.Duration
+	StaleAfter    time.Duration
+	ListTimeout   time.Duration
+	seenTasks     map[string]bool
+	seenJobs      map[string]bool
+	CommandPath   string
+	Timeout       time.Duration
+	Runner        CommandRunner
+	Part          string
 }
 
 func (c Collector) Name() string {
@@ -52,11 +54,25 @@ func (c Collector) Collectors() []monitoring.Collector {
 	return out
 }
 
+// CollectTimeout gives namespace/group scans their own budget.
+func (c *Collector) CollectTimeout() time.Duration {
+	if c.Part != "groups" && c.Part != "" {
+		return 0
+	}
+	if c.GroupsTimeout > 0 {
+		return c.GroupsTimeout
+	}
+	return 300 * time.Second
+}
+
 func (c *Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.Batch, error) {
 	b := monitoring.NewBuilder(scope)
 	client, err := c.client()
 	if err != nil {
 		b.State("pbs.available", false, nil)
+		if c.Part == "groups" || c.Part == "" {
+			b.State("pbs.groups.complete", false, nil)
+		}
 		if !errors.Is(err, ErrCommandNotFound) {
 			emitError(b, "pbs.config.failed", "configure", nil, err)
 		}
@@ -80,24 +96,7 @@ func (c *Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.
 		}
 	}
 	if phase("groups") {
-		var stores []struct {
-			Store string `json:"store"`
-		}
-		if err := client.get(ctx, "/admin/datastore", &stores); err != nil {
-			emitError(b, "pbs.datastore.list.failed", "datastore_list", nil, err)
-		} else {
-			sort.Slice(stores, func(i, j int) bool { return stores[i].Store < stores[j].Store })
-			remaining := 2000
-			truncated := false
-			for _, store := range stores {
-				if err := collectSnapshots(ctx, b, client, store.Store, scope, &remaining, &truncated); err != nil {
-					db := monitoring.NewBuilder(datastoreScope(scope, store.Store))
-					emitError(db, "pbs.datastore.snapshots.failed", "snapshots", map[string]string{"datastore": store.Store}, err)
-					b.Merge(db.Batch())
-				}
-			}
-			b.State("pbs.groups.truncated", truncated, nil)
-		}
+		c.collectGroups(ctx, b, client, scope)
 	}
 	if phase("jobs") {
 		currentJobs, jobsOK := collectJobs(ctx, b, client, scope)
@@ -137,7 +136,7 @@ func (c Collector) client() (Client, error) {
 	}
 	listTimeout := c.ListTimeout
 	if listTimeout <= 0 {
-		listTimeout = 60 * time.Second
+		listTimeout = 120 * time.Second
 	}
 	return Client{CommandPath: path, Timeout: timeout, ListTimeout: listTimeout, Runner: runner}, nil
 }
@@ -173,10 +172,10 @@ func (c Client) get(ctx context.Context, path string, target any) error {
 	}
 	timeout := c.Timeout
 	apiPath, _, _ := strings.Cut(path, "?")
-	if strings.HasPrefix(apiPath, "/admin/datastore/") && (strings.HasSuffix(apiPath, "/snapshots") || strings.HasSuffix(apiPath, "/groups") || strings.HasSuffix(apiPath, "/namespace")) {
+	if strings.HasPrefix(apiPath, "/admin/datastore/") && (strings.HasSuffix(apiPath, "/groups") || strings.HasSuffix(apiPath, "/namespace")) {
 		timeout = c.ListTimeout
 		if timeout <= 0 {
-			timeout = 60 * time.Second
+			timeout = 120 * time.Second
 		}
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -286,7 +285,43 @@ func collectDatastoreUsage(ctx context.Context, b *monitoring.Builder, client Cl
 	return stores, nil
 }
 
-func collectSnapshots(ctx context.Context, b *monitoring.Builder, client Client, store string, scope monitoring.Scope, remaining *int, truncated *bool) error {
+func (c *Collector) collectGroups(ctx context.Context, b *monitoring.Builder, client Client, scope monitoring.Scope) {
+	ctx, cancel := context.WithTimeout(ctx, c.CollectTimeout())
+	defer cancel()
+	complete, truncated := true, false
+	defer func() {
+		b.State("pbs.groups.complete", complete, nil)
+		b.State("pbs.groups.truncated", truncated, nil)
+	}()
+	var stores []struct {
+		Store string `json:"store"`
+	}
+	if err := client.get(ctx, "/admin/datastore", &stores); err != nil {
+		complete = false
+		emitError(b, "pbs.datastore.list.failed", "datastore_list", nil, err)
+		return
+	}
+	sort.Slice(stores, func(i, j int) bool { return stores[i].Store < stores[j].Store })
+	remaining := 2000
+	staleAfter := c.StaleAfter
+	if staleAfter <= 0 {
+		staleAfter = 168 * time.Hour
+	}
+	for _, store := range stores {
+		if err := collectDatastoreGroups(ctx, b, client, store.Store, scope, &remaining, &truncated, staleAfter); err != nil {
+			complete = false
+			db := monitoring.NewBuilder(datastoreScope(scope, store.Store))
+			emitError(db, "pbs.datastore.groups.failed", "groups", map[string]string{"datastore": store.Store}, err)
+			b.Merge(db.Batch())
+		}
+		if ctx.Err() != nil {
+			complete = false
+			break
+		}
+	}
+}
+
+func collectDatastoreGroups(ctx context.Context, b *monitoring.Builder, client Client, store string, scope monitoring.Scope, remaining *int, truncated *bool, staleAfter time.Duration) error {
 	base := "/admin/datastore/" + url.PathEscape(store)
 	var namespaces []struct {
 		NS string `json:"ns"`
@@ -303,23 +338,63 @@ func collectSnapshots(ctx context.Context, b *monitoring.Builder, client Client,
 	for ns := range names {
 		ordered = append(ordered, ns)
 	}
-	sort.Strings(ordered)
+	// Breadth-first: read every sibling before any deeper namespace.
+	sort.Slice(ordered, func(i, j int) bool {
+		depth := func(ns string) int {
+			if ns == "" {
+				return 0
+			}
+			return strings.Count(ns, "/") + 1
+		}
+		if depth(ordered[i]) != depth(ordered[j]) {
+			return depth(ordered[i]) < depth(ordered[j])
+		}
+		return ordered[i] < ordered[j]
+	})
 	byType := map[string]int{}
-	failedVerify, snapshots := 0, 0
+	snapshots, namespacesRead := 0, 0
 	var newest int64
+	// Preserve summaries from successful namespaces even if a later call fails.
+	defer func() {
+		if namespacesRead == 0 {
+			return
+		}
+		dims := map[string]string{"datastore": store}
+		db := monitoring.NewBuilder(datastoreScope(scope, store))
+		db.Metric("pbs.datastore.snapshots.total", "gauge", float64(snapshots), "", dims)
+		for typ, count := range byType {
+			db.Metric("pbs.datastore.snapshots.by_type", "gauge", float64(count), "", map[string]string{"datastore": store, "type": typ})
+		}
+		if newest > 0 {
+			ts := time.Unix(newest, 0).UTC()
+			db.State("pbs.datastore.snapshot.latest.time", ts.Format(time.RFC3339), dims)
+			db.Metric("pbs.datastore.snapshot.latest.age", "gauge", max(0, scope.Timestamp.Sub(ts).Seconds()), "seconds", dims)
+		}
+		b.Merge(db.Batch())
+	}()
+
+	var firstErr error
 	for _, ns := range ordered {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		query := ""
 		if ns != "" {
 			query = "?" + url.Values{"ns": {ns}}.Encode()
 		}
 		var groups []struct {
-			BackupType string `json:"backup-type"`
-			BackupID   string `json:"backup-id"`
-			LastBackup int64  `json:"last-backup"`
+			BackupType  string `json:"backup-type"`
+			BackupID    string `json:"backup-id"`
+			LastBackup  int64  `json:"last-backup"`
+			BackupCount int    `json:"backup-count"`
 		}
 		if err := client.get(ctx, base+"/groups"+query, &groups); err != nil {
-			return err
+			if firstErr == nil {
+				firstErr = fmt.Errorf("namespace %q: %w", ns, err)
+			}
+			continue
 		}
+		namespacesRead++
 		sort.Slice(groups, func(i, j int) bool {
 			return groups[i].BackupType+"/"+groups[i].BackupID < groups[j].BackupType+"/"+groups[j].BackupID
 		})
@@ -327,6 +402,8 @@ func collectSnapshots(ctx context.Context, b *monitoring.Builder, client Client,
 			if group.BackupType == "" || group.BackupID == "" {
 				continue
 			}
+			snapshots += group.BackupCount
+			byType[group.BackupType] += group.BackupCount
 			if group.LastBackup > newest {
 				newest = group.LastBackup
 			}
@@ -351,39 +428,12 @@ func collectSnapshots(ctx context.Context, b *monitoring.Builder, client Client,
 				value = ts.Format(time.RFC3339)
 				gb.Metric("pbs.group.last_snapshot.age", "gauge", max(0, scope.Timestamp.Sub(ts).Seconds()), "seconds", dims)
 			}
+			gb.State("pbs.group.stale", group.LastBackup > 0 && scope.Timestamp.Sub(time.Unix(group.LastBackup, 0)) > staleAfter, dims)
 			gb.State("pbs.group.last_snapshot.time", value, dims)
 			b.Merge(gb.Batch())
 		}
-		var rows []Snapshot
-		if err := client.get(ctx, base+"/snapshots"+query, &rows); err != nil {
-			return err
-		}
-		snapshots += len(rows)
-		for _, row := range rows {
-			if row.Verification.State == "failed" {
-				failedVerify++
-			}
-			typ := row.BackupType
-			if typ == "" {
-				typ = "unknown"
-			}
-			byType[typ]++
-		}
 	}
-	dims := map[string]string{"datastore": store}
-	db := monitoring.NewBuilder(datastoreScope(scope, store))
-	db.Metric("pbs.datastore.verify.failed_snapshots", "gauge", float64(failedVerify), "", dims)
-	db.Metric("pbs.datastore.snapshots.total", "gauge", float64(snapshots), "", dims)
-	for typ, count := range byType {
-		db.Metric("pbs.datastore.snapshots.by_type", "gauge", float64(count), "", map[string]string{"datastore": store, "type": typ})
-	}
-	if newest > 0 {
-		ts := time.Unix(newest, 0).UTC()
-		db.State("pbs.datastore.snapshot.latest.time", ts.Format(time.RFC3339), dims)
-		db.Metric("pbs.datastore.snapshot.latest.age", "gauge", max(0, scope.Timestamp.Sub(ts).Seconds()), "seconds", dims)
-	}
-	b.Merge(db.Batch())
-	return nil
+	return firstErr
 }
 
 func collectJobs(ctx context.Context, b *monitoring.Builder, client Client, scope monitoring.Scope) (map[string]bool, bool) {
@@ -410,11 +460,37 @@ func collectJobs(ctx context.Context, b *monitoring.Builder, client Client, scop
 			current[job.LastRunUPID] = true
 		}
 		if spec.Kind == "gc" {
-			for _, job := range jobs {
+			for _, row := range rows {
+				parsed := parseJobs([]map[string]any{row})
+				if len(parsed) == 0 {
+					continue
+				}
+				job := parsed[0]
+				result, err := gcResult(row, true)
+				if err == nil && result == "" {
+					var status map[string]any
+					err = client.get(ctx, "/admin/datastore/"+url.PathEscape(job.Store)+"/gc", &status)
+					if err == nil {
+						result, err = gcResult(status, false)
+						job.LastRunState = firstString(status, "last-run-state")
+						if end := int64(firstFloat(status, "last-run-endtime")); end > 0 {
+							job.LastRunEndTime = end
+						}
+						// Empty fallback data cannot erase evidence of a previous run.
+						if result == "never" && (job.LastRunUPID != "" || job.LastRunEndTime > 0) {
+							result = "unknown"
+						}
+					}
+				}
 				db := monitoring.NewBuilder(datastoreScope(scope, job.Store))
+				if err != nil {
+					complete = false
+					result = "unknown"
+					emitError(db, "pbs.datastore.gc.failed", "gc_status", map[string]string{"datastore": job.Store}, err)
+				}
 				dims := map[string]string{"datastore": job.Store}
 				db.State("pbs.datastore.gc.last_run.state", boundedText(job.LastRunState), dims)
-				db.State("pbs.datastore.gc.last_run.result", jobResult(job.LastRunState), dims)
+				db.State("pbs.datastore.gc.last_run.result", result, dims)
 				value := ""
 				if job.LastRunEndTime > 0 {
 					ts := time.Unix(job.LastRunEndTime, 0).UTC()
@@ -429,6 +505,52 @@ func collectJobs(ctx context.Context, b *monitoring.Builder, client Client, scop
 		}
 	}
 	return current, complete
+}
+
+// A list row without a result needs the datastore's GC status. A UPID from
+// that status alone does not prove the worker is still running.
+func gcResult(row map[string]any, list bool) (string, error) {
+	if row == nil {
+		return "unknown", errors.New("missing GC status object")
+	}
+	for _, key := range []string{"last-run-state", "last-run-upid", "upid"} {
+		if value, exists := row[key]; exists && value != nil {
+			if _, ok := value.(string); !ok {
+				return "unknown", fmt.Errorf("invalid GC %s", key)
+			}
+		}
+	}
+	if value, exists := row["last-run-endtime"]; exists && value != nil {
+		if number, ok := value.(float64); !ok || number < 0 {
+			return "unknown", errors.New("invalid GC last-run-endtime")
+		}
+	}
+	if value, exists := row["running"]; exists && value != nil {
+		running, ok := value.(bool)
+		if !ok {
+			return "unknown", errors.New("invalid GC running flag")
+		}
+		if running {
+			return "running", nil
+		}
+	}
+	state := strings.TrimSpace(firstString(row, "last-run-state"))
+	if strings.EqualFold(state, "running") {
+		return "running", nil
+	}
+	if state != "" {
+		return jobResult(state), nil
+	}
+	if list {
+		if firstString(row, "last-run-upid") != "" && firstFloat(row, "last-run-endtime") == 0 {
+			return "running", nil
+		}
+		return "", nil
+	}
+	if firstString(row, "upid", "last-run-upid") == "" && firstFloat(row, "last-run-endtime") == 0 {
+		return "never", nil
+	}
+	return "unknown", nil
 }
 
 func emitJobs(b *monitoring.Builder, scope monitoring.Scope, kind string, jobs []Job) {
@@ -511,15 +633,6 @@ type DatastoreUsage struct {
 	Total             float64 `json:"total"`
 	Available         float64 `json:"avail"`
 	EstimatedFullDate int64   `json:"estimated-full-date"`
-}
-
-type Snapshot struct {
-	BackupType   string `json:"backup-type"`
-	BackupID     string `json:"backup-id"`
-	BackupTime   int64  `json:"backup-time"`
-	Verification struct {
-		State string `json:"state"`
-	} `json:"verification"`
 }
 
 type Job struct {

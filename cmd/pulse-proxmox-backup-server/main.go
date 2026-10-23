@@ -160,7 +160,13 @@ func loadConfig(c cli) (config.Config, error) {
 }
 
 func collectors(cfg config.Config) []monitoring.Collector {
-	parts := (pbs.Collector{CommandPath: cfg.PBS.CommandPath, Timeout: cfg.PBSTimeout(), ListTimeout: time.Duration(cfg.PBS.ListTimeoutSeconds) * time.Second}).Collectors()
+	parts := (pbs.Collector{
+		CommandPath:   cfg.PBS.CommandPath,
+		Timeout:       cfg.PBSTimeout(),
+		ListTimeout:   time.Duration(cfg.PBS.ListTimeoutSeconds) * time.Second,
+		GroupsTimeout: time.Duration(cfg.PBS.GroupsTimeoutSeconds) * time.Second,
+		StaleAfter:    time.Duration(cfg.PBS.StaleAfterHours) * time.Hour,
+	}).Collectors()
 	out := make([]monitoring.Collector, 0, len(parts))
 	for _, part := range parts {
 		out = append(out, monitoring.ScopedCollector{Resource: pulse.ResourceRef{Type: "proxmox-backup-server", ID: cfg.Resource.ID, Label: cfg.Resource.Label}, Collector: part})

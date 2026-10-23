@@ -21,7 +21,7 @@ environment = "production"
 # Datastores 300 s, jobs/groups 900 s, versions 86400 s.
 [runner]
 interval_seconds = 60
-collector_timeout_seconds = 60
+collector_timeout_seconds = 60 # Other phases; groups use their own budget below.
 
 [http]
 timeout_seconds = 10
@@ -31,5 +31,9 @@ initial_backoff_ms = 500
 [pbs]
 command_path = "proxmox-backup-debug"
 timeout_seconds = 10
-# Backup content / namespace / group / snapshot lists. Must be positive.
-list_timeout_seconds = 60
+# Namespace and group lists, per call. Must be positive.
+list_timeout_seconds = 120
+# Whole groups phase; overrides runner collector timeout. Must be positive.
+groups_timeout_seconds = 300
+# Mark old groups, including retained backups of deleted guests. Must be positive.
+stale_after_hours = 168

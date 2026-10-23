@@ -79,15 +79,20 @@ curl -fsSL \
 [pbs]
 command_path = "proxmox-backup-debug"
 timeout_seconds = 10
-list_timeout_seconds = 60
+list_timeout_seconds = 120
+groups_timeout_seconds = 300
+stale_after_hours = 168
 ```
+
+The groups phase uses its own 300-second budget, with up to 120 seconds per namespace or group call. These timeouts must be positive. If `pbs.groups.complete=false`, collected data is partial; inspect the failure event and increase `groups_timeout_seconds` when the budget was exhausted. Other phases use `[runner] collector_timeout_seconds`.
 
 ## Collected data
 
 - PBS version and availability;
 - datastore used, total, available, and usage percentage;
 - estimated full time when PBS exposes it;
-- snapshot totals, types, and latest snapshot age;
+- snapshot totals and types from group backup-count, plus latest backup age;
+- group ages and stale states across root and nested namespaces;
 - datastore garbage collection, prune, sync, verify, and tape jobs;
 - recent tasks, task statuses, and failure events.
 
@@ -96,3 +101,7 @@ Datastores, jobs and backup groups are separate resources so administrators can 
 See the [PBS module](/en/module-pbs) and [host modules](/en/modules) for exhaustive signal tables.
 
 The `pbs` Linux profile watches `proxmox-backup.service` and `proxmox-backup-proxy.service`. Datastore capacity runs every 300 seconds, jobs and backup groups every 900 seconds, and versions every 86400 seconds. Each backup group exposes its newest snapshot age in the root or a nested namespace on each datastore, including an S3-backed datastore when exposed by PBS. Compare groups on both PBS hosts to check the second copy.
+
+For guest backup freshness alerts, use `proxmox.backup.last_success.age` from **pulse-proxmox**. PBS groups can belong to deleted guests. Use PBS group ages for client and namespace backups such as `host/…`, and filter `pbs.group.stale=true` when old groups should be excluded. The threshold defaults to 168 hours and must be positive.
+
+Full snapshot lists are no longer queried. `pbs.datastore.verify.failed_snapshots` was removed; use the verify job result and `pbs.job.failed` for verification problems. `pbs.datastore.snapshots.failed` was replaced by `pbs.datastore.groups.failed`. GC results distinguish `running` and `never`; `unknown` means the status could not establish a result.
