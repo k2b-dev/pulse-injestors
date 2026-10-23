@@ -1,50 +1,62 @@
 ---
-title: Dashboard examples
+title: SQL query examples
 navTitle: Dashboards
 section: Reference
 order: 220
-description: Query and Dashboard DSL patterns for ingestor telemetry.
+description: Example SQL queries for Pulse ingestor resources and metric series.
 tags: [dashboards, query, examples]
-updated: 2026-07-23
+updated: 2026-10-23
 ---
 
-# Dashboard examples
+# SQL query examples
 
-The ingestors model data so dashboards can group stable resources without depending on runtime IDs.
+Pulse uses SQL. The Dashboard DSL has been removed; SQL dashboards are planned in Pulse.
 
-## Query patterns
+Ingestors use stable resource keys for hosts, containers, VMs, filesystems, and endpoints. Dimensions identify bounded categories such as interface, environment, or Compose service. Query these identities instead of runtime container IDs or changing addresses.
 
-| Question | Query |
-|---|---|
-| CPU trend per host | `metric system.cpu.usage avg every 5m group by resource since 24h` |
-| Maximum filesystem usage per mount | `metric system.filesystem.usage max every 5m group by resource since 24h` |
-| Receive throughput per interface | `metric system.network.rx rate every 5m reduce sum group by resource since 24h` |
-| Total package updates across hosts | `metric system.packages.updates.total latest every 5m reduce sum since 24h` |
-| CPU per Compose service | `metric docker.compose.service.cpu.usage avg every 5m group by resource since 24h` |
-| Total receive throughput per container | `metric docker.container.network.rx rate every 5m reduce sum group by resource since 24h` |
-| Memory per Proxmox VM | `metric proxmox.resource.memory.used avg every 5m group by resource since 24h resource_type proxmox-vm` |
-| Failed Proxmox tasks | `events proxmox.task.failed count every 1h since 7d` |
-| Availability ratio per endpoint | `metric uptime.check.availability avg every 5m group by resource since 24h` |
-| Check duration per endpoint | `metric uptime.check.duration avg every 5m group by resource since 24h` |
-| TLS certificate lifetime | `metric uptime.tls.certificate.expires_in min every 1h group by resource since 30d` |
+Pulse's `samples` read view has `series_id`, `ts`, and `value`. Join `series` on `series_id` for `metric`, `unit`, `resource_key`, and `dimensions`. The `states` and `events` read views expose current facts and historical occurrences.
 
-`group by resource` returns one series per browsable resource. `reduce` combines multiple metric variants only after Pulse computes each variant correctly. This is useful for summing container interfaces or producing fleet totals.
+These examples have not been tested against a Pulse base. Adjust the time range and resource keys, then verify the queries against your target Pulse version. Optional collectors may have no data.
 
-Compose network and disk throughput use container counters: calculate each container rate before grouping by `host`, `compose_project`, and `compose_service`. Summing raw counters before calculating a rate gives incorrect results when a container restarts.
+## CPU observations for one host
 
-## Reference dashboards
-
-The repository includes complete Dashboard DSL examples:
-
-- `examples/dashboards/linux-hosts.pulse`
-- `examples/dashboards/docker-overview.pulse`
-- `examples/dashboards/proxmox-overview.pulse`
-- `examples/dashboards/uptime-overview.pulse`
-
-Compile an example before saving it:
-
-```sh
-cld pulse dashboards compile --file examples/dashboards/docker-overview.pulse --json
+```sql
+SELECT s.ts, s.value, r.unit, r.resource_key, r.dimensions
+FROM samples AS s
+JOIN series AS r ON r.series_id = s.series_id
+WHERE r.metric = 'system.cpu.usage'
+  AND r.resource_key = 'host:server-01'
+  AND s.ts >= '2026-10-23 00:00:00'
+  AND s.ts < '2026-10-24 00:00:00'
+ORDER BY s.ts
+LIMIT 1000
 ```
 
-Run each widget query against the target Pulse base before using the dashboard. Optional collectors can be absent, so a syntactically valid dashboard may have empty widgets on systems that do not expose those signals.
+## Maximum filesystem usage by resource
+
+```sql
+SELECT r.resource_key, r.unit, max(s.value) AS max_usage
+FROM samples AS s
+JOIN series AS r ON r.series_id = s.series_id
+WHERE r.metric = 'system.filesystem.usage'
+  AND s.ts >= '2026-10-23 00:00:00'
+  AND s.ts < '2026-10-24 00:00:00'
+GROUP BY r.resource_key, r.unit
+ORDER BY max_usage DESC
+```
+
+## Network counter rates
+
+Pulse provides `rate(metric=..., from=..., to=...)` and `increase(...)` table functions for counters. For example:
+
+```sql
+SELECT *
+FROM rate(
+  metric = 'system.network.rx',
+  from = '2026-10-23 00:00:00',
+  to = '2026-10-24 00:00:00'
+)
+LIMIT 1000
+```
+
+Calculate rates or increases for each series before grouping by resource or Compose service. Summing cumulative container counters first produces misleading results when containers restart or membership changes.

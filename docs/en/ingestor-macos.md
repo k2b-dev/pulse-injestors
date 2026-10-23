@@ -5,12 +5,12 @@ section: Ingestors
 order: 130
 description: Enroll and monitor MacBooks and Mac desktops with a per-user LaunchAgent.
 tags: [macos, ingestor]
-updated: 2026-07-23
+updated: 2026-10-23
 ---
 
 # macOS ingestor
 
-`pulse-macos` monitors a MacBook or Mac desktop. The installer schedules it as the current user so Homebrew and user services remain accessible.
+`pulse-macos` monitors a MacBook or Mac desktop. The installer runs it as the current user so Homebrew and user services remain accessible.
 
 ## Requirements
 
@@ -38,11 +38,12 @@ curl -fsSL \
 The installer writes:
 
 - binary: `/usr/local/bin/pulse-macos`;
-- config: `~/Library/Application Support/Pulse/ingestor.toml`;
+- config: `~/Library/Application Support/Pulse/pulse-macos.toml`;
+- token: `~/Library/Application Support/Pulse/pulse-macos.token` (mode `0600`);
 - LaunchAgent: `~/Library/LaunchAgents/dev.pulse.pulse-macos.plist`;
 - logs: `~/Library/Logs/Pulse/`.
 
-It performs a local collection and first Pulse push before loading the LaunchAgent.
+It performs a local collection and first Pulse push before loading the LaunchAgent. The agent runs `run` with `KeepAlive`; collection follows the configured interval.
 
 ## Enroll unattended
 
@@ -66,14 +67,14 @@ The source config must be readable by that user. The installer copies it to the 
 
 ```sh
 pulse-macos \
-  --config "$HOME/Library/Application Support/Pulse/ingestor.toml" \
+  --config "$HOME/Library/Application Support/Pulse/pulse-macos.toml" \
   --local --pretty once
 
 launchctl print "gui/$(id -u)/dev.pulse.pulse-macos"
 tail -n 100 "$HOME/Library/Logs/Pulse/pulse-macos.err.log"
 ```
 
-Update by running the interactive installer again. Remove the binary and LaunchAgent while preserving the config:
+Update by running the interactive installer again. Remove the binary and LaunchAgent while preserving the config, token, and spool:
 
 ```sh
 curl -fsSL \

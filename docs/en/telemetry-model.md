@@ -5,12 +5,12 @@ section: Reference
 order: 30
 description: Pulse V1 resources, dimensions, event context, identities, and units.
 tags: [telemetry, resources, dimensions, reference]
-updated: 2026-07-23
+updated: 2026-10-23
 ---
 
 # Telemetry model
 
-Every ingestor sends the current Pulse resource contract to `POST /api/pulse/ingest`. Configure one HTTP source token per independently managed sender. Removed identity fields and unknown script or TOML fields are rejected.
+Every ingestor sends the current Pulse resource contract to `POST /api/pulse/ingest`. Use a separate HTTP source token for independently managed senders, or share a token between ingestors when you want one source. Each ingestor still needs its own spool directory. Removed identity fields and unknown script or TOML fields are rejected.
 
 Metrics support `gauge` and nonnegative `counter` values. A metric name has one immutable type and unit within a Pulse base. Changing a definition requires a new signal name. Counter rates are calculated per series before aggregation.
 
@@ -22,6 +22,14 @@ Metrics support `gauge` and nonnegative `counter` values. A metric name has one 
 | State | Latest known value of a fact. | Service status, version, image ID. |
 | Event | Historical occurrence. | Collection failure, failed backup task. |
 | Resource | Stable object users can browse. | Host, container, filesystem, VM, Ceph pool. |
+
+## State freshness and liveness
+
+States are queued when their value changes and refreshed after six hours when observed again. The cache is persisted at `<spool_dir>/.states` when a spool directory is configured. In Pulse, a state timestamp records its last change or refresh, not the last check.
+
+After the spool drops or rejects data, the cache is cleared so all states observed in the next collection cycle are sent again.
+
+Use `ingestor.heartbeat` for liveness. It is a gauge with value `1` per cycle, with `ingestor=<binary>`. It uses the host resource, except for `pulse-uptime`, which uses its `uptime-probe` resource. Set the Pulse source's **Expected data** (`expectEverySeconds`) so Pulse detects a source that goes silent. See [runner signals](/en/modules#runner-signals) for the complete self-monitoring reference.
 
 ## Resources
 

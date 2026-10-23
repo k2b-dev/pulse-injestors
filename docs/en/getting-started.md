@@ -3,14 +3,14 @@ title: Enroll a host
 navTitle: Getting started
 section: Start
 order: 20
-description: Install a native Pulse ingestor, send the first batch, and enable scheduling.
+description: Install a native Pulse ingestor, send the first batch, and start its service.
 tags: [start, install]
-updated: 2026-07-23
+updated: 2026-10-23
 ---
 
 # Enroll a host
 
-This guide installs the correct native ingestor, creates a protected configuration, verifies collection, sends the first Pulse batch, and enables the platform scheduler.
+This guide installs the correct native ingestor, creates a protected configuration, verifies collection, sends the first Pulse batch, and starts the platform service.
 
 For Docker, use the [Docker Compose deployment](/en/ingestor-docker#deploy-with-docker-compose) instead.
 
@@ -47,22 +47,24 @@ The installer detects macOS, generic Linux, Proxmox VE, or Proxmox Backup Server
 4. optional global dimensions;
 5. confirmation before installation.
 
-The token input is hidden. The resulting configuration is written with mode `0600`.
+The token input is hidden. The generated config and a separate token file are written with mode `0600`. Each binary has its own config path, such as `/etc/pulse/pulse-linux.toml`, with its token next to it as `pulse-linux.token`.
 
 ## Recognize success
 
-Before enabling a scheduler, the installer performs a local collection and sends one real batch. A successful run ends with:
+Before starting the service or cron fallback, the installer performs a local collection and sends one real batch. A successful run ends with:
 
 ```text
 pulse-install: enrollment complete
 ```
 
-It also prints the installed binary, config path, scheduler status command, and log location.
+It also prints the installed binary, config path, service status command, and log location.
 
-Open Pulse and confirm that the host resource appears with the configured label.
+Open Pulse and confirm that the host resource (or `uptime-probe` for `pulse-uptime`) appears with the configured label and receives `ingestor.heartbeat` samples. Set the source's **Expected data** (`expectEverySeconds`) to detect a source that stops sending.
+
+Native installs run `run` under systemd or launchd; cron is a fallback that invokes `once`. Collection continues while delivery waits for Pulse. Use [Operations](/en/operations) to check service health and logs.
 
 ## Next steps
 
 - Use [Native installation](/en/installation) for unattended enrollment or a fixed version.
-- Use [Operations](/en/operations) to inspect schedules, logs, updates, and removal.
+- Use [Operations](/en/operations) to inspect services, logs, updates, and removal.
 - Open the matching [ingestor guide](/en/ingestors) for platform requirements and collected data.
