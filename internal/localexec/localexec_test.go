@@ -35,3 +35,17 @@ func TestTimeoutKillsProbeChildren(t *testing.T) {
 		t.Fatal("probe descendants kept pipes open past timeout")
 	}
 }
+
+func TestCombinedOutputIncludesStatusAndBoundsBothStreams(t *testing.T) {
+	out, err := CombinedOutput(context.Background(), 32, "sh", "-c", "printf header; printf status >&2")
+	if err != nil || string(out) != "headerstatus" {
+		t.Fatal(string(out), err)
+	}
+	if _, err := CombinedOutput(context.Background(), 8, "sh", "-c", "printf header; printf status >&2"); err == nil {
+		t.Fatal("combined output limit ignored")
+	}
+	out, err = Output(context.Background(), 32, "sh", "-c", "printf header; printf status >&2")
+	if err != nil || string(out) != "header" {
+		t.Fatal("existing stdout-only behavior changed", string(out), err)
+	}
+}

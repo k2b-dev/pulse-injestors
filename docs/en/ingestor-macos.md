@@ -10,7 +10,7 @@ updated: 2026-10-23
 
 # macOS ingestor
 
-`pulse-macos` monitors a MacBook or Mac desktop. The installer runs it as the current user so Homebrew and user services remain accessible.
+`pulse-macos` monitors a MacBook or Mac desktop. The installer runs it as the current user so the user’s Homebrew installation and applications remain accessible.
 
 ## Requirements
 
@@ -25,7 +25,7 @@ Install Cosign with Homebrew:
 brew install cosign
 ```
 
-Run the installer as the user whose Homebrew installation and services should be monitored. Do not prefix the complete installer command with `sudo`; it requests elevation only when installing the binary.
+Run the installer as the user whose Homebrew installation and applications should be monitored. Do not prefix the complete installer command with `sudo`; it requests elevation only when installing the binary.
 
 ## Enroll interactively
 
@@ -82,30 +82,45 @@ curl -fsSL \
   | sh -s -- --uninstall --ingestor=macos
 ```
 
+## Workstations
+
+Enroll one Pulse source per machine. In the source’s **Expected data** setting, choose daily (`expectDailyBy`) and a time when that person normally has the computer on. Use the last contact and `ingestor.heartbeat` to check liveness. Do not use a minute-based interval expectation for computers switched off overnight. A daily expectation still applies on non-working days; account for those in your notification policy.
+
+macOS always uses the workstation schedule: CPU, memory, and the system/data volumes every 300 seconds; update counts and security posture hourly; hardware, battery health, internal-disk SMART, and software inventory daily. There is no macOS profile flag. Keep the LaunchAgent in `run` mode to preserve these cadences; `once` runs every group on every invocation.
+
+The LaunchAgent runs only in the logged-in user session and never elevates privileges. FileVault’s `fdesetup status` can require root/admin access on the installed macOS release; when denied, `macos.filevault.enabled` is `"unknown"`. Firewall, SIP, Gatekeeper, and SoftwareUpdate preference reads normally work without root. Any denied or unrecognized posture result also becomes `"unknown"`, with availability false and a collector failure event. The agent does not run `sudo` or change protections. After permission changes, verify with the local command above.
+
 ## Main settings
 
 ```toml
+[runner]
+interval_seconds = 300
+
 [macos]
 enable_homebrew = true
 homebrew_timeout_seconds = 20
-enable_software_update = false
+enable_software_update = true
 software_update_timeout_seconds = 60
-enable_system_profiler = true
-system_profiler_timeout_seconds = 10
 ```
 
-Software update checks are disabled by default because they may take longer. Enable them when update visibility is worth the additional command cost.
+New macOS configurations enable update checks by default. Existing explicit `enable_software_update = false` settings remain respected. Set it to `true` for OS update counts. Each hourly update cycle has enough time for both configured command deadlines. Homebrew automatic refresh and analytics are disabled during collection; outdated counts reflect the locally cached catalog.
+
+Automatic OS updates count as enabled only when both `AutomaticCheckEnabled` and `AutomaticallyInstallMacOSUpdates` are explicitly `1`. Missing preferences mean unknown, not disabled. This check does not certify an MDM policy or that an update has installed successfully.
+
+The old `enable_system_profiler` and `system_profiler_timeout_seconds` settings remain accepted but have no effect. Display, GPU, power-adapter, charging, and electrical battery details are no longer collected.
 
 ## Collected data
 
-- macOS version, build, CPU cores, load, uptime, memory, and filesystems;
-- battery capacity, health, cycle count, charging, and external-power state;
-- Homebrew installation, outdated packages, and services;
-- optional software update counts;
-- GPU and display inventory from `system_profiler`;
-- available temperature and power data;
-- configured custom scripts.
+- OS name, version, build, hardware model, chip/CPU, and total RAM;
+- CPU usage, memory use, load, and capacity for the system/data volumes;
+- pending macOS updates and outdated Homebrew package totals;
+- FileVault, firewall, SIP, Gatekeeper, and automatic-update posture;
+- laptop battery health, cycles, and maximum capacity as a percentage of design;
+- internal-disk SMART status where `diskutil` exposes it;
+- installed applications and Homebrew formula/cask versions.
 
-Detailed CPU and GPU power data may require privileged `powermetrics`. The default per-user LaunchAgent reports a clear unavailable state when macOS does not grant access.
+macOS does not provide a separate security-update count or a reliable reboot-needed signal through these probes. Do not interpret missing signals as zero or false. Linux’s package collector provides those checks where its package manager supports them.
 
-The [macOS module reference](/en/module-macos) lists every metric, state, event, dimension, type, unit, and example.
+With two volumes, 100 apps, 50 Homebrew packages, a 300-second base interval, and a persistent state cache, budget about **4.6 values/minute** over a nine-hour working day, including runner signals and ordinary state refreshes. A cold or weekly software inventory adds 150 states that day (0.28/minute averaged over nine hours); the 3,000-package cap adds at most 5.56/minute on such a day. Failures and changes add values. These are estimates, not quotas.
+
+The [macOS module reference](/en/module-macos) lists every signal, its cadence, and the complete removal list.

@@ -20,12 +20,13 @@ Collector modules live under `internal/modules` and are reused by the specialize
 - [`linuxruntime`](/en/module-linuxruntime): Linux pressure, process counts, and socket summaries.
 - [`kernel`](/en/module-kernel): OOM kills, boot time, recent boots, and kernel errors.
 - [`inventory`](/en/module-inventory): daily OS, kernel, hardware, and installed package versions.
+- [`posture`](/en/module-posture): daily Linux workstation encryption, firewall, and automatic-update checks.
 - [`thermal`](/en/module-thermal): hwmon/sysfs thermal zones where available.
 
 ## Platform modules
 
 - [`docker`](/en/module-docker): Docker Engine API container, image, network, mount, and registry freshness data.
-- [`macos`](/en/module-macos): macOS system, battery, filesystem, Homebrew, software update, display, and GPU data.
+- [`macos`](/en/module-macos): macOS workstation health, security posture, disk/battery health, and software inventory.
 - [`proxmox`](/en/module-proxmox): Proxmox VE cluster, resource, Ceph, task, and backup data through local `pvesh`.
 - [`pbs`](/en/module-pbs): Proxmox Backup Server datastore, snapshot, job, and task data through local `proxmox-backup-debug`.
 

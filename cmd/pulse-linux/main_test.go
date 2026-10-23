@@ -172,3 +172,39 @@ func TestServiceProfiles(t *testing.T) {
 		}
 	}
 }
+
+func TestDesktopProfileCadencesAndIsolation(t *testing.T) {
+	cfg, err := config.Resolve(config.Config{}, config.Overlay{AllowMissingPulse: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Linux.Profile = "desktop"
+	seen := map[string]time.Duration{}
+	for _, c := range collectors(cfg) {
+		seen[c.Name()] = c.(monitoring.Cadenced).Cadence()
+	}
+	for name, want := range map[string]time.Duration{"system": 300 * time.Second, "systemd": 300 * time.Second, "kernel": 300 * time.Second, "filesystem": 900 * time.Second, "network": 900 * time.Second, "packages": time.Hour, "inventory": 24 * time.Hour, "posture": 24 * time.Hour} {
+		if seen[name] != want {
+			t.Errorf("%s: %s, want %s", name, seen[name], want)
+		}
+	}
+	if !reflect.DeepEqual(profileSystemdUnits("desktop"), []string{"display-manager.service", "NetworkManager.service", "cups.service"}) {
+		t.Fatal("desktop units")
+	}
+	cfg.Runner.Cadence = map[string]int{"system": 600, "posture": 172800}
+	for _, c := range collectors(cfg) {
+		if seconds, ok := cfg.Runner.Cadence[c.Name()]; ok && c.(monitoring.Cadenced).Cadence() != time.Duration(seconds)*time.Second {
+			t.Fatal("override ignored")
+		}
+	}
+	cfg.Linux.Profile = "server"
+	cfg.Runner.Cadence = nil
+	for _, c := range collectors(cfg) {
+		if c.Name() == "posture" {
+			t.Fatal("posture leaked to server")
+		}
+		if c.Name() == "system" && c.(monitoring.Cadenced).Cadence() != time.Minute {
+			t.Fatal("server cadence changed")
+		}
+	}
+}

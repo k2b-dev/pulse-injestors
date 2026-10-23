@@ -20,6 +20,16 @@ func Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 }
 
 func Output(ctx context.Context, limit int, name string, args ...string) ([]byte, error) {
+	return output(ctx, limit, false, name, args...)
+}
+
+// CombinedOutput also includes bounded stderr for tools such as softwareupdate
+// that write successful status messages there. Error strings omit that output.
+func CombinedOutput(ctx context.Context, limit int, name string, args ...string) ([]byte, error) {
+	return output(ctx, limit, true, name, args...)
+}
+
+func output(ctx context.Context, limit int, combined bool, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	// A backup probe may spawn children. Cancel the entire probe group so a
 	// descendant cannot outlive its timeout or keep stdout pipes open.
@@ -62,6 +72,12 @@ func Output(ctx context.Context, limit int, name string, args ...string) ([]byte
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
 		exit.Stderr = stderr.buf.Bytes()
+	}
+	if combined {
+		if stderr.overflow || len(out)+stderr.buf.Len() > limit {
+			return nil, fmt.Errorf("%s combined output exceeds limit", name)
+		}
+		out = append(out, stderr.buf.Bytes()...)
 	}
 	return out, err
 }

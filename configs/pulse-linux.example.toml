@@ -16,7 +16,7 @@ type = "host"
 environment = "production"
 
 [runner]
-interval_seconds = 60
+interval_seconds = 300
 collector_timeout_seconds = 60
 
 # Optional overrides by collector name, in seconds; each must be >= interval_seconds.
@@ -43,10 +43,11 @@ enable_zfs = true
 enable_ceph = false
 
 [linux]
-# Use "proxmox-node" on PVE or "pbs" on Proxmox Backup Server.
-# Add concrete ceph-mon@NAME.service / ceph-osd@ID.service units below; no globs.
-profile = "docker-host"
-systemd_units = ["ssh.service", "docker.service"]
+# Workstation preset: health 300 s, capacity 900 s, packages hourly, inventory/posture daily.
+# One source per machine; set Expected data = daily (expectDailyBy) in Pulse.
+# Server deployments can use profile = "server" with interval_seconds = 60.
+profile = "desktop"
+systemd_units = []
 package_timeout_seconds = 20
 disk_health_timeout_seconds = 20
 # Local PEM certificate paths/globs; empty by default.

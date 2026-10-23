@@ -32,6 +32,7 @@ import (
 	"github.com/k2b-dev/pulse-injestors/internal/modules/packages"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/patroni"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/postgres"
+	"github.com/k2b-dev/pulse-injestors/internal/modules/posture"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/script"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/system"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/systemd"
@@ -251,8 +252,16 @@ func collectors(cfg config.Config) []monitoring.Collector {
 			out = append(out, clickhouse.Collector{Config: *cfg.ClickHouse, Group: g})
 		}
 	}
+	if cfg.Linux.Profile == "desktop" {
+		out = append(out, posture.Collector{HostRoot: cfg.Host.Root})
+	}
 	for i, c := range out {
 		every := linuxCadences[c.Name()]
+		if cfg.Linux.Profile == "desktop" {
+			if desktop, ok := desktopCadences[c.Name()]; ok {
+				every = desktop
+			}
+		}
 		if seconds, ok := cfg.Runner.Cadence[c.Name()]; ok {
 			every = time.Duration(seconds) * time.Second
 		}
@@ -289,7 +298,7 @@ func profileSystemdUnits(profile string) []string {
 	case "server":
 		return []string{"ssh.service", "sshd.service"}
 	case "desktop":
-		return []string{"ssh.service", "sshd.service", "display-manager.service"}
+		return []string{"display-manager.service", "NetworkManager.service", "cups.service"}
 	case "proxmox-node":
 		return []string{"pve-cluster.service", "corosync.service", "pvedaemon.service", "pveproxy.service", "pvestatd.service", "pve-ha-lrm.service", "pve-ha-crm.service"}
 	case "pbs":
@@ -358,6 +367,13 @@ var linuxCadences = map[string]time.Duration{
 	"clickhouse": 60 * time.Second, "clickhouse-capacity": 300 * time.Second, "clickhouse-version": 86400 * time.Second,
 }
 
+var desktopCadences = map[string]time.Duration{
+	"system": 300 * time.Second, "systemd": 300 * time.Second, "kernel": 300 * time.Second,
+	"filesystem": 900 * time.Second, "network": 900 * time.Second, "linuxruntime": 900 * time.Second,
+	"diskio": 900 * time.Second, "thermal": 900 * time.Second, "btrfs": 900 * time.Second, "zfs": 900 * time.Second, "ceph": 900 * time.Second,
+	"posture": 24 * time.Hour,
+}
+
 // validateCadenceNames accepts built-ins (including disabled optional modules)
 // and only the scripts configured for this host.
 func validateCadenceNames(cfg config.Config) error {
@@ -365,6 +381,7 @@ func validateCadenceNames(cfg config.Config) error {
 	for name := range linuxCadences {
 		valid[name] = true
 	}
+	valid["posture"] = true
 	for _, script := range cfg.Scripts {
 		valid["script:"+script.Name] = true
 	}
