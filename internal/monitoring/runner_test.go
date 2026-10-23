@@ -26,7 +26,7 @@ func (s *recordingSender) PostBatch(_ context.Context, b pulse.Batch) error { s.
 func TestRunnerSharesCycleDeadlineAndStopsStartingCollectors(t *testing.T) {
 	calls := 0
 	sender := &recordingSender{}
-	runner := Runner{Resource: pulse.ResourceRef{Type: "host", ID: "test"}, Interval: 20 * time.Millisecond, Timeout: time.Second, Sender: sender, Collectors: []Collector{deadlineCollector{&calls}, deadlineCollector{&calls}}}
+	runner := Runner{Resource: pulse.ResourceRef{Type: "host", ID: "test"}, Interval: 20 * time.Millisecond, Timeout: 20 * time.Millisecond, Sender: sender, Collectors: []Collector{deadlineCollector{&calls}, deadlineCollector{&calls}}}
 	start := time.Now()
 	err := runner.Once(context.Background())
 	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
@@ -188,5 +188,71 @@ func TestRunnerPrioritizesHealthCollectorsWithStableOrder(t *testing.T) {
 				t.Fatal("runner mutated configured collector order")
 			}
 		})
+	}
+}
+
+type budgetCollector struct {
+	callbackCollector
+	budget time.Duration
+}
+
+func (c budgetCollector) CollectTimeout() time.Duration { return c.budget }
+
+func TestRunnerCollectorAndCycleBudgets(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	var order []string
+	var healthDeadline, backupDeadline time.Time
+	probe := func(name string, deadline *time.Time) callbackCollector {
+		return callbackCollector{name: name, collect: func(ctx context.Context, _ Scope) (pulse.Batch, error) {
+			order = append(order, name)
+			var ok bool
+			*deadline, ok = ctx.Deadline()
+			if !ok {
+				t.Fatal("missing deadline")
+			}
+			return pulse.Batch{}, nil
+		}}
+	}
+	health := probe("health", &healthDeadline)
+	backup := ScopedCollector{Collector: WithCadence{Every: 15 * time.Minute, Collector: budgetCollector{probe("backup", &backupDeadline), 180 * time.Second}}}
+	runner := Runner{Interval: time.Minute, Timeout: 10 * time.Second, Now: func() time.Time { return now }, Collectors: []Collector{backup, health}}
+	if got := runner.LongestCollectTimeout(); got != 180*time.Second {
+		t.Fatalf("wrapped timeout=%s", got)
+	}
+	for _, all := range []bool{false, true} {
+		order = nil
+		started := time.Now()
+		runner.Collect(context.Background(), all)
+		if !reflect.DeepEqual(order, []string{"health", "backup"}) {
+			t.Fatal(order)
+		}
+		for _, tc := range []struct {
+			deadline time.Time
+			want     time.Duration
+		}{{healthDeadline, 10 * time.Second}, {backupDeadline, 180 * time.Second}} {
+			got := tc.deadline.Sub(started)
+			if got < tc.want-time.Second || got > tc.want+time.Second {
+				t.Fatalf("budget=%s want=%s", got, tc.want)
+			}
+		}
+	}
+	// A budget on a collector that is not due must not extend the cycle.
+	runner.Timeout = 0
+	order = nil
+	started := time.Now()
+	runner.Collect(context.Background(), false)
+	if !reflect.DeepEqual(order, []string{"health"}) {
+		t.Fatal(order)
+	}
+	if got := healthDeadline.Sub(started); got < 59*time.Second || got > 61*time.Second {
+		t.Fatalf("non-due backup extended cycle: %s", got)
+	}
+	// A parent's cancellation/deadline always wins, including once mode.
+	parentDeadline := time.Now().Add(5 * time.Second)
+	ctx, cancel := context.WithDeadline(context.Background(), parentDeadline)
+	defer cancel()
+	runner.Collect(ctx, true)
+	if !backupDeadline.Equal(parentDeadline) {
+		t.Fatal("parent deadline ignored")
 	}
 }

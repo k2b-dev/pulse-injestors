@@ -75,7 +75,7 @@ The Ceph FSID is the preferred cluster namespace. When FSID is absent, the PVE p
 
 ## Requirements and API paths
 
-PVE API collection requires local `pvesh` permissions. It calls `/cluster/ceph/status` and `/nodes/<elected>/ceph/pools`; it never probes other nodes for pools. API failures use `proxmox.ceph.status.failed` and `proxmox.ceph.pools.failed` (event, no unit, dimension `operation`, 60 s on error; `attributes.error`). See the [Proxmox module](/en/module-proxmox) for the election rule.
+PVE API collection requires local `pvesh` permissions. It calls `/cluster/ceph/status` and `/nodes/<elected>/ceph/pool`; it never probes other nodes for pools. API failures use `proxmox.ceph.status.failed` and `proxmox.ceph.pools.failed` (event, no unit, dimension `operation`, 60 s on error; `attributes.error`). See the [Proxmox module](/en/module-proxmox) for the election rule.
 
 The optional CLI path requires the `ceph` command, local Ceph configuration and permissions. It executes `ceph status --format json` and `ceph df --format json`.
 

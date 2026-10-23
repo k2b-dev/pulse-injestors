@@ -68,3 +68,46 @@ disk_health_timeout_seconds = 20
 # name = "custom"
 # command = ["/usr/local/bin/pulse-custom"]
 # cadence_seconds = 300 # omitted: runner interval
+
+# Native service probes are disabled unless their section exists.
+# Each group has a 10 s timeout and 1 MiB response limit.
+# Profiles only add systemd checks: postgres, pg-edge, nats, nats-edge,
+# valkey, clickhouse. Set linux.profile above for this VM.
+# Cadence names: patroni=60, postgres=300, postgres-version=86400,
+# nats=60, nats-jetstream=300, nats-version=86400,
+# valkey=60, valkey-capacity=300, valkey-version=86400,
+# clickhouse=60, clickhouse-capacity=300, clickhouse-version=86400.
+# Put cadence overrides in [runner.cadence] above.
+
+# [patroni]
+# url = "https://127.0.0.1:8008"
+# server_name = "patroni.example.test"
+# ca_file = "/etc/pulse/service-ca.pem"
+# insecure_skip_verify = false
+# cluster = "database" # Optional: defaults to /patroni patroni.scope.
+# username = "monitor" # Optional; requires password_file.
+# password_file = "/etc/pulse/patroni.password"
+
+# [postgres]
+# command = ["runuser", "-u", "postgres", "--", "psql"]
+# database = "postgres"
+
+# [nats]
+# monitor_url = "http://127.0.0.1:8222"
+
+# [valkey]
+# address = "127.0.0.1:6379" # Use the local TLS port.
+# tls = true
+# server_name = "valkey.example.test"
+# ca_file = "/etc/pulse/service-ca.pem"
+# password_file = "/etc/pulse/valkey.password"
+# username = "monitor" # Optional ACL username.
+
+# Monitoring user: readonly profile with max_execution_time <= 10 seconds.
+# Password-bearing HTTP requests require loopback; use HTTPS otherwise.
+# [clickhouse]
+# url = "https://127.0.0.1:8443"
+# user = "monitor"
+# password_file = "/etc/pulse/clickhouse.password"
+# ca_file = "/etc/pulse/service-ca.pem"
+# server_name = "clickhouse.example.test"

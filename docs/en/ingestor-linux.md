@@ -106,6 +106,7 @@ Use `profile = "desktop"` for Linux workstations or `profile = "docker-host"` fo
 - SMART and NVMe disk health;
 - temperature sensors;
 - Btrfs, ZFS, and Ceph when present;
+- configured [Patroni](/en/module-patroni), [PostgreSQL](/en/module-postgres), [NATS](/en/module-nats), [Valkey](/en/module-valkey), and [ClickHouse](/en/module-clickhouse) probes;
 - configured custom scripts.
 
 See [Modules](/en/modules) for exhaustive signal tables and requirements.
@@ -120,6 +121,9 @@ Use service mode (`run`) to honor the schedule. `once` always runs all collector
 | `filesystem`, `network`, `linuxruntime`, `diskio`, `thermal`, `btrfs`, `zfs`, `ceph` | 300 s | Is capacity, I/O, network, or temperature becoming a problem? |
 | `backup` | 900 s | How old is the last successful backup? |
 | `packages`, `certificates`, `diskhealth` | 3600 s | Are security updates, reboot, certificate renewal, or disk replacement needed? |
+| `patroni`, `nats`, `valkey`, `clickhouse` | 60 s | Configured local service health and roles. |
+| `postgres`, `nats-jetstream`, `valkey-capacity`, `clickhouse-capacity` | 300 s | Configured database and broker capacity. |
+| `postgres-version`, `nats-version`, `valkey-version`, `clickhouse-version` | 86400 s | Configured service versions. |
 | `inventory` | 86400 s | Which OS, kernel, hardware, and package versions are installed? |
 | `script:<name>` | runner interval | Your configured check; optional per-script `cadence_seconds`. |
 
@@ -148,3 +152,35 @@ A Pulse base's default quota of 2000 values/minute is shared by all its hosts: 5
 Filesystem available bytes over time support a disk-full forecast in Pulse. The collector sends the observations, not a speculative days-to-full metric. Fit a trend over a representative time range and only extrapolate sustained growth.
 
 Detailed references: [Disk I/O](/en/module-diskio), [Kernel, boot, and OOM](/en/module-kernel), [Inventory](/en/module-inventory), [Certificate files](/en/module-certificates), and [Backup markers](/en/module-backup).
+
+## Database and broker VMs
+
+Add only the service sections needed on this VM. An absent section makes no connections and runs no service command. Every configured probe has a 10-second deadline and 1 MiB response limit. Secrets come from private files. See the module pages for accounts, TLS settings, commands, and exhaustive signal tables:
+
+- [Patroni](/en/module-patroni) and [PostgreSQL](/en/module-postgres) on database members;
+- [NATS JetStream](/en/module-nats) on brokers;
+- [Valkey](/en/module-valkey) on the cache VM;
+- [ClickHouse](/en/module-clickhouse) on the analytics VM.
+
+The following `[linux] profile` values add systemd unit checks. They do not enable service probes. `systemd_units` adds deployment-specific units to the selected profile.
+
+| Profile | Units |
+|---|---|
+| `postgres` | `patroni.service`, `etcd.service` |
+| `pg-edge` | `pgbouncer.service`, `haproxy.service`, `keepalived.service` |
+| `nats` | `nats-server.service` |
+| `nats-edge` | `haproxy.service`, `keepalived.service` |
+| `valkey` | `valkey.service` |
+| `clickhouse` | `clickhouse-server.service` |
+
+Healthy steady-state service volume at the default cadences:
+
+| Service VM | Metric samples/minute | Assumptions |
+|---|---|---|
+| PostgreSQL leader + Patroni | 6.6 | Five non-template databases; includes three cluster metrics. |
+| PostgreSQL replica + Patroni | 5.6 | Five databases; known cluster lag and local received/replayed WAL positions available. |
+| NATS broker | 9 | Eight minute metrics and five JetStream metrics every five minutes. |
+| Valkey | 3.8 | A positive maxmemory limit; 3.6 if unlimited. |
+| ClickHouse | 1.4 | One disk; seven capacity metrics every five minutes. |
+
+These are additional to host metrics, systemd, inventory, and runner self-monitoring. Stable service states plus their collector-result states add roughly 0.02 values/minute per VM after startup (daily versions and six-hour refreshes). Role changes and failures add state changes and events. Three PostgreSQL members with five databases each contribute about 17.8 service metric samples/minute; three NATS brokers contribute 27. These estimates are sample counts, not encoded bytes or a quota guarantee.

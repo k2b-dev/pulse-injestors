@@ -77,9 +77,9 @@ func TestCollectorCadences(t *testing.T) {
 		seen[c.Name()] = true
 	}
 	for name := range linuxCadences {
-		if name == "ceph" {
+		if name == "ceph" || strings.HasPrefix(name, "patroni") || strings.HasPrefix(name, "postgres") || strings.HasPrefix(name, "nats") || strings.HasPrefix(name, "valkey") || strings.HasPrefix(name, "clickhouse") {
 			if seen[name] {
-				t.Fatal("Ceph enabled by default")
+				t.Fatalf("%s enabled by default", name)
 			}
 			continue
 		}
@@ -127,6 +127,48 @@ func TestProxmoxAndPBSProfiles(t *testing.T) {
 			if strings.Contains(unit, "*") {
 				t.Fatal("systemd module does not expand globs")
 			}
+		}
+	}
+}
+
+func TestServiceCadencesAndOptIn(t *testing.T) {
+	cfg, err := config.Resolve(config.Config{}, config.Overlay{AllowMissingPulse: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Patroni = &config.PatroniConfig{URL: "https://127.0.0.1:8008"}
+	cfg.Postgres = &config.PostgresConfig{}
+	cfg.NATS = &config.NATSConfig{MonitorURL: "http://127.0.0.1:8222"}
+	cfg.Valkey = &config.ValkeyConfig{Address: "127.0.0.1:6379"}
+	cfg.ClickHouse = &config.ClickHouseConfig{URL: "https://127.0.0.1:8443"}
+	expected := map[string]time.Duration{"patroni": time.Minute, "postgres": 5 * time.Minute, "postgres-version": 24 * time.Hour, "nats": time.Minute, "nats-jetstream": 5 * time.Minute, "nats-version": 24 * time.Hour, "valkey": time.Minute, "valkey-capacity": 5 * time.Minute, "valkey-version": 24 * time.Hour, "clickhouse": time.Minute, "clickhouse-capacity": 5 * time.Minute, "clickhouse-version": 24 * time.Hour}
+	for _, c := range collectors(cfg) {
+		if want, ok := expected[c.Name()]; ok {
+			if c.(monitoring.Cadenced).Cadence() != want {
+				t.Errorf("%s cadence", c.Name())
+			}
+			delete(expected, c.Name())
+		}
+	}
+	if len(expected) != 0 {
+		t.Fatal("missing service collectors", expected)
+	}
+	cfg.Runner.Cadence = map[string]int{"patroni": 120, "postgres": 600, "nats-jetstream": 900, "valkey-capacity": 600, "clickhouse-version": 172800}
+	if err := validateCadenceNames(cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range collectors(cfg) {
+		if seconds, ok := cfg.Runner.Cadence[c.Name()]; ok && c.(monitoring.Cadenced).Cadence() != time.Duration(seconds)*time.Second {
+			t.Fatal("override ignored", c.Name())
+		}
+	}
+}
+func TestServiceProfiles(t *testing.T) {
+	for profile, want := range map[string][]string{
+		"postgres": {"patroni.service", "etcd.service"}, "pg-edge": {"pgbouncer.service", "haproxy.service", "keepalived.service"}, "nats": {"nats-server.service"}, "nats-edge": {"haproxy.service", "keepalived.service"}, "valkey": {"valkey.service"}, "clickhouse": {"clickhouse-server.service"},
+	} {
+		if got := profileSystemdUnits(profile); !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: %v", profile, got)
 		}
 	}
 }

@@ -135,7 +135,7 @@ func TestCephFailureKeepsFSID(t *testing.T) {
 		t.Fatal(batch)
 	}
 	runner.responses["get /cluster/ceph/status --output-format json"] = `{"fsid":"fixture-fsid"}`
-	runner.responses["get /nodes/solo/ceph/pools --output-format json"] = `[]`
+	runner.responses["get /nodes/solo/ceph/pool --output-format json"] = `[]`
 	batch, _ = c.Collect(context.Background(), fixtureScope())
 	if stateValue(t, batch, "system.ceph.available", "fixture-fsid") != true {
 		t.Fatal(batch)
@@ -242,3 +242,33 @@ func TestExecRunnerSeparatesAndBoundsOutput(t *testing.T) {
 }
 
 var _ monitoring.Collector = (*Collector)(nil)
+
+func TestBackupCollectorBudgets(t *testing.T) {
+	for _, timeout := range []time.Duration{0, 240 * time.Second} {
+		parts := (Collector{BackupTimeout: timeout}).Collectors()
+		for _, part := range parts {
+			want := time.Duration(0)
+			if part.Name() == "proxmox.backups" {
+				want = timeout
+				if want == 0 {
+					want = 180 * time.Second
+				}
+			}
+			if got := part.(monitoring.Timeouter).CollectTimeout(); got != want {
+				t.Fatalf("%s: %s want %s", part.Name(), got, want)
+			}
+		}
+	}
+	r := &deadlineRunner{}
+	client, err := (Collector{Runner: r}).client()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []any
+	if err := client.get(context.Background(), "/nodes/n1/storage/pbs/content?content=backup", &rows); err != nil {
+		t.Fatal(err)
+	}
+	if r.timeout < 119*time.Second || r.timeout > 120*time.Second {
+		t.Fatalf("default list timeout: %s", r.timeout)
+	}
+}
