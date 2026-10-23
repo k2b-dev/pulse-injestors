@@ -23,13 +23,15 @@ Pulse Ingestors collect infrastructure telemetry and send it to a configured Pul
 | Proxmox Backup Server | [`pulse-proxmox-backup-server`](/en/ingestor-proxmox-backup-server) | Native installer with systemd or cron |
 | Internet connection or named endpoints | [`pulse-uptime`](/en/ingestor-uptime) | Native installer with systemd, cron, or launchd |
 
-The Proxmox and PBS ingestors already include general Linux host monitoring. They can run alongside `pulse-linux` with separate configs and spools, but overlapping collectors produce duplicate host telemetry.
+The Proxmox and PBS ingestors collect platform data only. Install `pulse-linux` alongside them for host monitoring, with the same host identity and separate configs and spools.
 
 ## Start here
 
 - [Enroll a native host](/en/getting-started) interactively.
 - [Automate installation](/en/installation#unattended-enrollment) with a config file or provisioning variables.
 - [Deploy the Docker ingestor](/en/ingestor-docker#deploy-with-docker-compose) with the published Compose file.
+- [Roll out to a fleet](/en/rollout) with quota sizing and staged enrollment.
+- [Configure alerts](/en/alerts) for capacity, backups, services, and delivery.
 - [Operate an installation](/en/operations) and inspect its service or logs.
 
 ## What arrives in Pulse

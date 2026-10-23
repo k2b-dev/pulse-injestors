@@ -10,7 +10,7 @@ updated: 2026-10-23
 
 # Linux ingestor
 
-`pulse-linux` monitors a Linux host directly. Use it for servers, desktops, virtual machines, and Raspberry Pi systems that are not already monitored by the Proxmox or PBS ingestor.
+`pulse-linux` monitors a Linux host directly. Use it for servers, desktops, virtual machines, Raspberry Pi systems, and the host OS of Proxmox/PBS nodes. The platform ingestors collect their own platform data separately.
 
 ## Requirements
 
@@ -60,7 +60,7 @@ See [Native installation](/en/installation#unattended-enrollment) for provisioni
 
 Enroll one Pulse source per machine. Set the source’s **Expected data** to daily (`expectDailyBy`), choosing a time when the machine is normally on, instead of a minute-based interval. Check last contact and `ingestor.heartbeat` for liveness. Daily expectations still apply on non-working days; account for those in your notification policy.
 
-Use `--linux-profile desktop`, or provision the following settings through the installer’s `--config-source` option:
+Use the installer option `--linux-profile=desktop` with `PULSE_INTERVAL_SECONDS=300`, or provision the following settings through the installer’s `--config-source` option:
 
 ```toml
 [runner]
@@ -104,7 +104,7 @@ root = "/"
 enable_thermal = true
 enable_btrfs = true
 enable_zfs = true
-enable_ceph = true
+enable_ceph = false
 
 [linux]
 profile = "server"

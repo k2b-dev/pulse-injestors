@@ -60,3 +60,66 @@ LIMIT 1000
 ```
 
 Calculate rates or increases for each series before grouping by resource or Compose service. Summing cumulative container counters first produces misleading results when containers restart or membership changes.
+
+
+## Host overview
+
+Latest CPU and memory usage with the last host heartbeat. Untested against a live base; a NULL metric means no recent sample, not zero use. Hosts with no samples in this window are absent, so compare with your enrollment list.
+
+```sql
+SELECT r.resource_key,
+       argMaxIf(toNullable(s.value), s.ts, r.metric = 'system.cpu.usage') AS cpu_percent,
+       argMaxIf(toNullable(s.value), s.ts, r.metric = 'system.memory.usage') AS memory_percent,
+       maxIf(toNullable(s.ts), r.metric = 'ingestor.heartbeat') AS last_heartbeat
+FROM samples s JOIN series r ON r.series_id = s.series_id
+WHERE r.resource_type = 'host'
+  AND r.metric IN ('system.cpu.usage', 'system.memory.usage', 'ingestor.heartbeat')
+  AND s.ts >= now() - INTERVAL 10 MINUTE AND s.ts < now()
+GROUP BY r.resource_key
+ORDER BY r.resource_key
+```
+
+This overview combines host ingestors. Use the [rollout heartbeat query](/en/rollout#roll-out-in-stages-and-verify) to distinguish individual binaries on one host.
+
+## Filesystem capacity trend
+
+Hourly average used bytes and minimum available bytes over the last day. Untested; each resource and mount remains separate, including shared APFS volumes whose totals must not be summed. For time-to-full estimation, see [alert SQL](/en/alerts#disk-full-in-less-than-seven-days).
+
+```sql
+SELECT r.resource_key, r.dimensions, toStartOfHour(s.ts) AS hour,
+       avgIf(toNullable(s.value), r.metric = 'system.filesystem.used') AS used_bytes,
+       minIf(toNullable(s.value), r.metric = 'system.filesystem.available') AS available_bytes
+FROM samples s JOIN series r ON r.series_id = s.series_id
+WHERE r.metric IN ('system.filesystem.used', 'system.filesystem.available')
+  AND s.ts >= now() - INTERVAL 24 HOUR AND s.ts < now()
+GROUP BY r.resource_key, r.dimensions, hour
+ORDER BY r.resource_key, hour
+```
+
+## Backup freshness table
+
+Latest reported backup age in hours, including PVE copies per storage and PBS groups per datastore/namespace. Untested. Age is measured at `observed_at`; a missing row or stale observation is not a successful backup. Marker availability, PVE guest coverage, and PBS group completeness must be checked separately.
+
+```sql
+SELECT r.resource_key, r.metric, r.dimensions,
+       argMax(s.value, s.ts) / 3600 AS age_hours, max(s.ts) AS observed_at
+FROM samples s JOIN series r ON r.series_id = s.series_id
+WHERE r.metric IN ('backup.last_success.age', 'proxmox.backup.last_success.age',
+                   'pbs.group.last_snapshot.age')
+  AND s.ts >= now() - INTERVAL 30 MINUTE AND s.ts < now()
+GROUP BY r.resource_key, r.metric, r.dimensions
+ORDER BY age_hours DESC
+```
+
+## Series budget by metric
+
+Compare observed cardinality with the default 10,000 series per metric and 50,000 per base. Untested. This counts registered series, including series without recent samples; changing resource identities or dimensions can increase it.
+
+```sql
+SELECT metric, count() AS series_count
+FROM series
+GROUP BY metric
+ORDER BY series_count DESC
+```
+
+Use `SELECT count() AS total_series FROM series` for the base total. See [fleet sizing](/en/rollout#size-the-base) for values/minute and enrollment bursts.

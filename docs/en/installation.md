@@ -41,7 +41,7 @@ The generated config references a separate mode-`0600` token file: replace `.tom
 
 For every ingestor, the systemd unit also uses `LoadCredential=pulse-config:<config path>` and `ExecStart=... --config %d/pulse-config run`. This lets `pulse-uptime` read the protected config with `DynamicUser=yes`. systemd copies the config at service start, so edits take effect after `systemctl restart <binary>.service`.
 
-Several ingestors can run on one host with separate configs and spool directories, even when they share a source token. Proxmox and PBS already collect Linux host signals; running `pulse-linux` alongside them can duplicate those observations.
+Several ingestors can run on one host with separate configs and spool directories, even when they share a source token. Proxmox and PBS collect platform data only; install `pulse-linux` alongside them for Linux host signals.
 
 ## Unattended enrollment
 
@@ -94,6 +94,7 @@ sudo env \
 | Option | Values | Purpose |
 |---|---|---|
 | `--ingestor` | `auto`, `linux`, `macos`, `proxmox`, `pbs`, `uptime` | Select the native ingestor. Unattended mode requires an explicit value. |
+| `--linux-profile` | `server`, `desktop`, `docker-host`, `proxmox-node`, `pbs`, `postgres`, `pg-edge`, `nats`, `nats-edge`, `valkey`, `clickhouse`, `none` | Write `[linux] profile` in generated Linux configs; defaults to `server`. With `--config-source`, set it in that file instead. Existing configs keep their profile unless reconfigured. |
 | `--scheduler` | `auto`, `systemd`, `cron`, `launchd`, `none` | Select the service manager or cron fallback. |
 | `--config-source` | file path | Install an existing complete TOML config. |
 | `--config-path` | file path | Override the config path; its `.token` neighbor holds the generated token. |
@@ -101,15 +102,16 @@ sudo env \
 | `--version` | release version | Install a fixed release instead of `latest`. |
 | `--reconfigure` | flag | Replace an existing config. Without it, upgrades preserve the config. |
 | `--uninstall` | flag | Remove the selected binary and managed scheduler. |
+| `--purge` | flag, requires `--uninstall` | Delete the configured spool/state cache and managed/configured token files. Retain TOML. |
 | `--unattended` | flag | Disable all prompts. |
 | `--yes` | flag | Accept the final confirmation. |
 
 ## Enrollment guarantees
 
-- The service or cron schedule is enabled only after local collection and the first authenticated push succeed.
-- Re-running the installer upgrades the binary and preserves the existing config by default.
+- On first enrollment or reconfiguration, the service or cron schedule is enabled only after local collection and the first authenticated push succeed. The installer then prints “set Expected data for this source”.
+- Re-running the installer upgrades the binary, keeps config and token by default, skips the enrollment push, and restarts the service. systemd readiness is checked for up to 60 seconds; a timeout exits nonzero and prints a log command. Verify fresh Pulse data separately.
 - Tokens are not printed or passed as binary arguments.
-- Removing an ingestor preserves its config, token, and spool unless the administrator removes it separately.
+- Removing an ingestor preserves config, token, and spool unless `--purge` is supplied. Purge accepts plain double-quoted absolute `[pulse]` paths and refuses ambiguous or unsafe paths. Do not purge a token shared with another ingestor.
 - Docker is never installed or modified by this script.
 
 ## Service behavior
@@ -121,3 +123,5 @@ cron is a fallback for systems without systemd. It runs `once` per scheduled int
 For an older installation using `ingestor.toml`, pass its path with `--config-path` when upgrading to preserve it. The new default paths do not automatically migrate that file.
 
 See [Operations](/en/operations) for service status, logs, and hardening.
+
+Use [Fleet rollout](/en/rollout) for profile selection, source tokens, Expected data, and quota sizing.
