@@ -39,7 +39,7 @@ curl -fsSL \
   | sh
 ```
 
-The installer detects macOS, generic Linux, Proxmox VE, or Proxmox Backup Server. It asks for:
+The installer detects macOS, generic Linux, Proxmox VE, or Proxmox Backup Server. On PVE/PBS, also run it with `--ingestor=linux` for host signals. It asks for:
 
 1. Pulse ingest URL and token;
 2. a stable system ID and readable label;
@@ -59,7 +59,7 @@ pulse-install: enrollment complete
 
 It also prints the installed binary, config path, service status command, and log location.
 
-Open Pulse and confirm that the host resource (or `uptime-probe` for `pulse-uptime`) appears with the configured label and receives `ingestor.heartbeat` samples. Set the source's **Expected data** (`expectEverySeconds`) to detect a source that stops sending.
+Open Pulse and confirm that the host resource (or `uptime-probe` for `pulse-uptime`) appears with the configured label and receives `ingestor.heartbeat` samples. Set the source's **Expected data** to `expectEverySeconds = 180` for always-on servers, or `expectDailyBy` in the base timezone for workstations. See [Fleet rollout](/en/rollout) for source/token creation and sizing.
 
 Native installs run `run` under systemd or launchd; cron is a fallback that invokes `once`. Collection continues while delivery waits for Pulse. Use [Operations](/en/operations) to check service health and logs.
 

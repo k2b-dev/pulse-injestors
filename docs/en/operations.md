@@ -77,7 +77,7 @@ tail -n 100 "$HOME/Library/Logs/Pulse/pulse-macos.err.log"
 
 ## Update
 
-Re-run the installer with the same ingestor. Existing configuration is preserved.
+Re-run the installer with the same ingestor and config path. The binary is replaced, configuration and token are preserved, and the service restarts. The enrollment push is skipped. systemd readiness is checked for up to 60 seconds; a timeout fails with a log command. Confirm a fresh heartbeat and draining spool after the restart. See [Fleet rollout](/en/rollout#update-roll-back-or-remove) for staged updates and rollback.
 
 ```sh
 curl -fsSL \
@@ -113,7 +113,7 @@ curl -fsSL \
   | sh -s -- --uninstall --ingestor=linux
 ```
 
-This removes the managed binary and scheduler. The config, token file, spool, and data already in Pulse remain.
+This removes the managed binary and scheduler. The config, token file, spool, and data already in Pulse remain. Add `--purge` to discard the configured spool (including queued data and the state cache) and delete both managed and configured token files. TOML and data in Pulse remain. Purge requires plain double-quoted absolute paths in `[pulse]`; unsafe or ambiguous paths fail before removal. Do not purge a shared token while another ingestor uses it. Revoke retired source tokens in Pulse separately.
 
 ## Operate Docker
 
@@ -133,3 +133,5 @@ See [Docker ingestor](/en/ingestor-docker) for the complete deployment.
 Set the source's **Expected data** (`expectEverySeconds`) in Pulse to match the expected arrival cadence, allowing for normal collection and delivery delay. Pulse can then detect a source that stops sending. For each ingestor, follow `ingestor.heartbeat` with `ingestor=<binary>` on the host resource, or on `uptime-probe` for `pulse-uptime`. If several ingestors share a source, another active ingestor can keep that source active.
 
 State timestamps show the last change or six-hour refresh, not the last check. Use heartbeat metrics for liveness and [runner signals](/en/modules#runner-signals) for queue and delivery health.
+
+See [Alert SQL templates](/en/alerts) for capacity, backup, service, and delivery rules.

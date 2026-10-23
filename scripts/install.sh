@@ -13,6 +13,8 @@ CONFIG_PATH="${PULSE_CONFIG_PATH:-}"
 UNATTENDED=0
 RECONFIGURE=0
 UNINSTALL=0
+PURGE=0
+LINUX_PROFILE=""
 ASSUME_YES=0
 COSIGN="${PULSE_COSIGN_BIN:-cosign}"
 
@@ -25,6 +27,9 @@ service. Docker uses the separate Compose deployment and is not supported here.
 
   --ingestor=NAME       auto, linux, macos, proxmox, pbs, or uptime
                         For proxmox/pbs, install pulse-linux separately too.
+  --linux-profile=NAME server, desktop, docker-host, proxmox-node, pbs, postgres,
+                        pg-edge, nats, nats-edge, valkey, clickhouse, or none
+                        (generated pulse-linux config only)
   --scheduler=NAME      auto, systemd, cron, launchd, or none
                         (systemd and launchd run a supervised service; cron
                         runs one collection per interval without cadences)
@@ -37,6 +42,8 @@ service. Docker uses the separate Compose deployment and is not supported here.
   --unattended          never prompt; fail when required input is missing
   --reconfigure         replace an existing managed config
   --uninstall           remove the binary and managed scheduler
+  --purge               with --uninstall, also delete spool/state and token files
+                        (configuration is retained)
   -y, --yes             accept confirmation prompts
   -h, --help            show this help
 
@@ -73,6 +80,8 @@ have() {
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --ingestor=*) INGESTOR=${1#*=} ;;
+        --linux-profile=*) LINUX_PROFILE=${1#*=}; [ -n "$LINUX_PROFILE" ] || die "empty Linux profile" ;;
+        --purge) PURGE=1 ;;
         --scheduler=*) SCHEDULER=${1#*=} ;;
         --config-source=*) CONFIG_SOURCE=${1#*=} ;;
         --config-path=*) CONFIG_PATH=${1#*=} ;;
@@ -87,6 +96,8 @@ while [ "$#" -gt 0 ]; do
     esac
     shift
 done
+
+[ "$PURGE" = "0" ] || [ "$UNINSTALL" = "1" ] || die "--purge requires --uninstall"
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
@@ -153,6 +164,16 @@ case "$INGESTOR" in
         ;;
 esac
 
+if [ -n "$LINUX_PROFILE" ]; then
+    [ "$INGESTOR" = "linux" ] || die "--linux-profile requires --ingestor=linux"
+    [ -z "$CONFIG_SOURCE" ] || die "set [linux] profile in --config-source instead"
+    # Keep aligned with cmd/pulse-linux/main.go: profileSystemdUnits.
+    case "$LINUX_PROFILE" in
+        server|desktop|docker-host|proxmox-node|pbs|postgres|pg-edge|nats|nats-edge|valkey|clickhouse|none) ;;
+        *) die "unsupported Linux profile: $LINUX_PROFILE" ;;
+    esac
+fi
+
 if [ -z "$CONFIG_PATH" ]; then
     if [ "$OS" = "darwin" ]; then
         CONFIG_PATH="${HOME}/Library/Application Support/Pulse/${BINARY}.toml"
@@ -174,7 +195,11 @@ run_root() {
         "$@"
     else
         have sudo || die "sudo is required to write system files"
-        sudo "$@"
+        if [ "$UNATTENDED" = "1" ]; then
+            sudo -n "$@"
+        else
+            sudo "$@"
+        fi
     fi
 }
 
@@ -376,11 +401,101 @@ remove_scheduler() {
     fi
 }
 
+# Purge reads only literal paths. Never evaluate TOML as shell or guess at
+# escaped/complex TOML: refuse before stopping the service if paths are unclear.
+purge_config_path() {
+    printf '%s\n' "$PURGE_CONFIG" | awk -v wanted="$1" '
+        /^[[:space:]]*(#|$)/ { next }
+        /^[[:space:]]*\[/ {
+            section = ($0 ~ /^[[:space:]]*\[pulse\][[:space:]]*(#.*)?$/)
+            next
+        }
+        index($0, wanted) {
+            if (!section || seen++) exit 1
+            line = $0
+            sub(/^[[:space:]]*/, "", line)
+            if (line !~ ("^" wanted "[[:space:]]*=")) exit 1
+            sub(/^[^=]*=[[:space:]]*/, "", line)
+            if (line !~ /^"[^"\\]*"[[:space:]]*(#.*)?$/) exit 1
+            sub(/^"/, "", line)
+            sub(/"[[:space:]]*(#.*)?$/, "", line)
+            print line
+        }
+    ' || die "cannot safely read $1 for purge; use a plain double-quoted [pulse] path"
+}
+
+check_purge_path() {
+    validate_single_line "purge path" "$1"
+    case "$1" in
+        ""|/|*/|*/./*|*/../*|*/.|*/..|//*|*//*) die "unsafe purge path: $1" ;;
+        /*/*) ;;
+        *) die "purge needs an absolute file or dedicated spool directory: $1" ;;
+    esac
+    case "$1" in
+        /etc/pulse|/var/lib|/var/lib/pulse|/var/lib/private|/var/lib/private/pulse|"$HOME"|"$PREFIX")
+            die "refusing to purge shared directory: $1" ;;
+    esac
+    for protected in "$CONFIG_PATH" "$BIN_PATH" "$HOME"; do
+        case "$protected" in
+            "$1"|"$1"/*) die "purge path contains protected files: $1" ;;
+        esac
+    done
+}
+
 if [ "$UNINSTALL" = "1" ]; then
+    PURGE_SPOOL=""
+    PURGE_TOKEN=""
+    if [ "$OS" = "darwin" ]; then
+        DEFAULT_SPOOL="$HOME/Library/Application Support/Pulse/${BINARY}-spool"
+    else
+        DEFAULT_SPOOL="/var/lib/pulse/${BINARY}"
+    fi
+    if [ "$PURGE" = "1" ]; then
+        if run_root test -f "$CONFIG_PATH"; then
+            PURGE_CONFIG=$(run_root cat "$CONFIG_PATH") || die "cannot read configuration for purge"
+            PURGE_SPOOL=$(purge_config_path spool_dir)
+            PURGE_TOKEN=$(purge_config_path ingest_token_file)
+        fi
+        PURGE_SPOOL=${PURGE_SPOOL:-$DEFAULT_SPOOL}
+        # Resolve systemd DynamicUser symlinks while the unit still exists.
+        check_purge_path "$PURGE_SPOOL"
+        if run_root test -d "$PURGE_SPOOL"; then
+            # The child shell expands its positional argument, never the parent.
+            # shellcheck disable=SC2016
+            resolved=$(run_root sh -c 'cd -P "$1" && pwd -P' sh "$PURGE_SPOOL") ||
+                die "cannot resolve spool directory"
+            check_purge_path "$resolved"
+        fi
+        for token in "$TOKEN_PATH" "$PURGE_TOKEN"; do
+            [ -n "$token" ] || continue
+            check_purge_path "$token"
+            run_root test ! -d "$token" || die "token path is a directory: $token"
+        done
+    fi
+    if [ "$PURGE" = "1" ] && [ "$OS" = "linux" ] &&
+        run_root test -f "${SYSTEMD_DIR}/${SERVICE_ID}.service"; then
+        run_root systemctl stop "${SERVICE_ID}.service" || die "cannot stop service for purge"
+    fi
     remove_scheduler
     remove_root_file "$BIN_PATH"
     log "removed $BINARY and its managed scheduler"
-    log "preserved configuration at $CONFIG_PATH and the token next to it"
+    if [ "$PURGE" = "1" ]; then
+        if run_root test -d "$PURGE_SPOOL"; then
+            # The child shell expands its positional argument, never the parent.
+            # shellcheck disable=SC2016
+            resolved=$(run_root sh -c 'cd -P "$1" && pwd -P' sh "$PURGE_SPOOL") ||
+                die "cannot resolve spool directory"
+            check_purge_path "$resolved"
+            run_root rm -rf -- "$resolved"
+        fi
+        # Also remove a dangling DynamicUser symlink.
+        run_root rm -f -- "$PURGE_SPOOL"
+        remove_root_file "$TOKEN_PATH"
+        [ -z "$PURGE_TOKEN" ] || remove_root_file "$PURGE_TOKEN"
+        log "purged spool/state directories and token files; retained configuration at $CONFIG_PATH"
+    else
+        log "preserved configuration at $CONFIG_PATH, token files, and spool/state directories"
+    fi
     exit 0
 fi
 
@@ -457,15 +572,16 @@ tar -xzf "${TMP}/${ARCHIVE}" -C "$TMP"
 CONFIG_EXISTS=0
 WRITE_CONFIG=0
 INTERVAL=${PULSE_INTERVAL_SECONDS:-$DEFAULT_INTERVAL}
-if [ -f "$CONFIG_PATH" ]; then
+if run_root test -f "$CONFIG_PATH"; then
     CONFIG_EXISTS=1
 fi
 
 if [ "$CONFIG_EXISTS" = "1" ] && [ "$RECONFIGURE" != "1" ]; then
-    if [ -n "$CONFIG_SOURCE" ] && ! cmp -s "$CONFIG_SOURCE" "$CONFIG_PATH"; then
+    if [ -n "$CONFIG_SOURCE" ] && ! run_root cmp -s "$CONFIG_SOURCE" "$CONFIG_PATH"; then
         die "existing config differs from --config-source; pass --reconfigure to replace it"
     fi
-    log "preserving existing configuration at $CONFIG_PATH"
+    log "preserving existing configuration and token at $CONFIG_PATH"
+    [ -z "$LINUX_PROFILE" ] || log "existing Linux profile kept; use --reconfigure to change it"
 else
     WRITE_CONFIG=1
     staged_config="${TMP}/ingestor.toml"
@@ -519,6 +635,9 @@ else
             die "spool byte budget must be a positive integer"
 
         {
+            if [ "$INGESTOR" = "linux" ]; then
+                printf '[linux]\nprofile = "%s"\n\n' "${LINUX_PROFILE:-server}"
+            fi
             printf '[pulse]\n'
             printf 'ingest_url = "%s"\n' "$(toml_escape "$INGEST_URL")"
             printf 'ingest_token_file = "%s"\n' "$(toml_escape "$TOKEN_PATH")"
@@ -567,8 +686,13 @@ fi
 
 log "validating local collection"
 run_ingestor --local once >/dev/null
-log "sending first Pulse batch"
-run_ingestor once
+if [ "$CONFIG_EXISTS" = "0" ] || [ "$RECONFIGURE" = "1" ]; then
+    log "sending first Pulse batch"
+    run_ingestor once
+    log "next step: set Expected data for this source"
+else
+    log "updating enrolled host; first delivery check skipped"
+fi
 
 install_systemd() {
     service_file="${TMP}/${SERVICE_ID}.service"
@@ -630,7 +754,21 @@ EOF
     remove_root_file "${CRON_DIR}/${SERVICE_ID}"
     run_root systemctl daemon-reload
     run_root systemctl enable "${SERVICE_ID}.service"
-    run_root systemctl restart "${SERVICE_ID}.service"
+    # Stop first so an old active process cannot satisfy the readiness check
+    # before systemd has begun the asynchronous restart job.
+    run_root systemctl stop "${SERVICE_ID}.service" ||
+        die "could not stop ${SERVICE_ID}.service before restart"
+    run_root systemctl restart --no-block "${SERVICE_ID}.service" ||
+        die "restart request failed for ${SERVICE_ID}.service; inspect journalctl -u ${SERVICE_ID}.service"
+    elapsed=0
+    while ! run_root systemctl is-active --quiet "${SERVICE_ID}.service"; do
+        if [ "$elapsed" -ge 60 ]; then
+            die "${SERVICE_ID}.service did not become active within 60 s; inspect systemctl status and journalctl -u ${SERVICE_ID}.service"
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    log "${SERVICE_ID}.service is active (checked for up to 60 s); verify fresh heartbeats in Pulse"
 }
 
 cron_schedule() {
@@ -733,7 +871,11 @@ case "$SCHEDULER" in
     none) log "scheduler disabled" ;;
 esac
 
-log "enrollment complete"
+if [ "$CONFIG_EXISTS" = "1" ] && [ "$RECONFIGURE" = "0" ]; then
+    log "update complete; configuration and token preserved"
+else
+    log "enrollment complete"
+fi
 log "binary: $BIN_PATH"
 log "config: $CONFIG_PATH"
 case "$SCHEDULER" in

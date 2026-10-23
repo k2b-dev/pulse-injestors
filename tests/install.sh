@@ -24,6 +24,29 @@ config="$TMP/config/ingestor.toml"
 calls="$TMP/calls.log"
 mkdir -p "$release" "$payload" "$prefix"
 export PULSE_INSTALL_NO_SUDO=1
+# All scheduler commands stay inside the fixture, including uninstall.
+command_dir="$TMP/commands"
+mkdir -p "$command_dir" "$TMP/systemd" "$TMP/cron"
+export PATH="$command_dir:$PATH"
+export PULSE_SYSTEMD_DIR="$TMP/systemd" PULSE_CRON_DIR="$TMP/cron"
+export PULSE_INSTALL_TEST_SYSTEMCTL="$TMP/systemctl.log"
+cat > "$command_dir/systemctl" <<'EOF'
+#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "$PULSE_INSTALL_TEST_SYSTEMCTL"
+if [ "$1" = "is-active" ]; then
+    count=0
+    [ ! -f "$PULSE_INSTALL_TEST_SYSTEMCTL.count" ] || count=$(cat "$PULSE_INSTALL_TEST_SYSTEMCTL.count")
+    count=$((count + 1))
+    printf '%s\n' "$count" > "$PULSE_INSTALL_TEST_SYSTEMCTL.count"
+    [ "$count" -gt "${PULSE_INSTALL_TEST_WAIT:-0}" ]
+fi
+EOF
+cat > "$command_dir/sleep" <<'EOF'
+#!/bin/sh
+printf 'sleep %s\n' "$*" >> "$PULSE_INSTALL_TEST_SYSTEMCTL"
+EOF
+chmod +x "$command_dir/systemctl" "$command_dir/sleep"
 
 cat > "$payload/$binary" <<'EOF'
 #!/bin/sh
@@ -88,6 +111,7 @@ PULSE_RESOURCE_ID="macbook-test" \
 PULSE_RESOURCE_LABEL="Test MacBook" \
 PULSE_INTERVAL_SECONDS=300 \
 PULSE_DIMENSIONS="environment=test,site=lab" \
+PULSE_SPOOL_DIR="$TMP/spool" \
 sh "$ROOT/scripts/install.sh" \
     --unattended \
     --ingestor="$ingestor" \
@@ -95,6 +119,11 @@ sh "$ROOT/scripts/install.sh" \
     --prefix="$prefix" \
     --config-path="$config" > "$TMP/install.out"
 
+grep -Fq 'next step: set Expected data for this source' "$TMP/install.out"
+mkdir -p "$TMP/spool"
+printf 'queued data\n' > "$TMP/spool/part.json"
+cp "$config" "$TMP/original.toml"
+cp "${config%.toml}.token" "$TMP/original.token"
 test -x "$prefix/$binary"
 test -f "$config"
 if [ "$os" = "darwin" ]; then
@@ -151,13 +180,6 @@ if [ "$os" = "linux" ]; then
     cron_dir="$TMP/cron"
     command_dir="$TMP/commands"
     mkdir -p "$systemd_dir" "$cron_dir" "$command_dir"
-    cat > "$command_dir/systemctl" <<'EOF'
-#!/bin/sh
-set -eu
-: "${PULSE_INSTALL_TEST_SYSTEMCTL:?}"
-printf '%s\n' "$*" >> "$PULSE_INSTALL_TEST_SYSTEMCTL"
-EOF
-    chmod +x "$command_dir/systemctl"
 
     PULSE_RELEASE_BASE="file://$release" \
     PULSE_RELEASE_TAG="v0.1.0" \
@@ -173,7 +195,7 @@ EOF
         --ingestor=linux \
         --scheduler=systemd \
         --prefix="$prefix" \
-        --config-path="$config" >/dev/null
+        --config-path="$config" > "$TMP/update.out"
 
     unit="$systemd_dir/pulse-linux.service"
     grep -Fq "ExecStart=\"$prefix/pulse-linux\" --config %d/pulse-config run" "$unit"
@@ -186,7 +208,15 @@ EOF
     grep -Fq 'NoNewPrivileges=yes' "$unit"
     test ! -e "$systemd_dir/pulse-linux.timer"
     grep -Fq 'enable pulse-linux.service' "$TMP/systemctl.log"
-    grep -Fq 'restart pulse-linux.service' "$TMP/systemctl.log"
+    grep -Fq 'restart --no-block pulse-linux.service' "$TMP/systemctl.log"
+
+    grep -Fq 'is-active --quiet pulse-linux.service' "$TMP/systemctl.log"
+    grep -Fq 'pulse-linux.service is active' "$TMP/update.out"
+    grep -Fq 'update complete; configuration and token preserved' "$TMP/update.out"
+    cmp "$config" "$TMP/original.toml"
+    cmp "$token_path" "$TMP/original.token"
+    test "$(grep -Fc -- "--config $config once" "$calls")" -eq 1
+    cmp "$prefix/$binary" "$payload/$binary"
 
     uptime_systemd_config="$TMP/uptime-systemd/pulse-uptime.toml"
     PULSE_RELEASE_BASE="file://$release" \
@@ -243,5 +273,117 @@ sh "$ROOT/scripts/install.sh" \
     --config-path="$uptime_config" >/dev/null
 test ! -e "$uptime_prefix/pulse-uptime"
 test -f "$uptime_config"
+
+# Purge keeps TOML but removes both the private queue/cache and token.
+test -f "$token_path"
+test -f "$TMP/spool/part.json"
+sh "$ROOT/scripts/install.sh" --unattended --uninstall --purge \
+    --ingestor="$ingestor" --scheduler=none --prefix="$prefix" \
+    --config-path="$config" > "$TMP/purge.out"
+test -f "$config"
+test ! -e "$token_path"
+test ! -e "$TMP/spool"
+grep -Fq 'purged spool/state directories and token files' "$TMP/purge.out"
+
+if sh "$ROOT/scripts/install.sh" --purge > "$TMP/invalid.out" 2>&1; then
+    printf 'accepted purge without uninstall\n' >&2; exit 1
+fi
+grep -Fq -- '--purge requires --uninstall' "$TMP/invalid.out"
+
+# Refuse ambiguous or unsafe purge paths before removing anything.
+for bad_path in / /var/lib "$TMP/../spool"; do
+    printf '[pulse]\nspool_dir = "%s"\n' "$bad_path" > "$TMP/unsafe.toml"
+    cp "$payload/$binary" "$prefix/$binary"
+    if sh "$ROOT/scripts/install.sh" --unattended --uninstall --purge \
+        --ingestor="$ingestor" --scheduler=none --prefix="$prefix" \
+        --config-path="$TMP/unsafe.toml" > "$TMP/invalid.out" 2>&1; then
+        printf 'accepted unsafe purge path\n' >&2; exit 1
+    fi
+    test -x "$prefix/$binary"
+done
+printf "[pulse]\nspool_dir = '/tmp/example-spool'\n" > "$TMP/unsafe.toml"
+if sh "$ROOT/scripts/install.sh" --unattended --uninstall --purge \
+    --ingestor="$ingestor" --scheduler=none --prefix="$prefix" \
+    --config-path="$TMP/unsafe.toml" > "$TMP/invalid.out" 2>&1; then
+    printf 'accepted unsupported purge TOML\n' >&2; exit 1
+fi
+test -x "$prefix/$binary"
+
+if [ "$os" = "linux" ]; then
+    export PULSE_RELEASE_BASE="file://$release" PULSE_RELEASE_TAG=v0.1.0
+    export PULSE_COSIGN_BIN="$TMP/cosign" PULSE_INSTALL_TEST_CALLS="$calls"
+    export PULSE_INGEST_URL=https://pulse.example.test/api/pulse/ingest
+    export PULSE_INGEST_TOKEN_FILE="$token_file" PULSE_RESOURCE_ID=server-test
+    export PULSE_SPOOL_DIR="$TMP/profile-spool"
+    # Take profile names from the binary so future additions cannot drift silently.
+    profiles=$(sed -n '/func profileSystemdUnits(/,/^}/p' "$ROOT/cmd/pulse-linux/main.go" |
+        sed -n 's/.*case "\([^"]*\)":/\1/p')
+    for profile in $profiles none; do
+        sh "$ROOT/scripts/install.sh" --unattended --reconfigure --ingestor=linux \
+            --linux-profile="$profile" --scheduler=none --prefix="$prefix" \
+            --config-path="$TMP/profile.toml" > "$TMP/profile.out"
+        grep -Fq "profile = \"$profile\"" "$TMP/profile.toml"
+    done
+    for profile in invalid ''; do
+        if sh "$ROOT/scripts/install.sh" --unattended --ingestor=linux \
+            --linux-profile="$profile" --prefix="$TMP/invalid-bin" \
+            --config-path="$TMP/invalid.toml" > "$TMP/invalid.out" 2>&1; then
+            printf 'accepted invalid Linux profile\n' >&2; exit 1
+        fi
+        test ! -e "$TMP/invalid-bin"
+        test ! -e "$TMP/invalid.toml"
+    done
+    if sh "$ROOT/scripts/install.sh" --unattended --ingestor=uptime \
+        --linux-profile=server > "$TMP/invalid.out" 2>&1; then
+        printf 'accepted Linux profile for uptime\n' >&2; exit 1
+    fi
+    if sh "$ROOT/scripts/install.sh" --unattended --ingestor=linux \
+        --linux-profile=server --config-source="$config" > "$TMP/invalid.out" 2>&1; then
+        printf 'accepted ambiguous config source/profile\n' >&2; exit 1
+    fi
+
+    # Replace a different binary, preserve the desktop config and private token,
+    # and wait through an activating service without real sleeps.
+    sh "$ROOT/scripts/install.sh" --unattended --reconfigure --ingestor=linux \
+        --linux-profile=desktop --scheduler=none --prefix="$prefix" \
+        --config-path="$TMP/profile.toml" >/dev/null
+    cp "$TMP/profile.toml" "$TMP/profile-before.toml"
+    cp "$TMP/profile.token" "$TMP/token-before"
+    printf '#!/bin/sh\nexit 1\n' > "$prefix/$binary"
+    rm -f "$PULSE_INSTALL_TEST_SYSTEMCTL.count"
+    PULSE_INSTALL_TEST_WAIT=2 sh "$ROOT/scripts/install.sh" --unattended \
+        --ingestor=linux --linux-profile=server --scheduler=systemd --prefix="$prefix" \
+        --config-path="$TMP/profile.toml" > "$TMP/wait.out"
+    cmp "$prefix/$binary" "$payload/$binary"
+    cmp "$TMP/profile.toml" "$TMP/profile-before.toml"
+    cmp "$TMP/profile.token" "$TMP/token-before"
+    test "$(cat "$PULSE_INSTALL_TEST_SYSTEMCTL.count")" -eq 3
+    grep -Fq 'is active' "$TMP/wait.out"
+
+    rm -f "$PULSE_INSTALL_TEST_SYSTEMCTL.count"
+    if PULSE_INSTALL_TEST_WAIT=100 sh "$ROOT/scripts/install.sh" --unattended \
+        --ingestor=linux --scheduler=systemd --prefix="$prefix" \
+        --config-path="$TMP/profile.toml" > "$TMP/timeout.out" 2>&1; then
+        printf 'accepted service readiness timeout\n' >&2; exit 1
+    fi
+    test "$(cat "$PULSE_INSTALL_TEST_SYSTEMCTL.count")" -eq 61
+    grep -Fq 'did not become active within 60 s' "$TMP/timeout.out"
+    if grep -Fq 'update complete' "$TMP/timeout.out"; then exit 1; fi
+
+    # A custom spool symlink (as used by DynamicUser) and external token.
+    mkdir -p "$TMP/real-spool"
+    printf 'cache\n' > "$TMP/real-spool/.states"
+    ln -s "$TMP/real-spool" "$TMP/spool-link"
+    cp "$token_file" "$TMP/external.token"
+    printf '[pulse]\nspool_dir = "%s"\ningest_token_file = "%s"\n' \
+        "$TMP/spool-link" "$TMP/external.token" > "$TMP/custom.toml"
+    sh "$ROOT/scripts/install.sh" --unattended --uninstall --purge \
+        --ingestor=linux --scheduler=none --prefix="$prefix" \
+        --config-path="$TMP/custom.toml" >/dev/null
+    test ! -e "$TMP/real-spool"
+    test ! -L "$TMP/spool-link"
+    test ! -e "$TMP/external.token"
+    test -f "$TMP/custom.toml"
+fi
 
 printf 'installer integration test passed\n'
