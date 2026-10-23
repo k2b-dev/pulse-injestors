@@ -6,16 +6,24 @@ services:
     command: ["run"]
     environment:
       PULSE_INTERVAL_SECONDS: ${PULSE_INTERVAL_SECONDS:-60}
+      PULSE_INGEST_TOKEN_FILE: /run/secrets/pulse-ingest-token
+    secrets:
+      - pulse-ingest-token
     read_only: true
     security_opt:
       - no-new-privileges:true
     volumes:
-      - pulse-outbox:/var/lib/pulse/pulse-docker
-      - ./pulse-docker.toml:/etc/pulse/ingestor.toml:ro
+      - pulse-spool:/var/lib/pulse/pulse-docker
+      - ./pulse-docker.toml:/etc/pulse/pulse-docker.toml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/host/root:ro
 
 volumes:
-  pulse-outbox:
+  pulse-spool:
+
+secrets:
+  # One line with the source token; keep the file private (chmod 600).
+  pulse-ingest-token:
+    file: ./pulse-docker.token

@@ -20,13 +20,17 @@ usage() {
     cat <<'EOF'
 Usage: install.sh [options]
 
-Install, configure, verify, and schedule one native Pulse ingestor.
-Docker uses the separate Compose deployment and is not supported here.
+Install, configure, verify, and start one native Pulse ingestor as a
+service. Docker uses the separate Compose deployment and is not supported here.
 
   --ingestor=NAME       auto, linux, macos, proxmox, pbs, or uptime
   --scheduler=NAME      auto, systemd, cron, launchd, or none
+                        (systemd and launchd run a supervised service; cron
+                        runs one collection per interval without cadences)
   --config-source=PATH  install an existing complete TOML config
-  --config-path=PATH    destination config path
+  --config-path=PATH    destination config path (default per ingestor,
+                        for example /etc/pulse/pulse-linux.toml); the token
+                        is stored next to it with the suffix .token
   --prefix=DIR          binary directory (default: /usr/local/bin)
   --version=VERSION     release version, for example v0.1.0
   --unattended          never prompt; fail when required input is missing
@@ -150,14 +154,16 @@ esac
 
 if [ -z "$CONFIG_PATH" ]; then
     if [ "$OS" = "darwin" ]; then
-        CONFIG_PATH="${HOME}/Library/Application Support/Pulse/ingestor.toml"
+        CONFIG_PATH="${HOME}/Library/Application Support/Pulse/${BINARY}.toml"
     else
-        CONFIG_PATH="/etc/pulse/ingestor.toml"
+        CONFIG_PATH="/etc/pulse/${BINARY}.toml"
     fi
 fi
+TOKEN_PATH="${CONFIG_PATH%.toml}.token"
 
 BIN_PATH="${PREFIX}/${BINARY}"
 SERVICE_ID="$BINARY"
+CREDENTIAL_NAME="pulse-ingest-token"
 PLIST_LABEL="dev.pulse.${BINARY}"
 SYSTEMD_DIR="${PULSE_SYSTEMD_DIR:-/etc/systemd/system}"
 CRON_DIR="${PULSE_CRON_DIR:-/etc/cron.d}"
@@ -217,11 +223,34 @@ install_config_file() {
     fi
 }
 
+install_token_file() {
+    source_file=$1
+    if config_is_user_file || ! path_needs_root "$TOKEN_PATH"; then
+        install -d -m 0700 "$(dirname "$TOKEN_PATH")"
+        install -m 0600 "$source_file" "$TOKEN_PATH"
+    else
+        run_root install -d -m 0750 "$(dirname "$TOKEN_PATH")"
+        run_root install -m 0600 "$source_file" "$TOKEN_PATH"
+    fi
+}
+
+token_file_exists() {
+    if path_needs_root "$TOKEN_PATH" && ! config_is_user_file; then
+        run_root test -f "$TOKEN_PATH"
+    else
+        test -f "$TOKEN_PATH"
+    fi
+}
+
+# The enrollment check uses a throwaway spool so the service starts with its
+# own state directory and sends every state once.
 run_ingestor() {
     if [ "$OS" = "linux" ]; then
-        run_root "$BIN_PATH" --config "$CONFIG_PATH" "$@"
+        run_root env PULSE_SPOOL_DIR="$VALIDATE_SPOOL" PULSE_SPOOL_MAX_BYTES=67108864 \
+            "$BIN_PATH" --config "$CONFIG_PATH" "$@"
     else
-        "$BIN_PATH" --config "$CONFIG_PATH" "$@"
+        PULSE_SPOOL_DIR="$VALIDATE_SPOOL" PULSE_SPOOL_MAX_BYTES=67108864 \
+            "$BIN_PATH" --config "$CONFIG_PATH" "$@"
     fi
 }
 
@@ -303,7 +332,8 @@ resolve_scheduler() {
     if [ "$OS" = "darwin" ] &&
         [ -f "${HOME}/Library/LaunchAgents/${PLIST_LABEL}.plist" ]; then
         SCHEDULER=launchd
-    elif [ "$OS" = "linux" ] && [ -f "${SYSTEMD_DIR}/${SERVICE_ID}.timer" ]; then
+    elif [ "$OS" = "linux" ] && { [ -f "${SYSTEMD_DIR}/${SERVICE_ID}.service" ] ||
+        [ -f "${SYSTEMD_DIR}/${SERVICE_ID}.timer" ]; }; then
         SCHEDULER=systemd
     elif [ "$OS" = "linux" ] && [ -f "${CRON_DIR}/${SERVICE_ID}" ]; then
         SCHEDULER=cron
@@ -334,6 +364,7 @@ remove_scheduler() {
     else
         if have systemctl; then
             run_root systemctl disable --now "${SERVICE_ID}.timer" >/dev/null 2>&1 || true
+            run_root systemctl disable --now "${SERVICE_ID}.service" >/dev/null 2>&1 || true
         fi
         remove_root_file "${SYSTEMD_DIR}/${SERVICE_ID}.timer"
         remove_root_file "${SYSTEMD_DIR}/${SERVICE_ID}.service"
@@ -348,7 +379,7 @@ if [ "$UNINSTALL" = "1" ]; then
     remove_scheduler
     remove_root_file "$BIN_PATH"
     log "removed $BINARY and its managed scheduler"
-    log "preserved configuration at $CONFIG_PATH"
+    log "preserved configuration at $CONFIG_PATH and the token next to it"
     exit 0
 fi
 
@@ -357,7 +388,11 @@ have tar || die "tar is required"
 have "$COSIGN" || die "cosign is required to authenticate Pulse releases"
 
 TMP=$(mktemp -d)
+VALIDATE_SPOOL="${TMP}/validate-spool"
 cleanup() {
+    if [ "$OS" = "linux" ] && [ -d "$VALIDATE_SPOOL" ]; then
+        run_root rm -rf "$VALIDATE_SPOOL" 2>/dev/null || true
+    fi
     rm -rf "$TMP"
 }
 trap cleanup EXIT HUP INT TERM
@@ -473,8 +508,9 @@ else
             die "collection interval must be a positive integer"
 
         if [ "$OS" = "darwin" ]; then
-            SPOOL_DIR=${PULSE_SPOOL_DIR:-"$HOME/Library/Application Support/Pulse/${BINARY}-outbox"}
+            SPOOL_DIR=${PULSE_SPOOL_DIR:-"$HOME/Library/Application Support/Pulse/${BINARY}-spool"}
         else
+            # systemd creates this as StateDirectory=pulse/<binary>.
             SPOOL_DIR=${PULSE_SPOOL_DIR:-"/var/lib/pulse/${BINARY}"}
         fi
         SPOOL_MAX_BYTES=${PULSE_SPOOL_MAX_BYTES:-67108864}
@@ -484,7 +520,7 @@ else
         {
             printf '[pulse]\n'
             printf 'ingest_url = "%s"\n' "$(toml_escape "$INGEST_URL")"
-            printf 'ingest_token = "%s"\n' "$(toml_escape "$INGEST_TOKEN")"
+            printf 'ingest_token_file = "%s"\n' "$(toml_escape "$TOKEN_PATH")"
             printf 'spool_dir = "%s"\n' "$(toml_escape "$SPOOL_DIR")"
             printf 'spool_max_bytes = %s\n\n' "$SPOOL_MAX_BYTES"
             printf '[resource]\n'
@@ -500,6 +536,9 @@ else
             printf 'max_retries = 3\n'
             printf 'initial_backoff_ms = 500\n'
         } > "$staged_config"
+        staged_token="${TMP}/ingestor.token"
+        validate_single_line "Pulse ingest token" "$INGEST_TOKEN"
+        (umask 077 && printf '%s\n' "$INGEST_TOKEN" > "$staged_token")
     fi
 fi
 
@@ -519,6 +558,10 @@ install_root_file "${TMP}/${BINARY}" "$BIN_PATH" 0755
 if [ "$WRITE_CONFIG" = "1" ]; then
     install_config_file "$staged_config"
     log "wrote configuration with mode 0600"
+    if [ -n "${staged_token:-}" ]; then
+        install_token_file "$staged_token"
+        log "wrote token file $TOKEN_PATH with mode 0600"
+    fi
 fi
 
 log "validating local collection"
@@ -528,38 +571,65 @@ run_ingestor once
 
 install_systemd() {
     service_file="${TMP}/${SERVICE_ID}.service"
-    timer_file="${TMP}/${SERVICE_ID}.timer"
+    # Root collectors read hardware and package state; uptime only needs the network.
+    if [ "$INGESTOR" = "uptime" ]; then
+        identity="DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=yes"
+    else
+        identity="ProtectSystem=full
+ProtectHome=read-only"
+    fi
+    credential=""
+    if token_file_exists; then
+        credential="LoadCredential=${CREDENTIAL_NAME}:${TOKEN_PATH}
+Environment=PULSE_INGEST_TOKEN_FILE=%d/${CREDENTIAL_NAME}"
+    fi
     cat > "$service_file" <<EOF
 [Unit]
-Description=Pulse ${INGESTOR} telemetry collection
+Description=Pulse ${INGESTOR} telemetry
 Wants=network-online.target
 After=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
-Type=oneshot
-ExecStart="${BIN_PATH}" --config "${CONFIG_PATH}" once
+Type=notify
+ExecStart="${BIN_PATH}" --config %d/pulse-config run
+Restart=always
+RestartSec=10s
+WatchdogSec=120s
+TimeoutStopSec=30s
+LoadCredential=pulse-config:${CONFIG_PATH}
+${credential}
+StateDirectory=pulse/${BINARY}
+StateDirectoryMode=0700
+${identity}
+UMask=0077
 Nice=10
 IOSchedulingClass=idle
-EOF
-    cat > "$timer_file" <<EOF
-[Unit]
-Description=Collect Pulse ${INGESTOR} telemetry every ${INTERVAL} seconds
-
-[Timer]
-OnBootSec=2min
-OnUnitActiveSec=${INTERVAL}s
-RandomizedDelaySec=15s
-Persistent=true
-Unit=${SERVICE_ID}.service
+MemoryMax=256M
+TasksMax=64
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
 
 [Install]
-WantedBy=timers.target
+WantedBy=multi-user.target
 EOF
     install_root_file "$service_file" "${SYSTEMD_DIR}/${SERVICE_ID}.service" 0644
-    install_root_file "$timer_file" "${SYSTEMD_DIR}/${SERVICE_ID}.timer" 0644
+    run_root systemctl disable --now "${SERVICE_ID}.timer" >/dev/null 2>&1 || true
+    remove_root_file "${SYSTEMD_DIR}/${SERVICE_ID}.timer"
     remove_root_file "${CRON_DIR}/${SERVICE_ID}"
     run_root systemctl daemon-reload
-    run_root systemctl enable --now "${SERVICE_ID}.timer"
+    run_root systemctl enable "${SERVICE_ID}.service"
+    run_root systemctl restart "${SERVICE_ID}.service"
 }
 
 cron_schedule() {
@@ -592,6 +662,7 @@ EOF
     install_root_file "$cron_file" "${CRON_DIR}/${SERVICE_ID}" 0644
     if have systemctl; then
         run_root systemctl disable --now "${SERVICE_ID}.timer" >/dev/null 2>&1 || true
+        run_root systemctl disable --now "${SERVICE_ID}.service" >/dev/null 2>&1 || true
     fi
     remove_root_file "${SYSTEMD_DIR}/${SERVICE_ID}.timer"
     remove_root_file "${SYSTEMD_DIR}/${SERVICE_ID}.service"
@@ -623,7 +694,7 @@ install_launchd() {
     <string>$(xml_escape "$BIN_PATH")</string>
     <string>--config</string>
     <string>$(xml_escape "$CONFIG_PATH")</string>
-    <string>once</string>
+    <string>run</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -632,8 +703,10 @@ install_launchd() {
   </dict>
   <key>RunAtLoad</key>
   <true/>
-  <key>StartInterval</key>
-  <integer>${INTERVAL}</integer>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
   <key>ProcessType</key>
   <string>Background</string>
   <key>LowPriorityIO</key>
@@ -663,7 +736,10 @@ log "enrollment complete"
 log "binary: $BIN_PATH"
 log "config: $CONFIG_PATH"
 case "$SCHEDULER" in
-    systemd) log "status: systemctl status ${SERVICE_ID}.timer" ;;
+    systemd)
+        log "status: systemctl status ${SERVICE_ID}.service"
+        log "logs: journalctl -u ${SERVICE_ID}.service"
+        ;;
     cron) log "schedule: ${CRON_DIR}/${SERVICE_ID}" ;;
     launchd)
         log "status: launchctl print gui/$(id -u)/${PLIST_LABEL}"

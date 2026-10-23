@@ -104,7 +104,19 @@ else
 fi
 test "$config_mode" = "600"
 grep -Fq 'ingest_url = "https://pulse.example.test/api/pulse/ingest"' "$config"
-grep -Fq 'ingest_token = "secret-token"' "$config"
+token_path="${config%.toml}.token"
+grep -Fq "ingest_token_file = \"$token_path\"" "$config"
+if grep -Fq 'secret-token' "$config"; then
+    printf 'installer wrote the token into the config\n' >&2
+    exit 1
+fi
+test "$(cat "$token_path")" = "secret-token"
+if [ "$os" = "darwin" ]; then
+    token_mode=$(stat -f '%Lp' "$token_path")
+else
+    token_mode=$(stat -c '%a' "$token_path")
+fi
+test "$token_mode" = "600"
 grep -Fq '[resource]' "$config"
 grep -Fq 'spool_max_bytes = 67108864' "$config"
 grep -Fq 'spool_dir = "' "$config"
@@ -163,9 +175,42 @@ EOF
         --prefix="$prefix" \
         --config-path="$config" >/dev/null
 
-    grep -Fq "ExecStart=\"$prefix/pulse-linux\" --config \"$config\" once" "$systemd_dir/pulse-linux.service"
-    grep -Fq 'OnUnitActiveSec=120s' "$systemd_dir/pulse-linux.timer"
-    grep -Fq 'enable --now pulse-linux.timer' "$TMP/systemctl.log"
+    unit="$systemd_dir/pulse-linux.service"
+    grep -Fq "ExecStart=\"$prefix/pulse-linux\" --config %d/pulse-config run" "$unit"
+    grep -Fq "LoadCredential=pulse-config:$config" "$unit"
+    grep -Fq 'Type=notify' "$unit"
+    grep -Fq 'WatchdogSec=120s' "$unit"
+    grep -Fq "LoadCredential=pulse-ingest-token:$token_path" "$unit"
+    grep -Fq 'Environment=PULSE_INGEST_TOKEN_FILE=%d/pulse-ingest-token' "$unit"
+    grep -Fq 'StateDirectory=pulse/pulse-linux' "$unit"
+    grep -Fq 'NoNewPrivileges=yes' "$unit"
+    test ! -e "$systemd_dir/pulse-linux.timer"
+    grep -Fq 'enable pulse-linux.service' "$TMP/systemctl.log"
+    grep -Fq 'restart pulse-linux.service' "$TMP/systemctl.log"
+
+    uptime_systemd_config="$TMP/uptime-systemd/pulse-uptime.toml"
+    PULSE_RELEASE_BASE="file://$release" \
+    PULSE_RELEASE_TAG="v0.1.0" \
+    PULSE_COSIGN_BIN="$TMP/cosign" \
+    PULSE_INSTALL_TEST_CALLS="$calls" \
+    PULSE_INSTALL_TEST_SYSTEMCTL="$TMP/systemctl.log" \
+    PULSE_SYSTEMD_DIR="$systemd_dir" \
+    PULSE_CRON_DIR="$cron_dir" \
+    PULSE_INGEST_URL="https://pulse.example.test/api/pulse/ingest" \
+    PULSE_INGEST_TOKEN_FILE="$token_file" \
+    PULSE_RESOURCE_ID="probe-test" \
+    PATH="$command_dir:$PATH" \
+    sh "$ROOT/scripts/install.sh" \
+        --unattended \
+        --ingestor=uptime \
+        --scheduler=systemd \
+        --prefix="$uptime_prefix" \
+        --config-path="$uptime_systemd_config" >/dev/null
+    grep -Fq "LoadCredential=pulse-config:$uptime_systemd_config" "$systemd_dir/pulse-uptime.service"
+    grep -Fq "ExecStart=\"$uptime_prefix/pulse-uptime\" --config %d/pulse-config run" "$systemd_dir/pulse-uptime.service"
+    grep -Fq 'WatchdogSec=120s' "$systemd_dir/pulse-uptime.service"
+    grep -Fq 'DynamicUser=yes' "$systemd_dir/pulse-uptime.service"
+    grep -Fq 'ProtectSystem=strict' "$systemd_dir/pulse-uptime.service"
 fi
 
 output=$(

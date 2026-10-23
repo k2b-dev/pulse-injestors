@@ -15,6 +15,11 @@ type Collector interface {
 	Collect(context.Context, Scope) (pulse.Batch, error)
 }
 
+// Cadenced collectors run less often than the runner interval.
+type Cadenced interface {
+	Cadence() time.Duration
+}
+
 type ScopedCollector struct {
 	Collector  Collector
 	Resource   pulse.ResourceRef
@@ -25,12 +30,31 @@ func (s ScopedCollector) Name() string {
 	return s.Collector.Name()
 }
 
+func (s ScopedCollector) Cadence() time.Duration {
+	return cadenceOf(s.Collector)
+}
+
 func (s ScopedCollector) Collect(ctx context.Context, scope Scope) (pulse.Batch, error) {
 	if s.Resource.Type != "" || s.Resource.ID != "" {
 		scope.Resource = s.Resource
 	}
 	scope.Dimensions = mergeDims(scope.Dimensions, s.Dimensions)
 	return s.Collector.Collect(ctx, scope)
+}
+
+// WithCadence overrides how often a collector runs.
+type WithCadence struct {
+	Collector
+	Every time.Duration
+}
+
+func (w WithCadence) Cadence() time.Duration { return w.Every }
+
+func cadenceOf(c Collector) time.Duration {
+	if cadenced, ok := c.(Cadenced); ok {
+		return cadenced.Cadence()
+	}
+	return 0
 }
 
 type Sender interface {
@@ -46,48 +70,55 @@ type Runner struct {
 	Interval   time.Duration
 	Logger     *slog.Logger
 	Now        func() time.Time
+
+	lastRun map[string]time.Time
 }
 
-func (r Runner) Once(ctx context.Context) error {
+// Once collects every collector and hands the batch to Sender.
+func (r *Runner) Once(ctx context.Context) error {
+	if r.Sender == nil {
+		return errors.New("monitoring sender is required")
+	}
+	return r.Sender.PostBatch(ctx, r.Collect(ctx, true))
+}
+
+// Collect runs the collectors that are due, or all of them, within one
+// interval. Collector failures become ingestor.collector.* signals.
+func (r *Runner) Collect(ctx context.Context, all bool) pulse.Batch {
 	if r.Interval > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, r.Interval)
 		defer cancel()
 	}
-	if r.Sender == nil {
-		return errors.New("monitoring sender is required")
-	}
 	log := r.Logger
 	if log == nil {
 		log = slog.Default()
 	}
-	now := r.Now
-	if now == nil {
-		now = time.Now
+	now := time.Now
+	if r.Now != nil {
+		now = r.Now
 	}
-	scope := Scope{
-		Resource:   r.Resource,
-		Dimensions: r.Dimensions,
-		Timestamp:  now().UTC(),
+	if r.lastRun == nil {
+		r.lastRun = map[string]time.Time{}
 	}
-	batch := pulse.Batch{
-		Metrics: []pulse.Metric{},
-		Events:  []pulse.Event{},
-		States:  []pulse.State{},
-	}
+	scope := r.Scope(now())
+	batch := pulse.Batch{Metrics: []pulse.Metric{}, Events: []pulse.Event{}, States: []pulse.State{}}
 	builder := NewBuilder(scope)
 
 	for _, collector := range r.Collectors {
 		if ctx.Err() != nil {
 			break
 		}
-		collectorScope := scope
+		if !all && !r.due(collector, scope.Timestamp) {
+			continue
+		}
+		r.lastRun[collector.Name()] = scope.Timestamp
 		collectCtx := ctx
 		cancel := func() {}
 		if r.Timeout > 0 {
 			collectCtx, cancel = context.WithTimeout(ctx, r.Timeout)
 		}
-		part, err := collector.Collect(collectCtx, collectorScope)
+		part, err := collector.Collect(collectCtx, scope)
 		cancel()
 		part = Inject(part, scope, nil)
 		candidate := batch
@@ -101,50 +132,34 @@ func (r Runner) Once(ctx context.Context) error {
 			log.Warn("collector failed", "collector", collector.Name(), "err", err)
 			builder.State("ingestor.collector.ok", false, map[string]string{"collector": collector.Name()})
 			builder.EventDetails("ingestor.collector.failed", map[string]string{"collector": collector.Name()}, EventDetails{
-				Attributes: map[string]any{"error": err.Error()},
+				Attributes: map[string]any{"error": truncate(err.Error(), 2000)},
 			})
 			continue
 		}
 		builder.State("ingestor.collector.ok", true, map[string]string{"collector": collector.Name()})
 	}
 	Merge(&batch, builder.Batch())
-
-	if len(batch.Metrics) == 0 && len(batch.Events) == 0 && len(batch.States) == 0 {
-		empty := NewBuilder(scope)
-		empty.State("ingestor.collect.ok", false, nil)
-		empty.Event("ingestor.collect.empty", nil, nil)
-		Merge(&batch, empty.Batch())
-	}
-	if err := validation.Batch(batch); err != nil {
-		return err
-	}
-	log.Info("sending pulse batch", "metrics", len(batch.Metrics), "events", len(batch.Events), "states", len(batch.States))
-	return r.Sender.PostBatch(ctx, batch)
+	return batch
 }
 
-func (r Runner) Run(ctx context.Context) error {
-	interval := r.Interval
-	if interval <= 0 {
-		interval = time.Minute
-	}
-	r.logRunError(r.Once(ctx))
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			r.logRunError(r.Once(ctx))
-		}
-	}
+// Scope is the shared resource, dimensions and timestamp of one cycle.
+func (r *Runner) Scope(ts time.Time) Scope {
+	return Scope{Resource: r.Resource, Dimensions: r.Dimensions, Timestamp: ts.UTC()}
 }
 
-func (r Runner) logRunError(err error) {
-	if err == nil {
-		return
+// due allows half an interval of jitter so a cadence is not skipped a tick late.
+func (r *Runner) due(c Collector, now time.Time) bool {
+	cadence := cadenceOf(c)
+	if cadence <= r.Interval {
+		return true
 	}
-	if r.Logger != nil {
-		r.Logger.Error("pulse push failed", "err", err)
+	last, ok := r.lastRun[c.Name()]
+	return !ok || now.Sub(last) >= cadence-r.Interval/2
+}
+
+func truncate(value string, limit int) string {
+	if runes := []rune(value); len(runes) > limit {
+		return string(runes[:limit]) + "…"
 	}
+	return value
 }

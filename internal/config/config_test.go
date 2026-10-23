@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -372,6 +373,70 @@ func TestLoadFileRejectsLegacyAndUnknownConfig(t *testing.T) {
 		}
 		if _, err := LoadFile(path, true); err == nil {
 			t.Fatal("unknown config accepted")
+		}
+	}
+}
+
+func TestResolveReadsPrivateTokenFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "token")
+	if err := os.WriteFile(path, []byte("file-secret\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	base := Config{Pulse: PulseConfig{IngestURL: "https://example.com/api/pulse/ingest", IngestTokenFile: path}}
+	cfg, err := Resolve(base, Overlay{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Pulse.IngestToken != "file-secret" {
+		t.Fatalf("token = %q", cfg.Pulse.IngestToken)
+	}
+	// The environment token replaces the configured file.
+	cfg, err = Resolve(base, Overlay{IngestToken: "env-secret"})
+	if err != nil || cfg.Pulse.IngestToken != "env-secret" {
+		t.Fatalf("env override: %q %v", cfg.Pulse.IngestToken, err)
+	}
+	if err := os.Chmod(path, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Resolve(base, Overlay{}); err == nil || !strings.Contains(err.Error(), "other users") {
+		t.Fatalf("world-readable token accepted: %v", err)
+	}
+	both := Config{Pulse: PulseConfig{IngestURL: "https://example.com/api/pulse/ingest", IngestToken: "a", IngestTokenFile: path}}
+	if _, err := Resolve(both, Overlay{}); err == nil {
+		t.Fatal("token and token file accepted together")
+	}
+	if err := os.WriteFile(path, []byte("two tokens\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Resolve(base, Overlay{}); err == nil {
+		t.Fatal("malformed token file accepted")
+	}
+}
+
+func TestResolveUsesSystemdCredential(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, CredentialName), []byte("cred-secret"), 0400); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CREDENTIALS_DIRECTORY", dir)
+	cfg, err := Resolve(Config{Pulse: PulseConfig{IngestURL: "https://example.com/api/pulse/ingest"}}, Overlay{})
+	if err != nil || cfg.Pulse.IngestToken != "cred-secret" {
+		t.Fatalf("credential: %q %v", cfg.Pulse.IngestToken, err)
+	}
+}
+
+func TestResolveLocalSkipsTokenFilesAndCredentials(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CREDENTIALS_DIRECTORY", dir)
+	for _, path := range []string{filepath.Join(dir, "missing-token"), ""} {
+		base := Config{Pulse: PulseConfig{IngestURL: "https://example.com/api/pulse/ingest", IngestTokenFile: path}}
+		cfg, err := Resolve(base, Overlay{AllowMissingPulse: true})
+		if err != nil || cfg.Pulse.IngestToken != "" {
+			t.Fatalf("local resolution: token=%q err=%v", cfg.Pulse.IngestToken, err)
+		}
+		if _, err := Resolve(base, Overlay{}); err == nil {
+			t.Fatal("non-local resolution accepted missing token file/credential")
 		}
 	}
 }

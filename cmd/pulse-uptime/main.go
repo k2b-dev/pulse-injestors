@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/alecthomas/kong"
 
+	"github.com/k2b-dev/pulse-injestors/internal/agent"
 	"github.com/k2b-dev/pulse-injestors/internal/config"
 	"github.com/k2b-dev/pulse-injestors/internal/entity"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/uptime"
@@ -23,13 +23,13 @@ import (
 var version = "dev"
 
 type cli struct {
-	Config string `name:"config" help:"TOML config path. Defaults to /etc/pulse/ingestor.toml when present." env:"PULSE_CONFIG"`
+	Config string `name:"config" help:"TOML config path. Defaults to /etc/pulse/pulse-uptime.toml when present." env:"PULSE_CONFIG"`
 
-	IngestURL     string   `name:"ingest-url" help:"Pulse ingest endpoint URL." env:"PULSE_INGEST_URL"`
-	IngestToken   string   `name:"ingest-token" help:"Pulse ingest bearer token." env:"PULSE_INGEST_TOKEN"`
-	ResourceID    string   `name:"resource-id" help:"Stable uptime probe id. Defaults to hostname." env:"PULSE_RESOURCE_ID"`
-	ResourceLabel string   `name:"resource-label" help:"Human-readable uptime probe label. Defaults to hostname." env:"PULSE_RESOURCE_LABEL"`
-	Dimensions    []string `name:"dimension" help:"Bounded global dimension as key=value. Repeat for multiple values." env:"PULSE_DIMENSIONS" sep:","`
+	IngestURL       string   `name:"ingest-url" help:"Pulse ingest endpoint URL." env:"PULSE_INGEST_URL"`
+	IngestTokenFile string   `name:"ingest-token-file" help:"Private file with the Pulse source token. PULSE_INGEST_TOKEN is also read." env:"PULSE_INGEST_TOKEN_FILE"`
+	ResourceID      string   `name:"resource-id" help:"Stable uptime probe id. Defaults to hostname." env:"PULSE_RESOURCE_ID"`
+	ResourceLabel   string   `name:"resource-label" help:"Human-readable uptime probe label. Defaults to hostname." env:"PULSE_RESOURCE_LABEL"`
+	Dimensions      []string `name:"dimension" help:"Bounded global dimension as key=value. Repeat for multiple values." env:"PULSE_DIMENSIONS" sep:","`
 
 	IntervalSeconds         int    `name:"interval-seconds" help:"Collection interval for run mode." env:"PULSE_INTERVAL_SECONDS"`
 	CollectorTimeoutSeconds int    `name:"collector-timeout-seconds" help:"Overall timeout for the uptime collector in seconds." env:"PULSE_COLLECTOR_TIMEOUT_SECONDS"`
@@ -87,7 +87,7 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	runner := monitoring.Runner{
+	runner := &monitoring.Runner{
 		Resource: pulse.ResourceRef{Type: "uptime-probe", ID: cfg.Resource.ID, Label: cfg.Resource.Label},
 		Dimensions: monitoring.MergeDimensions(cfg.Dimensions, map[string]string{
 			"probe": cfg.Resource.ID,
@@ -97,23 +97,24 @@ func main() {
 			Concurrency: cfg.Uptime.Concurrency,
 			Timeout:     cfg.UptimeTimeout(),
 		}},
-		Sender:   sender(c, cfg, log),
 		Timeout:  cfg.CollectorTimeout(),
 		Interval: cfg.RunnerInterval(),
 		Logger:   log,
 	}
 
-	switch kctx.Command() {
-	case "run":
-		if err := runner.Run(ctx); err != nil && ctx.Err() == nil {
-			log.Error("run", "err", err)
-			os.Exit(1)
-		}
-	default:
-		if err := runner.Once(ctx); err != nil {
-			log.Error("once", "err", err)
-			os.Exit(1)
-		}
+	err = agent.Run(ctx, agent.Options{
+		Name:    "pulse-uptime",
+		Version: version,
+		Command: kctx.Command(),
+		Local:   c.Local,
+		Pretty:  c.Pretty,
+		Config:  cfg,
+		Runner:  runner,
+		Logger:  log,
+	})
+	if err != nil && ctx.Err() == nil {
+		log.Error(kctx.Command(), "err", err)
+		os.Exit(1)
 	}
 }
 
@@ -121,7 +122,7 @@ func loadConfig(c cli) (config.Config, error) {
 	cfgPath := c.Config
 	explicitConfig := cfgPath != ""
 	if cfgPath == "" {
-		cfgPath = config.DefaultConfigPath
+		cfgPath = config.DefaultConfigPath("pulse-uptime")
 	}
 	fileCfg, err := config.LoadFile(cfgPath, explicitConfig)
 	if err != nil {
@@ -136,7 +137,8 @@ func loadConfig(c cli) (config.Config, error) {
 		SpoolMaxBytes:           c.SpoolMaxBytes,
 		ConfigPath:              cfgPath,
 		IngestURL:               c.IngestURL,
-		IngestToken:             c.IngestToken,
+		IngestToken:             os.Getenv("PULSE_INGEST_TOKEN"),
+		IngestTokenFile:         c.IngestTokenFile,
 		ResourceID:              c.ResourceID,
 		ResourceLabel:           c.ResourceLabel,
 		Dimensions:              dimensions,
@@ -192,20 +194,4 @@ func configuredTargets(cfg config.Config) ([]uptime.Target, error) {
 		return nil, fmt.Errorf("at least one uptime target is required")
 	}
 	return targets, nil
-}
-
-func sender(c cli, cfg config.Config, log *slog.Logger) monitoring.Sender {
-	if c.Local {
-		return monitoring.StdoutSender{Writer: os.Stdout, Pretty: true, Report: c.Pretty}
-	}
-	return pulse.Client{
-		SpoolDir:       cfg.Pulse.SpoolDir,
-		SpoolMaxBytes:  cfg.Pulse.SpoolMaxBytes,
-		URL:            cfg.Pulse.IngestURL,
-		Token:          cfg.Pulse.IngestToken,
-		HTTPClient:     &http.Client{Timeout: cfg.HTTPTimeout()},
-		MaxRetries:     cfg.HTTP.MaxRetries,
-		InitialBackoff: cfg.InitialBackoff(),
-		Logger:         log,
-	}
 }

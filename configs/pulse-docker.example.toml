@@ -1,6 +1,8 @@
 [pulse]
 ingest_url = "https://pulse.example.com/api/pulse/ingest"
-ingest_token = "replace-me"
+# One line with the source token, mode 0600. Under systemd the service
+# loads it as a credential instead; see the installation guide.
+ingest_token_file = "/run/secrets/pulse-ingest-token"
 # Explicit 64 MiB disk budget; size for measured output and tolerated outage.
 spool_dir = "/var/lib/pulse/pulse-docker"
 spool_max_bytes = 67108864
