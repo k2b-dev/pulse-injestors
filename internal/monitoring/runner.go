@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/k2b-dev/pulse-injestors/internal/pulse"
@@ -89,6 +90,7 @@ type Runner struct {
 	Logger     *slog.Logger
 	Now        func() time.Time
 
+	mu          sync.Mutex // protects cadence bookkeeping shared by both lanes
 	lastRun     map[string]time.Time
 	lastTimeout map[string]time.Time
 }
@@ -102,7 +104,7 @@ func (r *Runner) collectorTimeout(c Collector) time.Duration {
 
 // MaxCycleTimeout bounds a cycle containing every collector. Each collector
 // gets its full budget even after earlier collectors have used theirs.
-// The watchdog must allow this same worst-case collection duration.
+// Service watchdog liveness uses FastCycleTimeout instead.
 func (r *Runner) MaxCycleTimeout() time.Duration {
 	var total time.Duration
 	for _, c := range r.Collectors {
@@ -119,9 +121,39 @@ func (r *Runner) Once(ctx context.Context) error {
 	return r.Sender.PostBatch(ctx, r.Collect(ctx, true))
 }
 
+// Lane selects independent service collection work.
+type Lane int
+
+const (
+	AllLane Lane = iota
+	FastLane
+	SlowLane
+)
+
+func (r *Runner) inLane(c Collector, lane Lane) bool {
+	return lane == AllLane || (cadenceOf(c) <= r.Interval) == (lane == FastLane)
+}
+
+// FastCycleTimeout is the service health lane's total budget.
+func (r *Runner) FastCycleTimeout() time.Duration { return r.Interval }
+
+// CollectSlow emits each completed slow collector immediately. Call it from
+// one worker; it can run concurrently with Collect selecting FastLane.
+func (r *Runner) CollectSlow(ctx context.Context, emit func(pulse.Batch)) {
+	r.collect(ctx, false, SlowLane, emit)
+}
+
 // Collect runs the collectors that are due, or all of them, within one
 // cycle budget. Collector failures become ingestor.collector.* signals.
-func (r *Runner) Collect(ctx context.Context, all bool) pulse.Batch {
+func (r *Runner) Collect(ctx context.Context, all bool, lanes ...Lane) pulse.Batch {
+	lane := AllLane
+	if len(lanes) > 0 {
+		lane = lanes[0]
+	}
+	return r.collect(ctx, all, lane, nil)
+}
+
+func (r *Runner) collect(ctx context.Context, all bool, lane Lane, emit func(pulse.Batch)) pulse.Batch {
 	log := r.Logger
 	if log == nil {
 		log = slog.Default()
@@ -130,25 +162,33 @@ func (r *Runner) Collect(ctx context.Context, all bool) pulse.Batch {
 	if r.Now != nil {
 		now = r.Now
 	}
+	r.mu.Lock()
 	if r.lastRun == nil {
 		r.lastRun = map[string]time.Time{}
 	}
+	r.mu.Unlock()
 	scope := r.Scope(now())
 	// Only due collectors may extend this cycle. Once includes all collectors.
 	var cycleBudget time.Duration
 	for _, c := range r.Collectors {
-		if all || r.due(c, scope.Timestamp) {
+		if r.inLane(c, lane) && (all || r.due(c, scope.Timestamp)) {
 			cycleBudget += max(0, r.collectorTimeout(c))
 		}
 	}
 	cycleBudget = max(r.Interval, cycleBudget)
+	if lane == FastLane {
+		cycleBudget = r.FastCycleTimeout()
+	}
+	// Slow collectors get individual deadlines, with no shared cycle deadline.
+	if lane == SlowLane {
+		cycleBudget = 0
+	}
 	if cycleBudget > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, cycleBudget)
 		defer cancel()
 	}
 	batch := pulse.Batch{Metrics: []pulse.Metric{}, Events: []pulse.Event{}, States: []pulse.State{}}
-	builder := NewBuilder(scope)
 
 	// Health collectors must run before work that can consume the cycle budget.
 	collectors := append([]Collector(nil), r.Collectors...)
@@ -159,9 +199,10 @@ func (r *Runner) Collect(ctx context.Context, all bool) pulse.Batch {
 		if ctx.Err() != nil {
 			break
 		}
-		if !all && !r.due(collector, scope.Timestamp) {
+		if !r.inLane(collector, lane) || (!all && !r.due(collector, scope.Timestamp)) {
 			continue
 		}
+		builder := NewBuilder(scope)
 		collectCtx := ctx
 		cancel := func() {}
 		if timeout := r.collectorTimeout(collector); timeout > 0 {
@@ -178,6 +219,7 @@ func (r *Runner) Collect(ctx context.Context, all bool) pulse.Batch {
 		} else {
 			batch = candidate
 		}
+		r.mu.Lock()
 		if err != nil {
 			// Retrying a long timed-out phase every minute can monopolize the
 			// process. Keep its configured cadence; ordinary failures retry next tick.
@@ -192,13 +234,18 @@ func (r *Runner) Collect(ctx context.Context, all bool) pulse.Batch {
 			builder.EventDetails("ingestor.collector.failed", map[string]string{"collector": collector.Name()}, EventDetails{
 				Attributes: map[string]any{"error": truncate(err.Error(), 2000)},
 			})
-			continue
+		} else {
+			delete(r.lastTimeout, collector.Name())
+			r.lastRun[collector.Name()] = scope.Timestamp
+			builder.State("ingestor.collector.ok", true, map[string]string{"collector": collector.Name()})
 		}
-		delete(r.lastTimeout, collector.Name())
-		r.lastRun[collector.Name()] = scope.Timestamp
-		builder.State("ingestor.collector.ok", true, map[string]string{"collector": collector.Name()})
+		r.mu.Unlock()
+		Merge(&batch, builder.Batch())
+		if emit != nil {
+			emit(batch)
+			batch = pulse.Batch{}
+		}
 	}
-	Merge(&batch, builder.Batch())
 	return batch
 }
 
@@ -209,6 +256,8 @@ func (r *Runner) Scope(ts time.Time) Scope {
 
 // due allows half an interval of jitter so a cadence is not skipped a tick late.
 func (r *Runner) due(c Collector, now time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	cadence := cadenceOf(c)
 	if cadence <= r.Interval {
 		return true

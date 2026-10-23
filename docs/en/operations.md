@@ -10,7 +10,7 @@ updated: 2026-10-23
 
 # Operations
 
-Native systemd services and macOS LaunchAgents execute `run`. Collection queues telemetry every interval while a separate delivery loop sends the oldest queued parts. A slow or paused Pulse does not delay collection. cron remains a fallback for `once`.
+Native systemd services and macOS LaunchAgents execute `run`. Collection queues telemetry every interval while a separate delivery loop sends the oldest queued parts. A slow or paused Pulse does not delay collection. Collectors whose cadence is at most the interval share a fast lane bounded by that interval. Less frequent collectors run sequentially in a separate lane with their own timeouts; each result is queued as soon as it finishes. Heartbeats continue with the fast lane during long scans. cron remains a fallback for `once`.
 
 ## Run a manual collection
 
@@ -51,9 +51,9 @@ journalctl -u pulse-linux.service -n 100
 
 Replace `pulse-linux` with the installed binary name. Reinstalling removes the old `.timer` unit.
 
-The service uses `Type=notify` with readiness notifications and a fixed `WatchdogSec=120s`. A separate loop pings the watchdog while the time since the last completed collection stays within 2 × interval + maximum cycle budget + 60 seconds (the cycle budget is at least one interval and includes the sum of configured collector timeout budgets). If collection stalls beyond that limit, pings stop and systemd restarts the service after the watchdog timeout. `Restart=always` also restarts an exited process. The installer also sets:
+The service uses `Type=notify` with readiness notifications and a fixed `WatchdogSec=120s`. A separate loop pings the watchdog while the time since the last completed fast collection stays within 2 × interval + fast budget + 60 seconds (the fast budget is one interval). If collection stalls beyond that limit, pings stop and systemd restarts the service after the watchdog timeout. `Restart=always` also restarts an exited process. The installer also sets:
 
-- `NoNewPrivileges=yes` and `MemoryMax=256M`;
+- `NoNewPrivileges=yes` and `MemoryMax=512M` for Proxmox VE and PBS, or `256M` for other ingestors;
 - `StateDirectory=pulse/<binary>` with mode `0700`;
 - `ProtectSystem=full` for root ingestors;
 - `DynamicUser=yes` and `ProtectSystem=strict` for `pulse-uptime`.
@@ -113,7 +113,7 @@ curl -fsSL \
   | sh -s -- --uninstall --ingestor=linux
 ```
 
-This removes the managed binary and scheduler. The config, token file, spool, and data already in Pulse remain. Add `--purge` to discard the configured spool (including queued data and the state cache) and delete both managed and configured token files. TOML and data in Pulse remain. Purge requires plain double-quoted absolute paths in `[pulse]`; unsafe or ambiguous paths fail before removal. Do not purge a shared token while another ingestor uses it. Revoke retired source tokens in Pulse separately.
+This removes the managed binary and scheduler. The config, token file, spool, and data already in Pulse remain. Add `--purge` to delete known spool files in `/var/lib/pulse/<binary>` on Linux or `~/Library/Application Support/Pulse/<binary>-spool` on macOS, plus the managed `.token` file next to the config. Configured custom spool directories and foreign token files remain untouched. Purge refuses symlinks, including systemd DynamicUser state links; inspect those paths and remove retired data manually. Unknown entries are listed and retained, and directories are removed only when empty. TOML and data in Pulse remain. Revoke retired source tokens in Pulse separately.
 
 ## Operate Docker
 

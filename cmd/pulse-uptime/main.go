@@ -188,9 +188,14 @@ func configuredTargets(cfg config.Config) ([]uptime.Target, error) {
 		for _, record := range target.Records {
 			records = append(records, uptime.Record{Type: strings.ToUpper(record.Type), Expect: record.Expect, Contains: record.Contains})
 		}
+		rate := 200
+		if target.RatePerSecond != nil {
+			rate = *target.RatePerSecond
+		}
 		targets = append(targets, uptime.Target{
-			Cadence: time.Duration(target.CadenceSeconds) * time.Second,
-			Name:    target.Name, Resolver: target.Resolver, Expected: target.Expected, Range: target.Range,
+			RatePerSecond: rate,
+			Cadence:       time.Duration(target.CadenceSeconds) * time.Second,
+			Name:          target.Name, Resolver: target.Resolver, Expected: target.Expected, Range: target.Range,
 			Records: records, CAFile: target.CAFile, ServerName: target.ServerName, WarnDays: target.WarnDays, Lists: target.Lists,
 			ID:             target.ID,
 			Label:          strings.TrimSpace(target.Label),

@@ -36,6 +36,13 @@ func portList(ports []int) string {
 	return strings.Join(values, ",")
 }
 func (c Collector) checkPorts(ctx context.Context, target Target) result {
+	rate := target.RatePerSecond
+	if rate == 0 {
+		rate = 200
+	}
+	if rate < 0 {
+		return result{err: "rate_per_second must be positive"}
+	}
 	lo, hi, err := portRange(target.Range)
 	if err != nil {
 		return result{err: err.Error()}
@@ -93,8 +100,15 @@ func (c Collector) checkPorts(ctx context.Context, target Target) result {
 			}
 		}()
 	}
+	limiter := time.NewTicker(max(time.Nanosecond, time.Second/time.Duration(rate)))
+	defer limiter.Stop()
 dispatch:
 	for port := lo; port <= hi; port++ {
+		select {
+		case <-limiter.C:
+		case <-ctx.Done():
+			break dispatch
+		}
 		select {
 		case jobs <- port:
 		case <-ctx.Done():

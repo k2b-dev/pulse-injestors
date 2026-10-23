@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -77,6 +78,7 @@ type agent struct {
 	stats  *pulse.Stats
 	// lastCycle is the duration of the previous collection.
 	lastCycle time.Duration
+	queueMu   sync.Mutex // serializes state filtering, queueing and committing across lanes
 }
 
 func newAgent(opt Options) (*agent, error) {
@@ -190,16 +192,36 @@ func (a *agent) serve(ctx context.Context) error {
 	watchdogDone := make(chan struct{})
 	go func() {
 		defer close(watchdogDone)
-		watchdogLoop(ctx, os.Getenv("WATCHDOG_USEC"), interval, a.opt.Runner.MaxCycleTimeout(), &lastCompleted)
+		watchdogLoop(ctx, os.Getenv("WATCHDOG_USEC"), interval, a.opt.Runner.FastCycleTimeout(), &lastCompleted)
 	}()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	all := true
+	slowDone := make(chan struct{})
+	go func() {
+		defer close(slowDone)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			a.opt.Runner.CollectSlow(ctx, func(batch pulse.Batch) {
+				if err := a.queue(batch, time.Now(), false); err != nil {
+					a.log.Error("slow collection not queued", "err", err)
+				}
+				select {
+				case wake <- struct{}{}:
+				default:
+				}
+			})
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
 	for {
-		if err := a.collect(ctx, all); err != nil {
+		if err := a.collect(ctx, false, monitoring.FastLane); err != nil {
 			a.log.Error("collection not queued", "err", err)
 		}
-		all = false
 		lastCompleted.Store(time.Now().UnixNano())
 		select {
 		case wake <- struct{}{}:
@@ -208,6 +230,7 @@ func (a *agent) serve(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			<-done
+			<-slowDone
 			<-watchdogDone
 			return nil
 		case <-ticker.C:
@@ -266,11 +289,27 @@ func (a *agent) deliverLoop(ctx context.Context, wake <-chan struct{}) {
 
 // collect builds one batch with self-monitoring, filters unchanged states and
 // queues it. States are marked sent only after the batch is queued.
-func (a *agent) collect(ctx context.Context, all bool) error {
+func (a *agent) collect(ctx context.Context, all bool, lanes ...monitoring.Lane) error {
 	started := time.Now()
-	batch := a.opt.Runner.Collect(ctx, all)
+	batch := a.opt.Runner.Collect(ctx, all, lanes...)
+	if err := a.queue(batch, started, true); err != nil {
+		return err
+	}
+	a.lastCycle = time.Since(started)
+	if a.lastCycle > a.opt.Config.RunnerInterval()*8/10 {
+		a.log.Warn("collection took most of the interval", "duration", a.lastCycle.Round(time.Millisecond))
+	}
+	return nil
+}
+
+// queue is the single transaction boundary for both collection lanes.
+func (a *agent) queue(batch pulse.Batch, started time.Time, self bool) error {
+	a.queueMu.Lock()
+	defer a.queueMu.Unlock()
 	batch.Metrics = a.withoutBlockedMetrics(batch.Metrics, started)
-	monitoring.Merge(&batch, a.selfSignals(started))
+	if self {
+		monitoring.Merge(&batch, a.selfSignals(started))
+	}
 	var commit func()
 	batch.States, commit = a.states.Filter(batch.States, started)
 	parts, err := pulse.SplitBatch(batch)
@@ -283,10 +322,6 @@ func (a *agent) collect(ctx context.Context, all bool) error {
 	commit()
 	if err := a.states.Save(started); err != nil {
 		a.log.Warn("save state cache", "err", err)
-	}
-	a.lastCycle = time.Since(started)
-	if a.lastCycle > a.opt.Config.RunnerInterval()*8/10 {
-		a.log.Warn("collection took most of the interval", "duration", a.lastCycle.Round(time.Millisecond))
 	}
 	return nil
 }

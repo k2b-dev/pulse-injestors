@@ -63,7 +63,7 @@ sudo sh /tmp/pulse-install.sh \
   --scheduler=systemd
 ```
 
-The installer copies the source file to `/etc/pulse/pulse-linux.toml` with mode `0600`. It does not modify the source file or copy a token referenced by it. Set `ingest_token_file` to a durable private file readable by the service. To use the installer's systemd credential wiring, provision the token at `/etc/pulse/pulse-linux.token` before installation. Avoid inline tokens: a supplied TOML file is copied unchanged.
+The installer copies the source file to `/etc/pulse/pulse-linux.toml` with mode `0600`. It does not modify the source file or copy a token referenced by it. Set `ingest_token_file` to a durable private file readable by the service. To use the installer's systemd credential wiring, provision the token at `/etc/pulse/pulse-linux.token` before installation and set `ingest_token_file` to that exact path using a plain double-quoted TOML string. Inline tokens and other token paths are not overridden, even if a managed token file remains from an earlier installation. Avoid inline tokens: a supplied TOML file is copied unchanged.
 
 ### Use provisioning variables
 
@@ -102,7 +102,7 @@ sudo env \
 | `--version` | release version | Install a fixed release instead of `latest`. |
 | `--reconfigure` | flag | Replace an existing config. Without it, upgrades preserve the config. |
 | `--uninstall` | flag | Remove the selected binary and managed scheduler. |
-| `--purge` | flag, requires `--uninstall` | Delete the configured spool/state cache and managed/configured token files. Retain TOML. |
+| `--purge` | flag, requires `--uninstall` | Delete known files in the fixed managed spool and the managed token. Retain TOML and custom paths. |
 | `--unattended` | flag | Disable all prompts. |
 | `--yes` | flag | Accept the final confirmation. |
 
@@ -111,7 +111,7 @@ sudo env \
 - On first enrollment or reconfiguration, the service or cron schedule is enabled only after local collection and the first authenticated push succeed. The installer then prints “set Expected data for this source”.
 - Re-running the installer upgrades the binary, keeps config and token by default, skips the enrollment push, and restarts the service. systemd readiness is checked for up to 60 seconds; a timeout exits nonzero and prints a log command. Verify fresh Pulse data separately.
 - Tokens are not printed or passed as binary arguments.
-- Removing an ingestor preserves config, token, and spool unless `--purge` is supplied. Purge accepts plain double-quoted absolute `[pulse]` paths and refuses ambiguous or unsafe paths. Do not purge a token shared with another ingestor.
+- Removing an ingestor preserves config, token, and spool unless `--purge` is supplied. Purge only cleans the fixed managed spool (`/var/lib/pulse/<binary>` on Linux; `~/Library/Application Support/Pulse/<binary>-spool` on macOS) and the managed token next to the config. It refuses symlinks, retains and reports unknown entries, and leaves all config-derived custom paths untouched.
 - Docker is never installed or modified by this script.
 
 ## Service behavior

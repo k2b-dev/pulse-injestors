@@ -292,3 +292,14 @@ func TestSlowTimeoutKeepsCadenceAndDoesNotShortenFollowingBudgets(t *testing.T) 
 		t.Fatal("timed-out phase never retried")
 	}
 }
+
+func TestFastLaneBudgetExcludesSlowCollectors(t *testing.T) {
+	calls := 0
+	r := Runner{Interval: 20 * time.Millisecond, Timeout: time.Second,
+		Collectors: []Collector{deadlineCollector{&calls}, WithCadence{Collector: deadlineCollector{&calls}, Every: time.Hour}}}
+	started := time.Now()
+	r.Collect(context.Background(), false, FastLane)
+	if calls != 1 || time.Since(started) > 500*time.Millisecond || r.FastCycleTimeout() != r.Interval {
+		t.Fatalf("fast calls=%d duration=%s budget=%s", calls, time.Since(started), r.FastCycleTimeout())
+	}
+}

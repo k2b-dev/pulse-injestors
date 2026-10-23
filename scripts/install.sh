@@ -42,8 +42,8 @@ service. Docker uses the separate Compose deployment and is not supported here.
   --unattended          never prompt; fail when required input is missing
   --reconfigure         replace an existing managed config
   --uninstall           remove the binary and managed scheduler
-  --purge               with --uninstall, also delete spool/state and token files
-                        (configuration is retained)
+  --purge               with --uninstall, delete known managed spool files and
+                        the managed token (config and custom paths are retained)
   -y, --yes             accept confirmation prompts
   -h, --help            show this help
 
@@ -401,76 +401,49 @@ remove_scheduler() {
     fi
 }
 
-# Purge reads only literal paths. Never evaluate TOML as shell or guess at
-# escaped/complex TOML: refuse before stopping the service if paths are unclear.
-purge_config_path() {
-    printf '%s\n' "$PURGE_CONFIG" | awk -v wanted="$1" '
-        /^[[:space:]]*(#|$)/ { next }
-        /^[[:space:]]*\[/ {
-            section = ($0 ~ /^[[:space:]]*\[pulse\][[:space:]]*(#.*)?$/)
-            next
-        }
-        index($0, wanted) {
-            if (!section || seen++) exit 1
-            line = $0
-            sub(/^[[:space:]]*/, "", line)
-            if (line !~ ("^" wanted "[[:space:]]*=")) exit 1
-            sub(/^[^=]*=[[:space:]]*/, "", line)
-            if (line !~ /^"[^"\\]*"[[:space:]]*(#.*)?$/) exit 1
-            sub(/^"/, "", line)
-            sub(/"[[:space:]]*(#.*)?$/, "", line)
-            print line
-        }
-    ' || die "cannot safely read $1 for purge; use a plain double-quoted [pulse] path"
-}
-
-check_purge_path() {
-    validate_single_line "purge path" "$1"
-    case "$1" in
-        ""|/|*/|*/./*|*/../*|*/.|*/..|//*|*//*) die "unsafe purge path: $1" ;;
-        /*/*) ;;
-        *) die "purge needs an absolute file or dedicated spool directory: $1" ;;
-    esac
-    case "$1" in
-        /etc/pulse|/var/lib|/var/lib/pulse|/var/lib/private|/var/lib/private/pulse|"$HOME"|"$PREFIX")
-            die "refusing to purge shared directory: $1" ;;
-    esac
-    for protected in "$CONFIG_PATH" "$BIN_PATH" "$HOME"; do
-        case "$protected" in
-            "$1"|"$1"/*) die "purge path contains protected files: $1" ;;
-        esac
+# Never follow symlinks, including parent directories of managed paths.
+refuse_symlink_path() {
+    checked=$1
+    while [ "$checked" != / ] && [ "$checked" != . ]; do
+        run_root test ! -L "$checked" || die "refusing symlink: $checked"
+        checked=$(dirname "$checked")
     done
 }
 
+purge_spool() {
+    refuse_symlink_path "$1"
+    # Expand globs with the service owner's permissions. Only recognized regular
+    # spool files may be removed; unknown entries and directories stay intact.
+    # shellcheck disable=SC2016
+    run_root sh -eu -c '
+        dir=$1
+        [ -d "$dir" ] || exit 0
+        for entry in "$dir"/* "$dir"/.[!.]* "$dir"/..?* "$dir"/quarantine/* "$dir"/quarantine/.[!.]* "$dir"/quarantine/..?*; do
+            [ ! -L "$entry" ] || { printf "refusing symlink: %s\n" "$entry" >&2; exit 1; }
+        done
+        for entry in "$dir"/*.part "$dir"/.states "$dir"/.binding "$dir"/.lock "$dir"/.pending-* "$dir"/kernel.cursor "$dir"/quarantine/*.json; do
+            [ ! -f "$entry" ] || rm -f -- "$entry"
+        done
+        if [ -d "$dir/quarantine" ]; then
+            rmdir "$dir/quarantine" 2>/dev/null || true
+        fi
+        if ! rmdir "$dir" 2>/dev/null; then
+            printf "left unrecognized spool entries in %s:\n" "$dir"
+            find "$dir" -mindepth 1 -print
+        fi
+    ' sh "$1"
+}
+
 if [ "$UNINSTALL" = "1" ]; then
-    PURGE_SPOOL=""
-    PURGE_TOKEN=""
     if [ "$OS" = "darwin" ]; then
-        DEFAULT_SPOOL="$HOME/Library/Application Support/Pulse/${BINARY}-spool"
+        PURGE_SPOOL="$HOME/Library/Application Support/Pulse/${BINARY}-spool"
     else
-        DEFAULT_SPOOL="/var/lib/pulse/${BINARY}"
+        PURGE_SPOOL="/var/lib/pulse/${BINARY}"
     fi
     if [ "$PURGE" = "1" ]; then
-        if run_root test -f "$CONFIG_PATH"; then
-            PURGE_CONFIG=$(run_root cat "$CONFIG_PATH") || die "cannot read configuration for purge"
-            PURGE_SPOOL=$(purge_config_path spool_dir)
-            PURGE_TOKEN=$(purge_config_path ingest_token_file)
-        fi
-        PURGE_SPOOL=${PURGE_SPOOL:-$DEFAULT_SPOOL}
-        # Resolve systemd DynamicUser symlinks while the unit still exists.
-        check_purge_path "$PURGE_SPOOL"
-        if run_root test -d "$PURGE_SPOOL"; then
-            # The child shell expands its positional argument, never the parent.
-            # shellcheck disable=SC2016
-            resolved=$(run_root sh -c 'cd -P "$1" && pwd -P' sh "$PURGE_SPOOL") ||
-                die "cannot resolve spool directory"
-            check_purge_path "$resolved"
-        fi
-        for token in "$TOKEN_PATH" "$PURGE_TOKEN"; do
-            [ -n "$token" ] || continue
-            check_purge_path "$token"
-            run_root test ! -d "$token" || die "token path is a directory: $token"
-        done
+        refuse_symlink_path "$PURGE_SPOOL"
+        refuse_symlink_path "$TOKEN_PATH"
+        run_root test ! -d "$TOKEN_PATH" || die "token path is a directory: $TOKEN_PATH"
     fi
     if [ "$PURGE" = "1" ] && [ "$OS" = "linux" ] &&
         run_root test -f "${SYSTEMD_DIR}/${SERVICE_ID}.service"; then
@@ -480,19 +453,9 @@ if [ "$UNINSTALL" = "1" ]; then
     remove_root_file "$BIN_PATH"
     log "removed $BINARY and its managed scheduler"
     if [ "$PURGE" = "1" ]; then
-        if run_root test -d "$PURGE_SPOOL"; then
-            # The child shell expands its positional argument, never the parent.
-            # shellcheck disable=SC2016
-            resolved=$(run_root sh -c 'cd -P "$1" && pwd -P' sh "$PURGE_SPOOL") ||
-                die "cannot resolve spool directory"
-            check_purge_path "$resolved"
-            run_root rm -rf -- "$resolved"
-        fi
-        # Also remove a dangling DynamicUser symlink.
-        run_root rm -f -- "$PURGE_SPOOL"
+        purge_spool "$PURGE_SPOOL"
         remove_root_file "$TOKEN_PATH"
-        [ -z "$PURGE_TOKEN" ] || remove_root_file "$PURGE_TOKEN"
-        log "purged spool/state directories and token files; retained configuration at $CONFIG_PATH"
+        log "purged managed spool entries and token file; retained configuration at $CONFIG_PATH"
     else
         log "preserved configuration at $CONFIG_PATH, token files, and spool/state directories"
     fi
@@ -694,6 +657,33 @@ else
     log "updating enrolled host; first delivery check skipped"
 fi
 
+# Recognize only unambiguous literal [pulse] paths. An inline token or complex
+# TOML keeps its own credential configuration, without an environment override.
+config_uses_managed_token() {
+    configured_token=$(run_root cat "$CONFIG_PATH" | awk '
+        /^[[:space:]]*(#|$)/ { next }
+        /^[[:space:]]*\[/ {
+            section = ($0 ~ /^[[:space:]]*\[pulse\][[:space:]]*(#.*)?$/)
+            next
+        }
+        !section { next }
+        /^[[:space:]]*ingest_token[[:space:]]*=/ { invalid = 1 }
+        /^[[:space:]]*ingest_token_file[[:space:]]*=/ {
+            if (seen++) invalid = 1
+            line = $0
+            sub(/^[^=]*=[[:space:]]*/, "", line)
+            if (line !~ /^"[^"\\]*"[[:space:]]*(#.*)?$/) { invalid = 1; next }
+            sub(/^"/, "", line)
+            sub(/"[[:space:]]*(#.*)?$/, "", line)
+            value = line
+            next
+        }
+        /ingest_token/ { invalid = 1 }
+        END { if (invalid || !seen) exit 1; print value }
+    ') || return 1
+    [ "$configured_token" = "$TOKEN_PATH" ]
+}
+
 install_systemd() {
     service_file="${TMP}/${SERVICE_ID}.service"
     # Root collectors read hardware and package state; uptime only needs the network.
@@ -706,10 +696,14 @@ ProtectHome=yes"
 ProtectHome=read-only"
     fi
     credential=""
-    if token_file_exists; then
+    if token_file_exists && config_uses_managed_token; then
         credential="LoadCredential=${CREDENTIAL_NAME}:${TOKEN_PATH}
 Environment=PULSE_INGEST_TOKEN_FILE=%d/${CREDENTIAL_NAME}"
     fi
+    memory_max=256M
+    case "$BINARY" in
+        pulse-proxmox|pulse-proxmox-backup-server) memory_max=512M ;;
+    esac
     cat > "$service_file" <<EOF
 [Unit]
 Description=Pulse ${INGESTOR} telemetry
@@ -732,7 +726,7 @@ ${identity}
 UMask=0077
 Nice=10
 IOSchedulingClass=idle
-MemoryMax=256M
+MemoryMax=${memory_max}
 TasksMax=64
 NoNewPrivileges=yes
 PrivateTmp=yes

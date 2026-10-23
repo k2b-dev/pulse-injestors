@@ -1,8 +1,12 @@
 package monitoring
 
 import (
+	"github.com/k2b-dev/pulse-injestors/internal/validation"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/k2b-dev/pulse-injestors/internal/pulse"
 )
@@ -80,5 +84,44 @@ func TestInjectUsesUTCAndDefaultMetricType(t *testing.T) {
 		if got.Location() != time.UTC || !got.Equal(ts) {
 			t.Fatalf("timestamp: %v", got)
 		}
+	}
+}
+
+func TestBuilderAndInjectBoundLabelsAndDimensionsWithoutChangingIDs(t *testing.T) {
+	ts := time.Date(2026, 10, 23, 0, 0, 0, 0, time.UTC)
+	resource := pulse.ResourceRef{Type: "host", ID: "unchanged", Label: strings.Repeat("😀", 121)}
+	dims := map[string]string{"path": strings.Repeat("界😀", 200)}
+	scope := Scope{Resource: resource, Dimensions: dims, Timestamp: ts}
+	builder := NewBuilder(scope)
+	builder.Metric("m", "gauge", 1, "", nil)
+	builder.Event("e", nil, nil)
+	builder.State("s", true, nil)
+	raw := pulse.Batch{
+		Metrics: []pulse.Metric{{Name: "m", Resource: &resource, Dimensions: dims}},
+		Events:  []pulse.Event{{Kind: "e", Resource: &resource, Dimensions: dims}},
+		States:  []pulse.State{{Key: "s", Value: true, Resource: &resource, Dimensions: dims}},
+	}
+	for _, batch := range []pulse.Batch{builder.Batch(), Inject(raw, scope, nil)} {
+		if err := validation.Batch(batch); err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range []*pulse.ResourceRef{batch.Metrics[0].Resource, batch.Events[0].Resource, batch.States[0].Resource} {
+			if r.ID != "unchanged" || len(utf16.Encode([]rune(r.Label))) != 240 || !utf8.ValidString(r.Label) {
+				t.Fatal(r)
+			}
+		}
+		for _, d := range []map[string]string{batch.Metrics[0].Dimensions, batch.Events[0].Dimensions, batch.States[0].Dimensions} {
+			if len(utf16.Encode([]rune(d["path"]))) > 500 || !utf8.ValidString(d["path"]) {
+				t.Fatal(d)
+			}
+		}
+	}
+	if resource.Label != strings.Repeat("😀", 121) || dims["path"] != strings.Repeat("界😀", 200) {
+		t.Fatal("mutated collector-owned data")
+	}
+	resource.ID = strings.Repeat("x", 501)
+	batch := Inject(pulse.Batch{States: []pulse.State{{Key: "s", Value: true, Resource: &resource}}}, scope, nil)
+	if batch.States[0].Resource.ID != resource.ID || validation.Batch(batch) == nil {
+		t.Fatal("overlong ID silently changed or accepted")
 	}
 }

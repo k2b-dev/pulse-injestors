@@ -2,7 +2,10 @@ package pbs
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
+	"github.com/k2b-dev/pulse-injestors/internal/validation"
 	"reflect"
 	"strings"
 	"testing"
@@ -221,5 +224,43 @@ func TestDefaultGroupTimeouts(t *testing.T) {
 	}
 	if runner.timeout > 120*time.Second || runner.timeout < 119*time.Second {
 		t.Fatal(runner.timeout)
+	}
+}
+
+func TestDeepNamespaceSurvivesRunnerValidation(t *testing.T) {
+	ns := strings.TrimSuffix(strings.Repeat(strings.Repeat("n", 80)+"/", 7), "/")
+	runner := runnerFunc(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		switch args[2] {
+		case "/admin/datastore":
+			return []byte(`[{"store":"main"}]`), nil
+		case "/admin/datastore/main/namespace":
+			return json.Marshal([]map[string]string{{"ns": ns}})
+		case "/admin/datastore/main/groups":
+			return []byte(`[{"backup-type":"host","backup-id":"client","last-backup":1700000900,"backup-count":7}]`), nil
+		default:
+			return nil, fmt.Errorf("unexpected API path: %s", args[2])
+		}
+	})
+	scope := reviewScope()
+	r := monitoring.Runner{Resource: scope.Resource, Dimensions: scope.Dimensions, Now: func() time.Time { return scope.Timestamp },
+		Collectors: []monitoring.Collector{&Collector{Part: "groups", Runner: runner}}}
+	batch := r.Collect(context.Background(), true)
+	if err := validation.Batch(batch); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, state := range batch.States {
+		if state.Key == "ingestor.collector.ok" && state.Value != true {
+			t.Fatalf("collector rejected: %+v", batch.Events)
+		}
+		if state.Resource != nil && state.Resource.Type == "pbs-backup-group" && state.Dimensions["namespace"] != "" {
+			found = true
+			if !strings.HasPrefix(state.Resource.ID, "sha256:") || len(state.Dimensions["namespace"]) != 500 || len(state.Resource.Label) > 240 {
+				t.Fatal(state)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("deep namespace group dropped")
 	}
 }

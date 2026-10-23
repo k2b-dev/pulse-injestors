@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -36,17 +37,17 @@ func TestWatchdogIgnoresInvalidEnvironment(t *testing.T) {
 	}
 }
 
-func TestWatchdogAllowsLongCollectorBudget(t *testing.T) {
+func TestWatchdogUsesOnlyFastLaneBudget(t *testing.T) {
 	last := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	interval, budget := time.Minute, 180*time.Second
-	limit := 2*interval + budget + time.Minute
-	if !watchdogAlive(last, last.Add(limit), interval, budget) {
-		t.Fatal("long collection declared stalled")
+	runner := monitoring.Runner{Interval: time.Minute, Collectors: []monitoring.Collector{
+		slowServiceCollector{"slow", 5 * time.Second},
+	}}
+	budget := runner.FastCycleTimeout()
+	limit := 2*runner.Interval + budget + time.Minute
+	if budget != time.Minute || !watchdogAlive(last, last.Add(limit), runner.Interval, budget) {
+		t.Fatal("fast lane grace period changed")
 	}
-	if watchdogAlive(last, last.Add(limit+time.Nanosecond), interval, budget) {
-		t.Fatal("stalled collection kept alive")
-	}
-	if watchdogAlive(last, last.Add(limit), interval, 60*time.Second) {
-		t.Fatal("fixture does not distinguish generic timeout")
+	if watchdogAlive(last, last.Add(limit+time.Nanosecond), runner.Interval, budget) {
+		t.Fatal("slow collector extended stalled fast lane liveness")
 	}
 }
