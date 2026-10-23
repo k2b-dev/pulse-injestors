@@ -86,7 +86,7 @@ After the spool drops or rejects data, the state cache is cleared so all states 
 
 ## Collection budget
 
-`runner.interval_seconds` bounds each collection cycle. `collector_timeout_seconds` also limits each collector. When the cycle deadline passes, remaining collectors are skipped; already collected observations can still be queued. Filesystem writes finish to preserve data. Keep normal collection comfortably below the interval.
+The collection cycle budget is the larger of `runner.interval_seconds` and the longest timeout among collectors due in that cycle. `collector_timeout_seconds` is the default per-collector limit; a collector can provide its own budget, such as Proxmox backup scans. Fast health collectors run first, and all collectors share the cycle deadline. When the cycle deadline passes, remaining collectors are skipped; already collected observations can still be queued. Filesystem writes finish to preserve data. Keep normal collection comfortably below the interval.
 
 `run` honors collector cadences where a collector defines one. `once` collects all enabled collectors within the cycle budget, queues the result, then delivers with at most `http.max_retries` retries. Its delivery phase has a separate deadline of one runner interval. Undelivered persistent parts stay queued for the next run; memory-only parts are lost when it exits.
 

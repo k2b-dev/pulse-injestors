@@ -519,7 +519,7 @@ func TestReservedHostDimension(t *testing.T) {
 
 func TestProxmoxPBSListTimeouts(t *testing.T) {
 	cfg, err := Resolve(Config{}, Overlay{AllowMissingPulse: true})
-	if err != nil || cfg.Proxmox.ListTimeoutSeconds != 60 || cfg.PBS.ListTimeoutSeconds != 60 {
+	if err != nil || cfg.Proxmox.ListTimeoutSeconds != 120 || cfg.PBS.ListTimeoutSeconds != 60 {
 		t.Fatal(cfg.Proxmox, cfg.PBS, err)
 	}
 	for _, section := range []string{"proxmox", "pbs"} {
@@ -546,5 +546,35 @@ func TestProxmoxPBSListTimeouts(t *testing.T) {
 				t.Fatal(resolved.Proxmox, resolved.PBS)
 			}
 		}
+	}
+}
+
+func TestProxmoxBackupTimeoutConfig(t *testing.T) {
+	for _, seconds := range []int{-1, 0, 240} {
+		path := filepath.Join(t.TempDir(), "config.toml")
+		if err := os.WriteFile(path, []byte(fmt.Sprintf("[proxmox]\nbackup_timeout_seconds = %d\n", seconds)), 0600); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := LoadFile(path, true)
+		if seconds <= 0 {
+			if err == nil {
+				t.Fatal("nonpositive backup timeout accepted")
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Resolve(raw, Overlay{AllowMissingPulse: true})
+		if err != nil || cfg.Proxmox.BackupTimeoutSeconds != seconds {
+			t.Fatalf("config=%+v err=%v", cfg.Proxmox, err)
+		}
+	}
+	cfg, err := Resolve(Config{}, Overlay{AllowMissingPulse: true})
+	if err != nil || cfg.Proxmox.BackupTimeoutSeconds != 180 || cfg.Proxmox.ListTimeoutSeconds != 120 {
+		t.Fatalf("defaults=%+v err=%v", cfg.Proxmox, err)
+	}
+	if _, err := Resolve(Config{Proxmox: ProxmoxConfig{BackupTimeoutSeconds: -1}}, Overlay{AllowMissingPulse: true}); err == nil {
+		t.Fatal("negative timeout accepted")
 	}
 }

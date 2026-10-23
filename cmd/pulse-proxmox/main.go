@@ -162,7 +162,7 @@ func loadConfig(c cli) (config.Config, error) {
 }
 
 func collectors(cfg config.Config) []monitoring.Collector {
-	parts := (proxmox.Collector{PveshPath: cfg.Proxmox.PveshPath, Timeout: cfg.ProxmoxTimeout(), ListTimeout: time.Duration(cfg.Proxmox.ListTimeoutSeconds) * time.Second, EnableCephAPI: cfg.ProxmoxCephAPIEnabled()}).Collectors()
+	parts := (proxmox.Collector{PveshPath: cfg.Proxmox.PveshPath, Timeout: cfg.ProxmoxTimeout(), ListTimeout: time.Duration(cfg.Proxmox.ListTimeoutSeconds) * time.Second, BackupTimeout: time.Duration(cfg.Proxmox.BackupTimeoutSeconds) * time.Second, EnableCephAPI: cfg.ProxmoxCephAPIEnabled()}).Collectors()
 	out := make([]monitoring.Collector, 0, len(parts))
 	for _, part := range parts {
 		out = append(out, monitoring.ScopedCollector{Resource: pulse.ResourceRef{Type: "proxmox-node", ID: cfg.Resource.ID, Label: cfg.Resource.Label}, Collector: part})

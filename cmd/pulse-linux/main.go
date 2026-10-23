@@ -20,18 +20,23 @@ import (
 	"github.com/k2b-dev/pulse-injestors/internal/modules/btrfs"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/ceph"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/certificates"
+	"github.com/k2b-dev/pulse-injestors/internal/modules/clickhouse"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/diskhealth"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/diskio"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/filesystem"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/inventory"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/kernel"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/linuxruntime"
+	"github.com/k2b-dev/pulse-injestors/internal/modules/nats"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/network"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/packages"
+	"github.com/k2b-dev/pulse-injestors/internal/modules/patroni"
+	"github.com/k2b-dev/pulse-injestors/internal/modules/postgres"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/script"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/system"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/systemd"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/thermal"
+	"github.com/k2b-dev/pulse-injestors/internal/modules/valkey"
 	"github.com/k2b-dev/pulse-injestors/internal/modules/zfs"
 	"github.com/k2b-dev/pulse-injestors/internal/monitoring"
 	"github.com/k2b-dev/pulse-injestors/internal/pulse"
@@ -61,7 +66,7 @@ type cli struct {
 	HostRoot    string `name:"host-root" help:"Host root filesystem." env:"PULSE_HOST_ROOT"`
 	CPUSampleMS int    `name:"cpu-sample-ms" help:"CPU usage sample window in milliseconds." env:"PULSE_HOST_CPU_SAMPLE_MS"`
 
-	LinuxProfile             string `name:"linux-profile" help:"Linux monitoring profile: server, desktop, docker-host, proxmox-node, pbs." env:"PULSE_LINUX_PROFILE"`
+	LinuxProfile             string `name:"linux-profile" help:"Linux monitoring profile: server, desktop, docker-host, proxmox-node, pbs, postgres, pg-edge, nats, nats-edge, valkey, clickhouse." env:"PULSE_LINUX_PROFILE"`
 	SystemdUnits             string `name:"systemd-units" help:"Comma-separated systemd units to monitor." env:"PULSE_LINUX_SYSTEMD_UNITS"`
 	PackageTimeoutSeconds    int    `name:"package-timeout-seconds" help:"Linux package update timeout in seconds." env:"PULSE_LINUX_PACKAGE_TIMEOUT_SECONDS"`
 	DiskHealthTimeoutSeconds int    `name:"disk-health-timeout-seconds" help:"SMART/NVMe disk health timeout in seconds." env:"PULSE_LINUX_DISK_HEALTH_TIMEOUT_SECONDS"`
@@ -225,6 +230,27 @@ func collectors(cfg config.Config) []monitoring.Collector {
 		diskhealth.Collector{Timeout: time.Duration(cfg.Linux.DiskHealthTimeoutSeconds) * time.Second},
 		inventory.Collector{HostRoot: cfg.Host.Root, ProcRoot: cfg.Host.ProcRoot, SysRoot: cfg.Host.SysRoot},
 	)
+	if cfg.Patroni != nil {
+		out = append(out, patroni.Collector{Config: *cfg.Patroni})
+	}
+	if cfg.Postgres != nil {
+		out = append(out, postgres.Collector{Config: *cfg.Postgres}, postgres.Collector{Config: *cfg.Postgres, Version: true})
+	}
+	if cfg.NATS != nil {
+		for _, g := range []string{"health", "jetstream", "version"} {
+			out = append(out, nats.Collector{Config: *cfg.NATS, Group: g})
+		}
+	}
+	if cfg.Valkey != nil {
+		for _, g := range []string{"health", "capacity", "version"} {
+			out = append(out, valkey.Collector{Config: *cfg.Valkey, Group: g})
+		}
+	}
+	if cfg.ClickHouse != nil {
+		for _, g := range []string{"health", "capacity", "version"} {
+			out = append(out, clickhouse.Collector{Config: *cfg.ClickHouse, Group: g})
+		}
+	}
 	for i, c := range out {
 		every := linuxCadences[c.Name()]
 		if seconds, ok := cfg.Runner.Cadence[c.Name()]; ok {
@@ -268,6 +294,18 @@ func profileSystemdUnits(profile string) []string {
 		return []string{"pve-cluster.service", "corosync.service", "pvedaemon.service", "pveproxy.service", "pvestatd.service", "pve-ha-lrm.service", "pve-ha-crm.service"}
 	case "pbs":
 		return []string{"proxmox-backup.service", "proxmox-backup-proxy.service"}
+	case "postgres":
+		return []string{"patroni.service", "etcd.service"}
+	case "pg-edge":
+		return []string{"pgbouncer.service", "haproxy.service", "keepalived.service"}
+	case "nats":
+		return []string{"nats-server.service"}
+	case "nats-edge":
+		return []string{"haproxy.service", "keepalived.service"}
+	case "valkey":
+		return []string{"valkey.service"}
+	case "clickhouse":
+		return []string{"clickhouse-server.service"}
 	case "docker-host":
 		return []string{"docker.service", "containerd.service", "ssh.service", "sshd.service"}
 	default:
@@ -314,6 +352,10 @@ var linuxCadences = map[string]time.Duration{
 	"zfs": 300 * time.Second, "ceph": 300 * time.Second, "backup": 900 * time.Second,
 	"packages": 3600 * time.Second, "certificates": 3600 * time.Second, "diskhealth": 3600 * time.Second,
 	"inventory": 86400 * time.Second,
+	"patroni":   60 * time.Second, "postgres": 300 * time.Second, "postgres-version": 86400 * time.Second,
+	"nats": 60 * time.Second, "nats-jetstream": 300 * time.Second, "nats-version": 86400 * time.Second,
+	"valkey": 60 * time.Second, "valkey-capacity": 300 * time.Second, "valkey-version": 86400 * time.Second,
+	"clickhouse": 60 * time.Second, "clickhouse-capacity": 300 * time.Second, "clickhouse-version": 86400 * time.Second,
 }
 
 // validateCadenceNames accepts built-ins (including disabled optional modules)

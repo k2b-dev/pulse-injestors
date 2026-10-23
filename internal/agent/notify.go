@@ -28,11 +28,11 @@ func notify(state string) {
 }
 
 // watchdogAlive allows slow collection but stops pings if the loop stalls.
-func watchdogAlive(lastCompleted, now time.Time, interval, collectorTimeout time.Duration) bool {
-	return !lastCompleted.IsZero() && now.Sub(lastCompleted) <= 2*interval+collectorTimeout+60*time.Second
+func watchdogAlive(lastCompleted, now time.Time, interval, longestCollectTimeout time.Duration) bool {
+	return !lastCompleted.IsZero() && now.Sub(lastCompleted) <= 2*interval+longestCollectTimeout+60*time.Second
 }
 
-func watchdogLoop(ctx context.Context, usec string, interval, collectorTimeout time.Duration, lastCompleted *atomic.Int64) {
+func watchdogLoop(ctx context.Context, usec string, interval, longestCollectTimeout time.Duration, lastCompleted *atomic.Int64) {
 	period, err := time.ParseDuration(usec + "us")
 	if _, parseErr := strconv.ParseUint(usec, 10, 64); parseErr != nil || err != nil || period <= 0 {
 		return
@@ -44,7 +44,7 @@ func watchdogLoop(ctx context.Context, usec string, interval, collectorTimeout t
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			if watchdogAlive(time.Unix(0, lastCompleted.Load()), now, interval, collectorTimeout) {
+			if watchdogAlive(time.Unix(0, lastCompleted.Load()), now, interval, longestCollectTimeout) {
 				notify("WATCHDOG=1")
 			}
 		}

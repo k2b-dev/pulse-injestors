@@ -21,11 +21,26 @@ type Cadenced interface {
 	Cadence() time.Duration
 }
 
+// Timeouter overrides the runner's per-collector timeout. A nonpositive value
+// uses the runner default.
+type Timeouter interface {
+	CollectTimeout() time.Duration
+}
+
+func timeoutOf(c Collector) time.Duration {
+	if timed, ok := c.(Timeouter); ok {
+		return timed.CollectTimeout()
+	}
+	return 0
+}
+
 type ScopedCollector struct {
 	Collector  Collector
 	Resource   pulse.ResourceRef
 	Dimensions map[string]string
 }
+
+func (s ScopedCollector) CollectTimeout() time.Duration { return timeoutOf(s.Collector) }
 
 func (s ScopedCollector) Name() string {
 	return s.Collector.Name()
@@ -48,6 +63,8 @@ type WithCadence struct {
 	Collector
 	Every time.Duration
 }
+
+func (w WithCadence) CollectTimeout() time.Duration { return timeoutOf(w.Collector) }
 
 func (w WithCadence) Cadence() time.Duration { return w.Every }
 
@@ -75,6 +92,23 @@ type Runner struct {
 	lastRun map[string]time.Time
 }
 
+func (r *Runner) collectorTimeout(c Collector) time.Duration {
+	if timeout := timeoutOf(c); timeout > 0 {
+		return timeout
+	}
+	return r.Timeout
+}
+
+// LongestCollectTimeout is the longest effective budget of configured collectors.
+// It also supplies the watchdog's collection grace period.
+func (r *Runner) LongestCollectTimeout() time.Duration {
+	var longest time.Duration
+	for _, c := range r.Collectors {
+		longest = max(longest, r.collectorTimeout(c))
+	}
+	return longest
+}
+
 // Once collects every collector and hands the batch to Sender.
 func (r *Runner) Once(ctx context.Context) error {
 	if r.Sender == nil {
@@ -84,13 +118,8 @@ func (r *Runner) Once(ctx context.Context) error {
 }
 
 // Collect runs the collectors that are due, or all of them, within one
-// interval. Collector failures become ingestor.collector.* signals.
+// cycle budget. Collector failures become ingestor.collector.* signals.
 func (r *Runner) Collect(ctx context.Context, all bool) pulse.Batch {
-	if r.Interval > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, r.Interval)
-		defer cancel()
-	}
 	log := r.Logger
 	if log == nil {
 		log = slog.Default()
@@ -103,6 +132,18 @@ func (r *Runner) Collect(ctx context.Context, all bool) pulse.Batch {
 		r.lastRun = map[string]time.Time{}
 	}
 	scope := r.Scope(now())
+	// Only due collectors may extend this cycle. Once includes all collectors.
+	cycleBudget := r.Interval
+	for _, c := range r.Collectors {
+		if all || r.due(c, scope.Timestamp) {
+			cycleBudget = max(cycleBudget, r.collectorTimeout(c))
+		}
+	}
+	if cycleBudget > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, cycleBudget)
+		defer cancel()
+	}
 	batch := pulse.Batch{Metrics: []pulse.Metric{}, Events: []pulse.Event{}, States: []pulse.State{}}
 	builder := NewBuilder(scope)
 
@@ -120,8 +161,8 @@ func (r *Runner) Collect(ctx context.Context, all bool) pulse.Batch {
 		}
 		collectCtx := ctx
 		cancel := func() {}
-		if r.Timeout > 0 {
-			collectCtx, cancel = context.WithTimeout(ctx, r.Timeout)
+		if timeout := r.collectorTimeout(collector); timeout > 0 {
+			collectCtx, cancel = context.WithTimeout(ctx, timeout)
 		}
 		part, err := collector.Collect(collectCtx, scope)
 		err = errors.Join(err, collectCtx.Err())

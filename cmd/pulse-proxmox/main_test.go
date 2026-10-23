@@ -41,3 +41,27 @@ func TestSpecializedCollectors(t *testing.T) {
 		}
 	}
 }
+
+func TestConfiguredBackupBudgetSurvivesWrappers(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(cfgPath, []byte("[proxmox]\nbackup_timeout_seconds = 240\nlist_timeout_seconds = 150\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(cli{Config: cfgPath, Local: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := monitoring.Runner{Timeout: cfg.CollectorTimeout(), Collectors: collectors(cfg)}
+	if got := r.LongestCollectTimeout(); got != 240*time.Second {
+		t.Fatalf("longest budget: %s", got)
+	}
+	for _, c := range r.Collectors {
+		want := time.Duration(0)
+		if c.Name() == "proxmox.backups" {
+			want = 240 * time.Second
+		}
+		if got := c.(monitoring.Timeouter).CollectTimeout(); got != want {
+			t.Fatalf("%s: %s", c.Name(), got)
+		}
+	}
+}

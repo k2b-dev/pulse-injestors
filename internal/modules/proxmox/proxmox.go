@@ -30,6 +30,7 @@ type Collector struct {
 	Part          string
 	seenTasks     map[string]bool
 	ListTimeout   time.Duration
+	BackupTimeout time.Duration
 	identity      *collectorIdentity
 }
 
@@ -55,6 +56,17 @@ func (c Collector) Collectors() []monitoring.Collector {
 		out = append(out, monitoring.WithCadence{Collector: &part, Every: phase.every})
 	}
 	return out
+}
+
+// CollectTimeout gives backup scans a budget independent of ordinary phases.
+func (c *Collector) CollectTimeout() time.Duration {
+	if c.Part != "backups" && c.Part != "" {
+		return 0
+	}
+	if c.BackupTimeout > 0 {
+		return c.BackupTimeout
+	}
+	return 180 * time.Second
 }
 
 func (c *Collector) Name() string {
@@ -267,7 +279,7 @@ func (c Collector) client() (Client, error) {
 	}
 	listTimeout := c.ListTimeout
 	if listTimeout <= 0 {
-		listTimeout = 60 * time.Second
+		listTimeout = 120 * time.Second
 	}
 	return Client{PveshPath: path, Timeout: timeout, ListTimeout: listTimeout, Runner: runner}, nil
 }
@@ -305,7 +317,7 @@ func (c Client) get(ctx context.Context, path string, target any) error {
 	if strings.Contains(apiPath, "/storage/") && strings.HasSuffix(apiPath, "/content") {
 		timeout = c.ListTimeout
 		if timeout <= 0 {
-			timeout = 60 * time.Second
+			timeout = 120 * time.Second
 		}
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -900,7 +912,7 @@ func collectCephPools(ctx context.Context, b *monitoring.Builder, client Client,
 	var lastErr error
 	for _, node := range nodes {
 		var rows []map[string]any
-		err := client.get(ctx, "/nodes/"+url.PathEscape(node)+"/ceph/pools", &rows)
+		err := client.get(ctx, "/nodes/"+url.PathEscape(node)+"/ceph/pool", &rows)
 		if err != nil {
 			if isCephUnavailable(err) {
 				return

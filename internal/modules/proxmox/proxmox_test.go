@@ -52,7 +52,7 @@ func TestCollectorEmitsVersionClusterAndResources(t *testing.T) {
 			"osdmap":{"osdmap":{"num_osds":3,"num_up_osds":3,"num_in_osds":2}},
 			"pgmap":{"num_pgs":64,"bytes_used":1000,"bytes_total":4000,"bytes_avail":3000,"pgs_by_state":[{"state_name":"active+clean","count":64}]}
 		}`,
-		"get /nodes/pve1/ceph/pools --output-format json": `[{"pool_name":"rbd","bytes_used":10,"max_avail":20,"objects":3}]`,
+		"get /nodes/pve1/ceph/pool --output-format json": `[{"pool_name":"rbd","bytes_used":10,"max_avail":20,"objects":3}]`,
 	}}
 
 	batch, err := (&Collector{

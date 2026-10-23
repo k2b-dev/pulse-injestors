@@ -22,6 +22,11 @@ func DefaultConfigPath(binary string) string {
 }
 
 type Config struct {
+	Patroni    *PatroniConfig    `toml:"patroni"`
+	Postgres   *PostgresConfig   `toml:"postgres"`
+	NATS       *NATSConfig       `toml:"nats"`
+	Valkey     *ValkeyConfig     `toml:"valkey"`
+	ClickHouse *ClickHouseConfig `toml:"clickhouse"`
 	Pulse      PulseConfig       `toml:"pulse"`
 	Resource   ResourceConfig    `toml:"resource"`
 	Dimensions map[string]string `toml:"dimensions"`
@@ -104,11 +109,12 @@ type MacOSConfig struct {
 }
 
 type ProxmoxConfig struct {
-	ListTimeoutSeconds int    `toml:"list_timeout_seconds"`
-	PveshPath          string `toml:"pvesh_path"`
-	TimeoutSeconds     int    `toml:"timeout_seconds"`
-	EnableCephAPI      *bool  `toml:"enable_ceph_api"`
-	EnableLocalCeph    *bool  `toml:"enable_local_ceph"`
+	BackupTimeoutSeconds int    `toml:"backup_timeout_seconds"`
+	ListTimeoutSeconds   int    `toml:"list_timeout_seconds"`
+	PveshPath            string `toml:"pvesh_path"`
+	TimeoutSeconds       int    `toml:"timeout_seconds"`
+	EnableCephAPI        *bool  `toml:"enable_ceph_api"`
+	EnableLocalCeph      *bool  `toml:"enable_local_ceph"`
 }
 
 type PBSConfig struct {
@@ -210,6 +216,9 @@ func LoadFile(path string, explicit bool) (Config, error) {
 	if len(metadata.Undecoded()) > 0 {
 		return cfg, errors.New("configuration contains unknown fields")
 	}
+	if metadata.IsDefined("proxmox", "backup_timeout_seconds") && cfg.Proxmox.BackupTimeoutSeconds <= 0 {
+		return cfg, errors.New("proxmox backup_timeout_seconds must be positive")
+	}
 	if metadata.IsDefined("proxmox", "list_timeout_seconds") && cfg.Proxmox.ListTimeoutSeconds <= 0 {
 		return cfg, errors.New("proxmox list_timeout_seconds must be positive")
 	}
@@ -277,6 +286,9 @@ func Resolve(file Config, overlay Overlay) (Config, error) {
 	if cfg.Pulse.SpoolMaxBytes < 0 {
 		return cfg, errors.New("pulse spool_max_bytes must not be negative")
 	}
+	if err := cfg.validateServices(); err != nil {
+		return cfg, err
+	}
 	if cfg.HTTP.TimeoutSeconds <= 0 {
 		return cfg, errors.New("http timeout_seconds must be positive")
 	}
@@ -312,6 +324,9 @@ func Resolve(file Config, overlay Overlay) (Config, error) {
 	}
 	if cfg.Docker.RegistryTimeoutSeconds <= 0 {
 		return cfg, errors.New("docker registry_timeout_seconds must be positive")
+	}
+	if cfg.Proxmox.BackupTimeoutSeconds <= 0 {
+		return cfg, errors.New("proxmox backup_timeout_seconds must be positive")
 	}
 	if cfg.Proxmox.ListTimeoutSeconds <= 0 {
 		return cfg, errors.New("proxmox list_timeout_seconds must be positive")
@@ -546,9 +561,10 @@ func defaults() Config {
 			SystemProfilerTimeoutSeconds: 10,
 		},
 		Proxmox: ProxmoxConfig{
-			ListTimeoutSeconds: 60,
-			PveshPath:          "pvesh",
-			TimeoutSeconds:     10,
+			BackupTimeoutSeconds: 180,
+			ListTimeoutSeconds:   120,
+			PveshPath:            "pvesh",
+			TimeoutSeconds:       10,
 		},
 		PBS: PBSConfig{
 			ListTimeoutSeconds: 60,
@@ -563,6 +579,7 @@ func defaults() Config {
 }
 
 func merge(dst *Config, src Config) {
+	dst.Patroni, dst.Postgres, dst.NATS, dst.Valkey, dst.ClickHouse = src.Patroni, src.Postgres, src.NATS, src.Valkey, src.ClickHouse
 	dst.Runner.Cadence = src.Runner.Cadence
 	dst.Linux.NetworkExclude = src.Linux.NetworkExclude
 	dst.Linux.CertificatePaths = src.Linux.CertificatePaths
@@ -681,6 +698,9 @@ func merge(dst *Config, src Config) {
 	}
 	if src.Proxmox.PveshPath != "" {
 		dst.Proxmox.PveshPath = src.Proxmox.PveshPath
+	}
+	if src.Proxmox.BackupTimeoutSeconds != 0 {
+		dst.Proxmox.BackupTimeoutSeconds = src.Proxmox.BackupTimeoutSeconds
 	}
 	if src.Proxmox.ListTimeoutSeconds != 0 {
 		dst.Proxmox.ListTimeoutSeconds = src.Proxmox.ListTimeoutSeconds

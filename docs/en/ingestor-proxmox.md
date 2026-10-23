@@ -80,7 +80,8 @@ curl -fsSL \
 [proxmox]
 pvesh_path = "pvesh"
 timeout_seconds = 10
-list_timeout_seconds = 60
+list_timeout_seconds = 120
+backup_timeout_seconds = 180
 enable_ceph_api = true
 ```
 

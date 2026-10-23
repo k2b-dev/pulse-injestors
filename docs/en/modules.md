@@ -41,6 +41,16 @@ Collector modules live under `internal/modules` and are reused by the specialize
 - [`packages`](/en/module-packages): package update counts for supported Linux package managers.
 - [`systemd`](/en/module-systemd): configured systemd unit states and all failed units.
 
+## Native database and broker modules
+
+These Linux collectors are opt-in: only their TOML sections enable connections. Selecting a systemd profile alone does not enable service probes.
+
+- [`patroni`](/en/module-patroni): PostgreSQL member role and leader-only cluster health.
+- [`postgres`](/en/module-postgres): connections, database size, transaction age, and deadlocks through local psql.
+- [`nats`](/en/module-nats): broker health, traffic, and JetStream storage.
+- [`valkey`](/en/module-valkey): TLS/authenticated INFO health, memory, and persistence.
+- [`clickhouse`](/en/module-clickhouse): read-only HTTPS health, disk capacity, parts, and errors.
+
 ## Extension module
 
 - [`script`](/en/module-script): runs configured commands that emit Pulse JSON fragments.
@@ -49,7 +59,7 @@ Collector modules live under `internal/modules` and are reused by the specialize
 
 - [`uptime`](/en/module-uptime): named ICMP, DNS, TCP, HTTP, and TLS endpoint checks.
 
-Optional modules are best-effort and auto-enabled by default when their binary includes them. Expected absence, such as missing ZFS tools or no Ceph cluster, reports availability states without collector failure events. Unexpected command, permission, timeout, or parsing failures remain visible as events.
+Other optional modules are best-effort and auto-enabled by default when their binary includes them. Expected absence, such as missing ZFS tools or no Ceph cluster, reports availability states without collector failure events. Unexpected command, permission, timeout, or parsing failures remain visible as events.
 
 ## Runner signals
 

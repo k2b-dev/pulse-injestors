@@ -31,6 +31,8 @@ initial_backoff_ms = 500
 [proxmox]
 pvesh_path = "pvesh"
 timeout_seconds = 10
-# Backup content / namespace / group / snapshot lists. Must be positive.
-list_timeout_seconds = 60
+# Per-call backup content list timeout. Must be positive.
+list_timeout_seconds = 120
+# Whole backup phase budget. Must be positive.
+backup_timeout_seconds = 180
 enable_ceph_api = true

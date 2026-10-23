@@ -35,3 +35,18 @@ func TestWatchdogIgnoresInvalidEnvironment(t *testing.T) {
 		watchdogLoop(context.Background(), usec, time.Minute, time.Minute, &atomic.Int64{})
 	}
 }
+
+func TestWatchdogAllowsLongCollectorBudget(t *testing.T) {
+	last := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	interval, budget := time.Minute, 180*time.Second
+	limit := 2*interval + budget + time.Minute
+	if !watchdogAlive(last, last.Add(limit), interval, budget) {
+		t.Fatal("long collection declared stalled")
+	}
+	if watchdogAlive(last, last.Add(limit+time.Nanosecond), interval, budget) {
+		t.Fatal("stalled collection kept alive")
+	}
+	if watchdogAlive(last, last.Add(limit), interval, 60*time.Second) {
+		t.Fatal("fixture does not distinguish generic timeout")
+	}
+}
