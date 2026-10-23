@@ -745,5 +745,7 @@ case "$SCHEDULER" in
     launchd)
         log "status: launchctl print gui/$(id -u)/${PLIST_LABEL}"
         log "logs: ${HOME}/Library/Logs/Pulse"
+        log "workstations: use one Pulse source per machine; set Expected data to daily (expectDailyBy)"
+        log "the LaunchAgent runs as your user; denied posture checks report unknown without elevation"
         ;;
 esac

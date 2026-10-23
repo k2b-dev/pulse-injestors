@@ -56,6 +56,28 @@ sudo sh /tmp/pulse-install.sh \
 
 See [Native installation](/en/installation#unattended-enrollment) for provisioning variables and all installer options.
 
+## Workstations
+
+Enroll one Pulse source per machine. Set the source’s **Expected data** to daily (`expectDailyBy`), choosing a time when the machine is normally on, instead of a minute-based interval. Check last contact and `ingestor.heartbeat` for liveness. Daily expectations still apply on non-working days; account for those in your notification policy.
+
+Use `--linux-profile desktop`, or provision the following settings through the installer’s `--config-source` option:
+
+```toml
+[runner]
+interval_seconds = 300
+
+[linux]
+profile = "desktop"
+```
+
+The desktop profile checks host health every 300 seconds, capacity every 900 seconds, package updates and disk health hourly, and inventory plus [workstation security posture](/en/module-posture) daily. It checks `display-manager.service`, `NetworkManager.service`, and `cups.service`; absent units report unavailable. Server profiles keep their existing schedules. Explicit `[runner.cadence]` values still take precedence. The profile alone does not change the base runner interval: use the 300-second setting above to reduce heartbeat and delivery overhead too.
+
+Use the systemd `run` service. Cron invokes `once`, which runs every collector each time and cannot retain the workstation schedule. Preserve the spool directory so unchanged `software.*` states refresh weekly across overnight shutdowns.
+
+Posture checks inspect mounted root/home encryption, firewall state, and unattended-update scheduling. `lsblk` needs mountpoint support; nftables/ufw usually need root or network-administration permissions to read rules. The collector never elevates privileges. A denied check reports `"unknown"` rather than a false result. See the posture page for the Debian and Fedora rules and their limits.
+
+For one disk, two filesystems, one retained NIC, four temperature sensors, and roughly 40 runtime process/socket/pressure samples per capacity cycle, budget **about 11–12 values/minute** over a nine-hour working day, including runner signals and stable state refreshes. A cold or weekly inventory of 1,500 packages adds 2.78/minute averaged over that day. More mounts, sensors, socket states, failures, or state changes increase volume; measure your actual host before setting a quota.
+
 ## Verify and operate
 
 ```sh
@@ -115,7 +137,7 @@ See [Modules](/en/modules) for exhaustive signal tables and requirements.
 
 Use service mode (`run`) to honor the schedule. `once` always runs all collectors, so running it every minute from cron defeats the volume reduction and repeats package inventory after process restarts without a persistent state cache. The default base interval is 60 seconds.
 
-| Collector names | Default cadence | Questions answered |
+| Collector names | Server default cadence | Questions answered |
 |---|---|---|
 | `system`, `systemd`, `kernel` | 60 s | Is the host up, short of CPU/memory, rebooting, or reporting service/kernel failures? |
 | `filesystem`, `network`, `linuxruntime`, `diskio`, `thermal`, `btrfs`, `zfs`, `ceph` | 300 s | Is capacity, I/O, network, or temperature becoming a problem? |

@@ -15,6 +15,8 @@ type = "host"
 [dimensions]
 environment = "production"
 
+# Workstations: one source per machine, Expected data = daily (expectDailyBy).
+# macOS always uses workstation cadences; there is no profile flag.
 [runner]
 interval_seconds = 300
 collector_timeout_seconds = 60
@@ -27,7 +29,5 @@ initial_backoff_ms = 500
 [macos]
 enable_homebrew = true
 homebrew_timeout_seconds = 20
-enable_software_update = false
+enable_software_update = true
 software_update_timeout_seconds = 60
-enable_system_profiler = true
-system_profiler_timeout_seconds = 10

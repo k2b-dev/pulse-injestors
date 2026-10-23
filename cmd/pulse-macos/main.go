@@ -41,8 +41,8 @@ type cli struct {
 
 	HomebrewTimeoutSeconds       int  `name:"homebrew-timeout-seconds" help:"Homebrew outdated timeout in seconds." env:"PULSE_MACOS_HOMEBREW_TIMEOUT_SECONDS"`
 	SoftwareUpdateTimeoutSeconds int  `name:"softwareupdate-timeout-seconds" help:"softwareupdate timeout in seconds." env:"PULSE_MACOS_SOFTWAREUPDATE_TIMEOUT_SECONDS"`
-	DisableSystemProfiler        bool `name:"disable-system-profiler" help:"Disable macOS system_profiler based collectors." env:"PULSE_MACOS_DISABLE_SYSTEM_PROFILER"`
-	SystemProfilerTimeoutSeconds int  `name:"system-profiler-timeout-seconds" help:"system_profiler timeout in seconds." env:"PULSE_MACOS_SYSTEM_PROFILER_TIMEOUT_SECONDS"`
+	DisableSystemProfiler        bool `name:"disable-system-profiler" help:"Deprecated: no system_profiler probes are collected." env:"PULSE_MACOS_DISABLE_SYSTEM_PROFILER"`
+	SystemProfilerTimeoutSeconds int  `name:"system-profiler-timeout-seconds" help:"Deprecated: no system_profiler probes are collected." env:"PULSE_MACOS_SYSTEM_PROFILER_TIMEOUT_SECONDS"`
 
 	Local   bool `name:"local" help:"Write collected Pulse batch JSON to stdout instead of sending it." env:"PULSE_LOCAL"`
 	Pretty  bool `name:"pretty" help:"With --local, print a human-readable report instead of JSON." env:"PULSE_LOCAL_PRETTY"`
@@ -118,6 +118,13 @@ func loadConfig(c cli) (config.Config, error) {
 	if err != nil {
 		return config.Config{}, fmt.Errorf("load %s: %w", cfgPath, err)
 	}
+	if fileCfg.Runner.IntervalSeconds == 0 {
+		fileCfg.Runner.IntervalSeconds = 300
+	}
+	if fileCfg.MacOS.EnableSoftwareUpdate == nil {
+		enabled := true
+		fileCfg.MacOS.EnableSoftwareUpdate = &enabled
+	}
 	dimensions, err := config.ParseDimensions(c.Dimensions)
 	if err != nil {
 		return config.Config{}, err
@@ -155,15 +162,10 @@ func loadConfig(c cli) (config.Config, error) {
 }
 
 func collectors(cfg config.Config) []monitoring.Collector {
-	out := []monitoring.Collector{
-		macos.Collector{
-			EnableHomebrew:        cfg.HomebrewEnabled(),
-			HomebrewTimeout:       cfg.HomebrewTimeout(),
-			EnableSoftwareUpdate:  cfg.SoftwareUpdateEnabled(),
-			SoftwareUpdateTimeout: cfg.SoftwareUpdateTimeout(),
-			EnableSystemProfiler:  cfg.SystemProfilerEnabled(),
-			SystemProfilerTimeout: cfg.SystemProfilerTimeout(),
-		},
+	var out []monitoring.Collector
+	for _, group := range []string{"health", "filesystem", "hardware", "battery", "disk", "updates", "posture", "software"} {
+		c := macos.Collector{Group: group, EnableHomebrew: cfg.HomebrewEnabled(), HomebrewTimeout: cfg.HomebrewTimeout(), EnableSoftwareUpdate: cfg.SoftwareUpdateEnabled(), SoftwareUpdateTimeout: cfg.SoftwareUpdateTimeout()}
+		out = append(out, c)
 	}
 	if len(cfg.Scripts) > 0 {
 		scripts := make([]script.Script, 0, len(cfg.Scripts))
