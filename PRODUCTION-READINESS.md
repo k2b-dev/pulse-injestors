@@ -10,7 +10,7 @@ Status as of 2026-10-23, targeting the current Cloud main / Pulse 0.49 resource 
 | Development systemd service | `Type=notify` readiness, watchdog, hardened unit, and config/token credentials. |
 | Development Pulse delivery failures | A conflicting metric was isolated, quarantined, reported, and blocked; disabled-source pause retained data and delivered after recovery without gaps or duplicates in the observed test; 429 retry behavior. The fictional base was removed afterwards. |
 | Real PVE cluster node, read-only | Elected reporter, approximately 58 guests, per-guest backup age for each visible PBS storage, Ceph pools, and failed-task events. |
-| Real PBS host, read-only | Jobs, garbage collection, and datastore capacity. Group collection initially timed out; after the timeout fix, groups were collected successfully. |
+| Two real PBS hosts (primary and offsite copy), read-only | Jobs, garbage collection, and datastore capacity, including an S3 datastore. The first run timed out on snapshot listings; with group listings, all groups were collected completely in under 5 seconds per host. |
 
 The PVE/PBS checks exercised local platform reads, not a production Pulse rollout. Hostnames, addresses, credentials, and private output are intentionally excluded.
 
@@ -24,7 +24,7 @@ Initial Linux inventory contributes roughly 850 states per host, with unchanged 
 
 - Native macOS collection, launchd lifecycle, and permission-dependent posture checks.
 - A standalone PVE node outside the tested cluster, or all cluster failover/partition scenarios on real hosts.
-- A second PBS server and end-to-end offsite-copy coverage.
+- End-to-end offsite-copy coverage as one alert; each PBS host is checked on its own.
 - Native PostgreSQL/Patroni, NATS, Valkey, and ClickHouse service probes against live services.
 - Docker delivery into live Pulse; local volume/collector observations do not prove delivery.
 - The new alert and dashboard SQL templates against an actual base, including threshold transitions and recovery.
