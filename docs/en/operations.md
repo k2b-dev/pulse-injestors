@@ -56,7 +56,7 @@ The service uses `Type=notify` with readiness notifications and a fixed `Watchdo
 - `NoNewPrivileges=yes` and `MemoryMax=512M` for Proxmox VE and PBS, or `256M` for other ingestors;
 - `StateDirectory=pulse/<binary>` with mode `0700`;
 - `ProtectSystem=full` for root ingestors;
-- `DynamicUser=yes` and `ProtectSystem=strict` for `pulse-uptime`.
+- `DynamicUser=yes` and `ProtectSystem=strict` for `pulse-uptime`, with only `CAP_NET_RAW` so ICMP probes can run `ping`.
 
 ### cron
 

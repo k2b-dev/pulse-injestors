@@ -277,6 +277,8 @@ if [ "$os" = "linux" ]; then
     grep -Fq "ExecStart=\"$uptime_prefix/pulse-uptime\" --config %d/pulse-config run" "$systemd_dir/pulse-uptime.service"
     grep -Fq 'WatchdogSec=120s' "$systemd_dir/pulse-uptime.service"
     grep -Fq 'DynamicUser=yes' "$systemd_dir/pulse-uptime.service"
+    grep -Fxq 'AmbientCapabilities=CAP_NET_RAW' "$systemd_dir/pulse-uptime.service"
+    grep -Fxq 'CapabilityBoundingSet=CAP_NET_RAW' "$systemd_dir/pulse-uptime.service"
     grep -Fq 'ProtectSystem=strict' "$systemd_dir/pulse-uptime.service"
 fi
 
