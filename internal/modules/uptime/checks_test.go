@@ -103,7 +103,7 @@ func assertOutcome(t *testing.T, batch pulse.Batch, expected string) {
 	if got := metricValue(batch, "uptime.check.success", "target"); got != want {
 		t.Fatalf("success=%v want %v", got, want)
 	}
-	if metricValue(batch, "uptime.check.duration", "target") < 0 {
+	if stateValue(batch, "uptime.check.type", "target") != KindICMP && metricValue(batch, "uptime.check.duration", "target") < 0 {
 		t.Fatal("missing duration")
 	}
 	for _, s := range batch.States {
@@ -301,7 +301,10 @@ func TestTLSUsesSNI(t *testing.T) {
 func TestCadencesKeepFrequentChecksIndependent(t *testing.T) {
 	calls := 0
 	now := fixedScope().Timestamp
-	c := Collector{Ping: func(context.Context, string) error { calls++; return nil }, Targets: []Target{{ID: "minute", Kind: KindICMP}, {ID: "hour", Kind: KindICMP, Cadence: time.Hour}}}
+	c := Collector{Ping: func(ctx context.Context, target Target) ([]byte, error) {
+		calls++
+		return fakeSuccessfulPing(ctx, target)
+	}, Targets: []Target{{ID: "minute", Kind: KindICMP}, {ID: "hour", Kind: KindICMP, Cadence: time.Hour}}}
 	r := monitoring.Runner{Resource: fixedScope().Resource, Collectors: c.Scheduled(), Interval: time.Minute, Timeout: time.Second, Now: func() time.Time { return now }}
 	r.Collect(context.Background(), false)
 	if calls != 2 {
@@ -329,7 +332,7 @@ func TestCadencesKeepFrequentChecksIndependent(t *testing.T) {
 func TestTimeoutsNeverEmitSuccessGauge(t *testing.T) {
 	for _, kind := range []string{KindICMP, KindDNS, KindTCP, KindHTTP, KindTLS, KindPorts, KindDNSRecords, KindDNSBL} {
 		target := Target{Kind: kind, Address: "127.0.0.1:1", Name: "example.test", Records: []Record{{Type: "A", Expect: []string{"192.0.2.1"}}}, Resolver: "127.0.0.1:1", Lists: []string{"bl.test"}, Timeout: time.Nanosecond}
-		c := Collector{Ping: func(ctx context.Context, _ string) error { <-ctx.Done(); return ctx.Err() }}
+		c := Collector{Ping: func(ctx context.Context, _ Target) ([]byte, error) { <-ctx.Done(); return nil, ctx.Err() }}
 		assertOutcome(t, collectTarget(t, target, c), "error")
 	}
 }

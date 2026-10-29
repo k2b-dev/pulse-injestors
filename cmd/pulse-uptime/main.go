@@ -181,6 +181,9 @@ func configuredTargets(cfg config.Config) ([]uptime.Target, error) {
 		if strings.ToLower(strings.TrimSpace(target.Kind)) == uptime.KindPorts {
 			timeout = 900 * time.Second
 		}
+		if strings.ToLower(strings.TrimSpace(target.Kind)) == uptime.KindICMP {
+			timeout = 0 // The collector sizes the round budget from count and interval.
+		}
 		if target.TimeoutSeconds > 0 {
 			timeout = time.Duration(target.TimeoutSeconds) * time.Second
 		}
@@ -192,7 +195,20 @@ func configuredTargets(cfg config.Config) ([]uptime.Target, error) {
 		if target.RatePerSecond != nil {
 			rate = *target.RatePerSecond
 		}
-		targets = append(targets, uptime.Target{
+		count := 20
+		if target.Count != nil {
+			count = *target.Count
+		}
+		interval := 500 * time.Millisecond
+		if target.Interval != "" {
+			var err error
+			interval, err = time.ParseDuration(target.Interval)
+			if err != nil {
+				return nil, fmt.Errorf("uptime target %q interval: %w", target.ID, err)
+			}
+		}
+		configured := uptime.Target{
+			Count: count, Interval: interval, LossThreshold: target.LossThreshold,
 			RatePerSecond: rate,
 			Cadence:       time.Duration(target.CadenceSeconds) * time.Second,
 			Name:          target.Name, Resolver: target.Resolver, Expected: target.Expected, Range: target.Range,
@@ -203,7 +219,28 @@ func configuredTargets(cfg config.Config) ([]uptime.Target, error) {
 			Address:        strings.TrimSpace(target.Address),
 			ExpectedStatus: target.ExpectedStatus,
 			Timeout:        timeout,
-		})
+		}
+		if configured.Kind == uptime.KindICMP {
+			if timeout > 0 && timeout < configured.ICMPTimeout() {
+				return nil, fmt.Errorf("uptime target %q timeout_seconds must allow at least %s for the ICMP round", target.ID, configured.ICMPTimeout())
+			}
+			if timeout == 0 {
+				configured.Timeout = max(cfg.UptimeTimeout(), configured.ICMPTimeout())
+			}
+		}
+		targets = append(targets, configured)
+	}
+	for _, target := range targets {
+		if target.Kind != uptime.KindICMP {
+			continue
+		}
+		every := target.Cadence
+		if every == 0 {
+			every = uptime.DefaultCadence(target.Kind)
+		}
+		if target.Timeout > every {
+			return nil, fmt.Errorf("uptime target %q ICMP timeout %s exceeds cadence %s; increase cadence_seconds or shorten the round", target.ID, target.Timeout, every)
+		}
 	}
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("at least one uptime target is required")

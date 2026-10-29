@@ -5,7 +5,7 @@ section: Ingestors
 order: 160
 description: Monitor endpoints, public ports, DNS records, TLS certificates, and mail blocklists.
 tags: [uptime, internet, ingestor]
-updated: 2026-10-23
+updated: 2026-10-29
 ---
 
 # Uptime ingestor
@@ -21,7 +21,7 @@ updated: 2026-10-23
 
 Use systemd or launchd when targets have different cadences. Cron invokes `once`, which checks every target on every invocation; it does not retain daily or hourly schedules. Do not use the minute cron fallback with ports, DNSBL, or other infrequent targets. On systems without systemd, supervise `pulse-uptime run` with your service manager.
 
-The system `ping` command is required only for ICMP checks. DNS, TCP, and HTTP checks continue when `ping` is unavailable.
+ICMP checks require iputils `ping` on Linux or the system `ping` on macOS; BusyBox ping is unsupported. macOS ICMP targets must resolve to IPv4 because this collector does not invoke `ping6`. DNS, TCP, and HTTP checks continue when `ping` is unavailable.
 
 ## Enroll interactively
 
@@ -98,8 +98,8 @@ curl -fsSL \
 
 | Check | Type | Target | Expected result |
 |---|---|---|---|
-| Cloudflare ICMP | ICMP | `1.1.1.1` | Ping succeeds |
-| Google ICMP | ICMP | `8.8.8.8` | Ping succeeds |
+| Cloudflare ICMP | ICMP | `1.1.1.1` | At least one reply per round |
+| Google ICMP | ICMP | `8.8.8.8` | At least one reply per round |
 | Cloudflare DNS | DNS | `cloudflare.com` | At least one address |
 | Google DNS | DNS | `google.com` | At least one address |
 | Cloudflare HTTPS TCP | TCP | `1.1.1.1:443` | Connection succeeds |
@@ -147,6 +147,66 @@ expected_status = 200
 Target IDs may contain letters, digits, dots, underscores, and hyphens. They become part of the stable endpoint resource ID, so do not rename them unless the monitored logical endpoint changes.
 
 HTTP checks follow at most three redirects. A missing `expected_status` accepts status codes from `200` through `399`. Do not put credentials or secret query parameters in target URLs; the target is sent to Pulse as a current state.
+
+## Replacing SmokePing
+
+Map SmokePing **probes per round** (`pings`) to `count` and **step** to `cadence_seconds`. Pulse defaults to 20 requests, 500 ms apart, every 60 seconds. A healthy round takes about ten seconds; its default timeout is 15 seconds. Keep `[runner].interval_seconds = 60` for this cadence. Targets run concurrently up to `[uptime].concurrency` (default 4).
+
+On a Raspberry Pi, use **Raspberry Pi OS 64-bit (arm64)**. The existing installer supports arm64 on Pi, not 32-bit ARM. Install `iputils-ping` if missing (`sudo apt install iputils-ping`), then use the Linux enrollment command above. The ingestor calls system ping and needs no raw-socket capability on its Go binary. Keep the installer's systemd service and persistent spool. Its unprivileged ping sockets require `net.ipv4.ping_group_range` to allow the service user; check this setting if local ping works but the service reports a permission error.
+
+In `/etc/pulse/pulse-uptime.toml`, set `enable_defaults = false` under `[uptime]` if these should be your only targets, then add:
+
+```toml
+[[uptime.target]]
+id = "lan-router"
+label = "LAN router"
+kind = "icmp"
+address = "router.example.lan"
+count = 20
+interval = "500ms"
+cadence_seconds = 60
+loss_threshold = 25 # Optional: failed at 25% loss or above; default 100%.
+
+[[uptime.target]]
+id = "internet-icmp"
+label = "Cloudflare ICMP"
+kind = "icmp"
+address = "1.1.1.1"
+count = 20
+interval = "500ms"
+cadence_seconds = 60
+```
+
+Replace the LAN hostname, run `pulse-uptime --config /etc/pulse/pulse-uptime.toml --local --pretty once`, then restart `pulse-uptime.service`. Verify loss and RTT metrics in Pulse. An unavailable ping command is an execution error, not 100% loss. See the [module reference](/en/module-uptime) for timeout and threshold limits and [alert templates](/en/alerts) for sustained packet loss.
+
+Use `uptime.icmp.rtt.median` for latency panels: ICMP no longer emits command wall time as `uptime.check.duration`. Each measured round sends loss, min/median/max/population-standard-deviation RTT, and success. Replies later than two seconds count as lost. With total loss, RTT values are absent. This retains a compact latency distribution per round; it does not store all 20 packet RTTs.
+
+These queries use the Pulse read views. Bind `:from` and `:to` to the panel range. For loss and median-RTT time series, keep the metrics in separate panels because their units differ:
+
+```sql
+SELECT s.ts, r.resource_key, r.dimensions, r.metric, r.unit, s.value
+FROM samples s JOIN series r ON r.series_id = s.series_id
+WHERE r.metric IN ('uptime.icmp.loss', 'uptime.icmp.rtt.median')
+  AND s.ts >= :from AND s.ts < :to
+ORDER BY s.ts, r.resource_key, r.metric
+```
+
+For a five-minute percentile panel:
+
+```sql
+SELECT toStartOfInterval(s.ts, INTERVAL 5 MINUTE) AS ts,
+       r.resource_key, r.dimensions, r.unit,
+       quantileExact(0.5)(s.value) AS p50,
+       quantileExact(0.95)(s.value) AS p95,
+       quantileExact(0.99)(s.value) AS p99
+FROM samples s JOIN series r ON r.series_id = s.series_id
+WHERE r.metric = 'uptime.icmp.rtt.median'
+  AND s.ts >= :from AND s.ts < :to
+GROUP BY ts, r.resource_key, r.dimensions, r.unit
+ORDER BY ts, r.resource_key
+```
+
+These are percentiles of **round medians**, not individual packets. A default five-minute bucket has about five values, so p95 and p99 often equal its largest median. Keep loss visible alongside the panel; total-loss rounds contribute no latency sample. Do not fill missing RTTs with zero.
 
 ## Collected data
 

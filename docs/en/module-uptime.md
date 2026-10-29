@@ -5,7 +5,7 @@ section: Modules
 order: 470
 description: Endpoint availability, expected ports and DNS records, TLS expiry, and mail IP blocklists.
 tags: [uptime, internet, modules, reference]
-updated: 2026-10-23
+updated: 2026-10-29
 ---
 
 # Uptime module
@@ -21,7 +21,7 @@ Each target reports `uptime.check.result`: `ok`, `failed` (a confirmed finding),
 
 | Kind | Default cadence | Target | Success condition |
 |---|---|---|---|
-| `icmp` | 60 seconds | IP in `address` | One system ping succeeds. |
+| `icmp` | 60 seconds | IP or hostname in `address` | Round loss is below `loss_threshold` (default 100%). |
 | `dns` | 60 seconds | Hostname in `address` | System resolver returns at least one address. |
 | `tcp` | 60 seconds | `host:port` in `address` | Connection succeeds. |
 | `http` | 60 seconds | URL in `address` | Exact `expected_status`, or any 200–399 response when unset. |
@@ -39,13 +39,28 @@ All metrics belong to an `uptime-endpoint`. Dimensions `probe`, `endpoint`, and 
 | Name | Type | Unit | Dimensions | Example | Meaning |
 |---|---|---|---|---|---|
 | `uptime.check.success` | gauge | — | base, optional `list` | `1` | 1 for `ok`, 0 for `failed`; absent for `error`. |
-| `uptime.check.duration` | gauge | milliseconds | base | `24.7` | Elapsed target check time, including errors. |
+| `uptime.check.duration` | gauge | milliseconds | base | `24.7` | Elapsed non-ICMP check time, including errors. Omitted for ICMP; use its median RTT. |
+| `uptime.icmp.loss` | gauge | percent | base, `check_type=icmp` | `5` | Requests without a reply within two seconds, as a percentage of the round; absent on execution or parsing errors. |
+| `uptime.icmp.rtt.min` | gauge | milliseconds | base, `check_type=icmp` | `4.1` | Smallest reply RTT in the round. |
+| `uptime.icmp.rtt.median` | gauge | milliseconds | base, `check_type=icmp` | `5.2` | Median reply RTT; average of the middle pair for even counts. |
+| `uptime.icmp.rtt.max` | gauge | milliseconds | base, `check_type=icmp` | `9.8` | Largest reply RTT in the round. |
+| `uptime.icmp.rtt.stddev` | gauge | milliseconds | base, `check_type=icmp` | `1.4` | Population standard deviation of reply RTTs. |
 | `uptime.dns.address_count` | gauge | — | base, `check_type=dns` | `2` | Addresses in a completed lookup. |
 | `uptime.ports.open` | gauge | — | base, `check_type=ports` | `2` | Open ports in a completed scan; absent on scan errors. |
 | `uptime.ports.filtered` | gauge | — | base, `check_type=ports` | `9980` | Ports whose TCP connections timed out in a completed scan; absent on scan errors. |
 | `uptime.tls.certificate.expires_in` | gauge | seconds | base, `check_type=http` or `tls` | `2592000` | Leaf certificate lifetime; negative after expiry. Use a Pulse threshold alert for advance warning. |
 
 Average `uptime.check.success` by resource for the fraction of completed checks that succeeded. Monitor `uptime.check.result=error` separately; missing samples are not proof of availability. For DNSBL, filter on the desired `list` or select the overall sample without that dimension.
+
+## ICMP rounds
+
+`count` is the number of probes per round (default 20, range 1–100). `interval` is a duration string between probes (default `"500ms"`, range `"200ms"`–`"1m"`). The lower bound allows unprivileged system ping on Linux and macOS. `cadence_seconds` is the step between rounds (default 60). Different targets share the configured concurrency limit.
+
+A round allows one final interval for macOS ping, two seconds for replies, and three seconds for startup and DNS. Its default timeout is `count × interval + 5 seconds`, rounded up to whole seconds, or the global uptime timeout if larger: 15 seconds with defaults. An explicit target `timeout_seconds` must be at least that calculated round budget. The timeout must also fit within `cadence_seconds`; invalid combinations fail at startup. Ping receives its own deadline three seconds before the calculated timeout so it can print a complete summary. Allow about 15 seconds per group of concurrent default targets, plus time for other checks; increase concurrency or cadence when groups approach the runner interval.
+
+The collector parses per-reply `time=` values from system ping with `LC_ALL=C`. A `time<` value uses the displayed upper bound. Only the first reply for each sequence contributes; duplicates do not reduce loss or skew RTTs. Replies later than two seconds count as lost on both platforms. macOS reports these in its summary without RTT lines, so the collector uses that count to distinguish late replies from malformed output. All four RTT metrics are omitted at 100% loss. A measured round sends five loss/RTT values plus `uptime.check.success`; total loss sends only loss and success. Raw packet samples are not stored.
+
+`loss_threshold` accepts a percentage greater than 0 and at most 100. Success is false when loss is **greater than or equal to** the threshold; the default succeeds if at least one reply arrives. Missing ping, permission failures, incomplete output, and cancellation produce `error` with no ICMP or success metrics. Total packet loss is a measured `failed` round.
 
 ## States
 
@@ -82,7 +97,7 @@ Resolution or routing errors and a budget exhausted before the whole range is ch
 
 **DNSBL:** Before querying the reversed target IPv4, each list must answer `2.0.0.127.<list>` with only `127.0.0.x` addresses. A failed reference query makes that list `error`. After a working reference, target NXDOMAIN is `ok`; a `127.0.0.x` listing is `failed`; empty replies, other address ranges, resolver failures, and timeouts are `error`. The overall target is `error` if any list could not be checked, otherwise `failed` if any lists report a listing. Individual results retain confirmed findings.
 
-**Existing checks:** HTTP uses GET, reads at most 64 KiB, and follows at most three redirects. Status mismatches, refused TCP/HTTP connections, and ping exit code 1 are `failed`. Missing/broken ping execution, DNS errors or empty answers, request/read errors, and timeouts are `error`. A failed target does not suppress other targets.
+**Existing checks:** HTTP uses GET, reads at most 64 KiB, and follows at most three redirects. Status mismatches and refused TCP/HTTP connections are `failed`. ICMP uses the round loss threshold described above. Missing/broken ping execution, DNS errors or empty answers, request/read errors, and timeouts are `error`. A failed target does not suppress other targets.
 
 The module emits no events for target findings. The runner emits `ingestor.collector.ok` and `ingestor.collector.failed` for collector failures. [Uptime ingestor](/en/ingestor-uptime) explains source heartbeat monitoring and provides complete configurations.
 
@@ -92,4 +107,4 @@ The module emits no events for target findings. The runner emits `ingestor.colle
 - Boolean states `uptime.check.measured` and `uptime.check.success` are replaced by `uptime.check.result`.
 - State `uptime.check.error` becomes `uptime.check.message`.
 - Collector dimensions change from `collector=uptime` to `collector=uptime-60s`, `uptime-3600s`, or `uptime-86400s` (custom cadences use their seconds). Update collector-health queries accordingly.
-- `uptime.check.duration` and existing DNS, HTTP, and TLS signal names remain unchanged. HTTP and standalone TLS share one expiry metric definition.
+- ICMP no longer emits `uptime.check.duration`; replace ICMP duration panels with `uptime.icmp.rtt.median`. Other check kinds retain elapsed duration. Existing DNS, HTTP, and TLS signal names remain unchanged; HTTP and standalone TLS share one expiry metric definition.

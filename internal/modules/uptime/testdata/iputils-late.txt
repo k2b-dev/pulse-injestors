@@ -1,0 +1,9 @@
+PING router.example.lan (192.0.2.1) 56(84) bytes of data.
+64 bytes from 192.0.2.1: icmp_seq=1 ttl=64 time=1.000 ms
+64 bytes from 192.0.2.1: icmp_seq=2 ttl=64 time=2500.000 ms
+64 bytes from 192.0.2.1: icmp_seq=3 ttl=64 time=3.000 ms
+64 bytes from 192.0.2.1: icmp_seq=4 ttl=64 time=3000.000 ms
+
+--- router.example.lan ping statistics ---
+4 packets transmitted, 4 received, 0% packet loss, time 1502ms
+rtt min/avg/max/mdev = 1.000/1376.000/3000.000/1385.326 ms

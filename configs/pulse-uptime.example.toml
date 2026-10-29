@@ -103,9 +103,34 @@ lists = ["bl.spamcop.net", "b.barracudacentral.org", "dnsbl-1.uceprotect.net", "
 cadence_seconds = 3600
 timeout_seconds = 30
 
+# SmokePing probes per round -> count; step -> cadence_seconds.
+# Built-in Cloudflare/Google ICMP targets already use 20 probes every 60 s.
 [[uptime.target]]
-id = "office-printer"
-label = "Office printer"
+id = "lan-router"
+label = "LAN router"
 kind = "icmp"
-address = "192.0.2.50"
+address = "router.example.lan"
+count = 20
+interval = "500ms"
+cadence_seconds = 60
+# Optional: mark a round failed at 25% loss or above (default 100%).
+loss_threshold = 25
+# The timeout is sized automatically: 15 s for this round.
+
+[[uptime.target]]
+id = "lan-switch"
+label = "LAN switch"
+kind = "icmp"
+address = "switch.example.lan"
+count = 20
+interval = "500ms"
+cadence_seconds = 60
+
+[[uptime.target]]
+id = "quad9-icmp"
+label = "Quad9 ICMP"
+kind = "icmp"
+address = "9.9.9.9"
+count = 20
+interval = "500ms"
 cadence_seconds = 60
