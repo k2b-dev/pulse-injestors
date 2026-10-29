@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"os"
@@ -140,6 +141,9 @@ type UptimeRecordConfig struct {
 }
 
 type UptimeTargetConfig struct {
+	Count          *int                 `toml:"count"`
+	Interval       string               `toml:"interval"`
+	LossThreshold  *float64             `toml:"loss_threshold"`
 	RatePerSecond  *int                 `toml:"rate_per_second"`
 	CadenceSeconds int                  `toml:"cadence_seconds"`
 	Name           string               `toml:"name"`
@@ -935,8 +939,20 @@ func validateUptimeTargets(targets []UptimeTargetConfig) error {
 		}
 		switch strings.ToLower(strings.TrimSpace(target.Kind)) {
 		case "icmp":
-			if net.ParseIP(target.Address) == nil {
-				return fmt.Errorf("uptime target %q ICMP address must be an IP address", target.ID)
+			if net.ParseIP(target.Address) == nil && (!validDNSName(target.Address) || strings.HasPrefix(target.Address, "-")) {
+				return fmt.Errorf("uptime target %q ICMP address must be an IP address or hostname", target.ID)
+			}
+			if target.Count != nil && (*target.Count < 1 || *target.Count > 100) {
+				return fmt.Errorf("uptime target %q count must be between 1 and 100", target.ID)
+			}
+			if target.Interval != "" {
+				interval, err := time.ParseDuration(target.Interval)
+				if err != nil || interval < 200*time.Millisecond || interval > time.Minute {
+					return fmt.Errorf("uptime target %q interval must be between 200ms and 1m", target.ID)
+				}
+			}
+			if target.LossThreshold != nil && (math.IsNaN(*target.LossThreshold) || math.IsInf(*target.LossThreshold, 0) || *target.LossThreshold <= 0 || *target.LossThreshold > 100) {
+				return fmt.Errorf("uptime target %q loss_threshold must be greater than 0 and at most 100", target.ID)
 			}
 		case "dns":
 			if strings.ContainsAny(target.Address, "/: \t\r\n") {
@@ -1009,7 +1025,7 @@ func validateUptimeTargets(targets []UptimeTargetConfig) error {
 			return fmt.Errorf("uptime target %q unsupported kind %q", target.ID, target.Kind)
 		}
 		kind := strings.ToLower(strings.TrimSpace(target.Kind))
-		if (len(target.Expected) > 0 || target.Range != "") && kind != "ports" || (len(target.Records) > 0 || target.Name != "") && kind != "dns_records" || len(target.Lists) > 0 && kind != "dnsbl" || (target.CAFile != "" || target.ServerName != "" || target.WarnDays != 0) && kind != "tls" || target.Resolver != "" && kind != "dns_records" && kind != "dnsbl" {
+		if (target.Count != nil || target.Interval != "" || target.LossThreshold != nil) && kind != "icmp" || (len(target.Expected) > 0 || target.Range != "") && kind != "ports" || (len(target.Records) > 0 || target.Name != "") && kind != "dns_records" || len(target.Lists) > 0 && kind != "dnsbl" || (target.CAFile != "" || target.ServerName != "" || target.WarnDays != 0) && kind != "tls" || target.Resolver != "" && kind != "dns_records" && kind != "dnsbl" {
 			return fmt.Errorf("uptime target %q has options that do not apply to kind %q", target.ID, kind)
 		}
 		if target.CadenceSeconds < 0 || target.WarnDays < 0 {

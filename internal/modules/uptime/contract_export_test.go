@@ -45,7 +45,7 @@ func TestPulseContractExport(t *testing.T) {
 		Concurrency: 4,
 		Timeout:     time.Second,
 		HTTPClient:  httpServer.Client(),
-		Ping:        func(context.Context, string) error { return nil },
+		Ping:        fakeSuccessfulPing,
 		Targets: []Target{
 			{ID: "router", Label: "Router", Kind: KindICMP, Address: "192.0.2.1"},
 			{ID: "resolver", Label: "Resolver", Kind: KindDNS, Address: "fixture.test"},

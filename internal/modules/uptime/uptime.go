@@ -7,7 +7,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os/exec"
 	"sort"
 	"strings"
 	"sync"
@@ -36,6 +35,9 @@ type Record struct {
 	Contains string
 }
 type Target struct {
+	Count          int
+	Interval       time.Duration
+	LossThreshold  *float64
 	RatePerSecond  int
 	Cadence        time.Duration
 	Name           string
@@ -63,11 +65,12 @@ type Collector struct {
 	Timeout     time.Duration
 	Resolver    *net.Resolver
 	HTTPClient  *http.Client
-	Ping        func(context.Context, string) error
+	Ping        func(context.Context, Target) ([]byte, error)
 	PortDial    func(context.Context, string) (net.Conn, error)
 }
 
 type result struct {
+	icmp                pingStats
 	unexpected, missing []int
 	open, filtered      int
 	lists               []listResult
@@ -140,6 +143,9 @@ func (c Collector) targetTimeout(target Target) time.Duration {
 	}
 	if target.Kind == KindPorts {
 		return 900 * time.Second
+	}
+	if target.Kind == KindICMP {
+		return max(c.Timeout, target.ICMPTimeout())
 	}
 	if c.Timeout > 0 {
 		return c.Timeout
@@ -224,7 +230,19 @@ func (c Collector) Collect(ctx context.Context, scope monitoring.Scope) (pulse.B
 			address = target.Name
 		}
 		tb.State("uptime.check.target", address, dims)
-		tb.Metric("uptime.check.duration", "gauge", durationMilliseconds(outcome.duration), "milliseconds", dims)
+		if target.Kind == KindICMP {
+			if outcome.measured {
+				tb.Metric("uptime.icmp.loss", "gauge", outcome.icmp.loss, "percent", dims)
+				if outcome.icmp.received > 0 {
+					tb.Metric("uptime.icmp.rtt.min", "gauge", outcome.icmp.min, "milliseconds", dims)
+					tb.Metric("uptime.icmp.rtt.median", "gauge", outcome.icmp.median, "milliseconds", dims)
+					tb.Metric("uptime.icmp.rtt.max", "gauge", outcome.icmp.max, "milliseconds", dims)
+					tb.Metric("uptime.icmp.rtt.stddev", "gauge", outcome.icmp.stddev, "milliseconds", dims)
+				}
+			}
+		} else {
+			tb.Metric("uptime.check.duration", "gauge", durationMilliseconds(outcome.duration), "milliseconds", dims)
+		}
 		if target.Kind == KindPorts {
 			if outcome.measured || len(outcome.unexpected) > 0 {
 				tb.State("uptime.ports.unexpected", bounded(portList(outcome.unexpected)), dims)
@@ -281,7 +299,7 @@ func (c Collector) check(parent context.Context, target Target) result {
 	var outcome result
 	switch target.Kind {
 	case KindICMP:
-		outcome = c.checkICMP(ctx, target.Address)
+		outcome = c.checkICMP(ctx, target)
 	case KindDNS:
 		outcome = c.checkDNS(ctx, target.Address)
 	case KindTCP:
@@ -306,31 +324,6 @@ func (c Collector) check(parent context.Context, target Target) result {
 	}
 	outcome.duration = time.Since(start)
 	return outcome
-}
-
-func (c Collector) checkICMP(ctx context.Context, address string) result {
-	ping := c.Ping
-	if ping == nil {
-		ping = runPing
-	}
-	err := ping(ctx, address)
-	if err == nil {
-		return result{measured: true, success: true}
-	}
-	if errors.Is(err, exec.ErrNotFound) {
-		return result{measured: false, success: false, err: "ping command unavailable"}
-	}
-	if ctx.Err() != nil {
-		return result{err: "timeout"}
-	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) && exitErr.ExitCode() == 2 {
-		return result{measured: false, success: false, err: "ping command failed"}
-	}
-	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-		return result{measured: true, err: "ping failed"}
-	}
-	return result{err: "ping command failed"}
 }
 
 func (c Collector) checkDNS(ctx context.Context, address string) result {
@@ -422,10 +415,6 @@ func (c Collector) httpClient() *http.Client {
 	return &client
 }
 
-func runPing(ctx context.Context, address string) error {
-	return exec.CommandContext(ctx, "ping", "-n", "-c", "1", address).Run()
-}
-
 func endpointScope(scope monitoring.Scope, target Target) monitoring.Scope {
 	scope.Resource.Type = "uptime-endpoint"
 	scope.Resource.ID = entity.ID(probeID(scope), target.ID)
@@ -447,8 +436,8 @@ func durationMilliseconds(value time.Duration) float64 {
 
 func DefaultTargets(timeout time.Duration) []Target {
 	return []Target{
-		{ID: "cloudflare-icmp", Label: "Cloudflare ICMP", Kind: KindICMP, Address: "1.1.1.1", Timeout: timeout},
-		{ID: "google-icmp", Label: "Google ICMP", Kind: KindICMP, Address: "8.8.8.8", Timeout: timeout},
+		{ID: "cloudflare-icmp", Label: "Cloudflare ICMP", Kind: KindICMP, Address: "1.1.1.1", Timeout: max(timeout, (Target{}).ICMPTimeout())},
+		{ID: "google-icmp", Label: "Google ICMP", Kind: KindICMP, Address: "8.8.8.8", Timeout: max(timeout, (Target{}).ICMPTimeout())},
 		{ID: "cloudflare-dns", Label: "Cloudflare DNS", Kind: KindDNS, Address: "cloudflare.com", Timeout: timeout},
 		{ID: "google-dns", Label: "Google DNS", Kind: KindDNS, Address: "google.com", Timeout: timeout},
 		{ID: "cloudflare-tcp", Label: "Cloudflare HTTPS TCP", Kind: KindTCP, Address: "1.1.1.1:443", Timeout: timeout},

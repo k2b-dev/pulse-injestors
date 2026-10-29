@@ -5,16 +5,16 @@ section: Operate
 order: 60
 description: Threshold rules for host capacity, backups, services, uptime, and ingestor delivery.
 tags: [alerts, sql, operations]
-updated: 2026-10-23
+updated: 2026-10-29
 ---
 
 # Alert SQL templates
 
-Start with source **Expected data** from [Fleet rollout](/en/rollout), then add rules for the failures that need action. These 20 templates are a menu, not a required set. The default is **20 rules per base**. Start with eight: disk usage, memory, failed systemd units, certificates, backup markers, uptime failed, uptime error, and spool age. Add platform/service rules only where those collectors run; reserve room for splitting large fleets.
+Start with source **Expected data** from [Fleet rollout](/en/rollout), then add rules for the failures that need action. These templates are a menu, not a required set. The default is **20 rules per base**. Start with eight: disk usage, memory, failed systemd units, certificates, backup markers, uptime failed, uptime error, and spool age. Add platform/service rules only where those collectors run; reserve room for splitting large fleets.
 
 Each rule must return a string `key` and finite numeric `value`, with **at most 100 distinct keys**. Before saving, run the SQL, inspect every key and the row count, and narrow by resource or a bounded fleet dimension if necessary. Split groups into separate rules when needed; do not add `LIMIT 100` and silently leave resources unmonitored. Keys include dimensions where multiple filesystems, storage copies, disks, or ingestors share a resource. The comparisons are strict `above` or `below`; one rule can carry warning and critical thresholds. All durations and intervals below are seconds, and intervals must be at least 300.
 
-**Verification:** signal names match the module reference. On 2026-10-23 every template below ran without SQL errors against a development Pulse built from Cloud main, with real `pulse-linux` data in a test base. Templates for services that were not present (Proxmox, PBS, Ceph, Patroni, NATS, Valkey, ClickHouse, uptime) were checked for valid columns only, so check their results once real data arrives. The state templates use `states(state_key, variant_key, value, dimensions, resource_key, source_id, updated_at)`; `value` is JSON text (`true`, `false`, or a quoted string), and `dimensions` is a JSON string.
+**Verification:** signal names match the module reference. On 2026-10-23 the templates present on that date ran without SQL errors against a development Pulse built from Cloud main, with real `pulse-linux` data in a test base. Templates for services that were not present (Proxmox, PBS, Ceph, Patroni, NATS, Valkey, ClickHouse, uptime) were checked for valid columns only, so check their results once real data arrives. The state templates use `states(state_key, variant_key, value, dimensions, resource_key, source_id, updated_at)`; `value` is JSON text (`true`, `false`, or a quoted string), and `dimensions` is a JSON string.
 
 States are current values, not history. Their timestamps record changes or refreshes, so the state queries allow seven hours for the six-hour refresh cadence. Do not infer incident duration from `updated_at`; use `minDurationSeconds`. Missing or stale input is not healthy: inspect source freshness, collector availability, and rule evaluation errors alongside threshold alerts. For state-only failures, a stale last value can remain until the freshness cutoff.
 
@@ -304,6 +304,21 @@ GROUP BY resource_key, dimensions
 ```
 
 A failed check is a confirmed finding, such as an unexpected port or an HTTP status mismatch. For daily port scans, replace the seven-hour state window with 26 hours and use an interval of 3600; filter by `check_type` so minute checks keep the shorter window.
+
+## Packet loss > X % for N minutes
+
+Above: warn **10** (% loss). Duration **600** (10 minutes), interval **300**. **States: no.** Set the threshold to X and duration to N × 60 seconds. At the default 60-second target cadence, use a two-minute freshness window:
+
+```sql
+SELECT concat(r.resource_key, '|', r.dimensions) AS key,
+       argMax(s.value, s.ts) AS value
+FROM samples s JOIN series r ON r.series_id = s.series_id
+WHERE r.metric = 'uptime.icmp.loss'
+  AND s.ts >= now() - INTERVAL 2 MINUTE AND s.ts < now()
+GROUP BY r.resource_key, r.dimensions
+```
+
+This tests the latest round at each alert evaluation; it does not inspect every intervening round. `above` is strict: exactly 10% does not trigger this example. The target's optional `loss_threshold` instead fails at or above its value. Adjust freshness for slower cadences. Missing samples are not zero loss: retain Expected data and the uptime error rule. This new template has not been run against a live Pulse instance.
 
 ## Uptime probe could not complete: error
 

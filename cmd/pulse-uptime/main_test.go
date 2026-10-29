@@ -4,6 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/k2b-dev/pulse-injestors/internal/modules/uptime"
 )
 
 func TestLoadConfigBuildsStableUptimeProbe(t *testing.T) {
@@ -168,6 +171,54 @@ func TestPortScanConfiguredRate(t *testing.T) {
 			}
 			if err != nil || len(targets) != 1 || targets[0].RatePerSecond != want {
 				t.Fatalf("targets=%+v err=%v", targets, err)
+			}
+		})
+	}
+}
+
+func TestICMPRoundConfigWiring(t *testing.T) {
+	for _, tc := range []struct {
+		name, options string
+		count         int
+		interval      time.Duration
+		timeout       time.Duration
+		valid         bool
+	}{
+		{name: "defaults", count: 20, interval: 500 * time.Millisecond, timeout: 15 * time.Second, valid: true},
+		{name: "custom", options: "count = 10\ninterval = '1s'\ncadence_seconds = 120\nloss_threshold = 25\ntimeout_seconds = 20", count: 10, interval: time.Second, timeout: 20 * time.Second, valid: true},
+		{name: "large round", options: "count = 100", count: 100, interval: 500 * time.Millisecond, timeout: 55 * time.Second, valid: true},
+		{name: "round exceeds cadence", options: "count = 100\ninterval = '1s'"},
+		{name: "long final wait", options: "count = 1\ninterval = '1m'"},
+		{name: "timeout exceeds cadence", options: "timeout_seconds = 90"},
+		{name: "long cadence", options: "count = 100\ninterval = '1s'\ncadence_seconds = 120", count: 100, interval: time.Second, timeout: 105 * time.Second, valid: true},
+		{name: "short timeout", options: "timeout_seconds = 5"},
+		{name: "zero count", options: "count = 0"},
+		{name: "NaN threshold", options: "loss_threshold = nan"},
+		{name: "infinite threshold", options: "loss_threshold = inf"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			text := "[uptime]\nenable_defaults = false\n[[uptime.target]]\nid = 'router'\nlabel = 'Router'\nkind = 'icmp'\naddress = 'router.example.lan'\n" + tc.options + "\n"
+			if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := loadConfig(cli{Config: path, ResourceID: "probe", Local: true})
+			var targets []uptime.Target
+			if err == nil {
+				targets, err = configuredTargets(cfg)
+			}
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v err=%v", tc.valid, err)
+			}
+			if !tc.valid {
+				return
+			}
+			target := targets[0]
+			if target.Count != tc.count || target.Interval != tc.interval || target.Timeout != tc.timeout {
+				t.Fatalf("target=%+v", target)
+			}
+			if tc.name == "custom" && (target.LossThreshold == nil || *target.LossThreshold != 25 || target.Cadence != 120*time.Second) {
+				t.Fatalf("target=%+v", target)
 			}
 		})
 	}

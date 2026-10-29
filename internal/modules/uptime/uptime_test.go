@@ -42,7 +42,7 @@ func TestCollectorEmitsStableEndpointResourcesAndProtocolSignals(t *testing.T) {
 		Concurrency: 4,
 		Timeout:     time.Second,
 		HTTPClient:  httpServer.Client(),
-		Ping:        func(context.Context, string) error { return nil },
+		Ping:        fakeSuccessfulPing,
 		Targets: []Target{
 			{ID: "router", Label: "Router", Kind: KindICMP, Address: "192.0.2.1"},
 			{ID: "resolver", Label: "Resolver", Kind: KindDNS, Address: "fixture.test"},
@@ -122,7 +122,7 @@ func TestCollectorModelsTargetFailureWithoutReturningCollectorError(t *testing.T
 
 func TestCollectorDoesNotReportUnavailablePingCommandAsDowntimeMetric(t *testing.T) {
 	batch, err := (Collector{
-		Ping: func(context.Context, string) error { return exec.ErrNotFound },
+		Ping: func(context.Context, Target) ([]byte, error) { return nil, exec.ErrNotFound },
 		Targets: []Target{{
 			ID: "router", Label: "Router", Kind: KindICMP, Address: "192.0.2.1",
 		}},
@@ -146,8 +146,8 @@ func TestCollectorDoesNotReportUnavailablePingCommandAsDowntimeMetric(t *testing
 
 func TestCollectorDoesNotReportPingExecutionErrorAsDowntimeMetric(t *testing.T) {
 	batch, err := (Collector{
-		Ping: func(ctx context.Context, _ string) error {
-			return exec.CommandContext(ctx, "sh", "-c", "exit 2").Run()
+		Ping: func(ctx context.Context, _ Target) ([]byte, error) {
+			return nil, exec.CommandContext(ctx, "sh", "-c", "exit 2").Run()
 		},
 		Targets: []Target{{
 			ID: "router", Label: "Router", Kind: KindICMP, Address: "192.0.2.1",
@@ -211,7 +211,11 @@ func TestDefaultTargetsCoverAllCheckTypes(t *testing.T) {
 	kinds := map[string]bool{}
 	for _, target := range targets {
 		kinds[target.Kind] = true
-		if target.Timeout != 3*time.Second {
+		want := 3 * time.Second
+		if target.Kind == KindICMP {
+			want = 15 * time.Second
+		}
+		if target.Timeout != want {
 			t.Fatalf("target timeout = %s", target.Timeout)
 		}
 	}

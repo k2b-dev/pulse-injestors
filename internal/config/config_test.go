@@ -338,7 +338,7 @@ func TestResolveRejectsInvalidUptimeTargets(t *testing.T) {
 		{ID: "bad id", Label: "Bad", Kind: "dns", Address: "example.com"},
 		{ID: "missing-label", Kind: "dns", Address: "example.com"},
 		{ID: "bad-kind", Label: "Bad", Kind: "smtp", Address: "example.com"},
-		{ID: "bad-icmp", Label: "Bad", Kind: "icmp", Address: "example.com"},
+		{ID: "bad-icmp", Label: "Bad", Kind: "icmp", Address: "https://example.com"},
 		{ID: "bad-dns", Label: "Bad", Kind: "dns", Address: "https://example.com"},
 		{ID: "bad-tcp", Label: "Bad", Kind: "tcp", Address: "example.com"},
 		{ID: "bad-http", Label: "Bad", Kind: "http", Address: "file:///tmp/check"},
@@ -654,5 +654,47 @@ func TestRejectIrrelevantUptimeOptions(t *testing.T) {
 		if validateUptimeTargets([]UptimeTargetConfig{target}) == nil {
 			t.Fatal("accepted irrelevant options")
 		}
+	}
+}
+
+func TestICMPTargetConfiguration(t *testing.T) {
+	count := func(n int) *int { return &n }
+	threshold := func(n float64) *float64 { return &n }
+	for _, tc := range []struct {
+		name   string
+		mutate func(*UptimeTargetConfig)
+		valid  bool
+	}{
+		{"defaults", func(c *UptimeTargetConfig) {}, true},
+		{"one", func(c *UptimeTargetConfig) { c.Count = count(1) }, true},
+		{"hundred", func(c *UptimeTargetConfig) { c.Count = count(100) }, true},
+		{"zero", func(c *UptimeTargetConfig) { c.Count = count(0) }, false},
+		{"negative", func(c *UptimeTargetConfig) { c.Count = count(-1) }, false},
+		{"too many", func(c *UptimeTargetConfig) { c.Count = count(101) }, false},
+		{"interval", func(c *UptimeTargetConfig) { c.Interval = "500ms" }, true},
+		{"fast interval", func(c *UptimeTargetConfig) { c.Interval = "100ms" }, false},
+		{"slow interval", func(c *UptimeTargetConfig) { c.Interval = "2m" }, false},
+		{"invalid interval", func(c *UptimeTargetConfig) { c.Interval = "invalid" }, false},
+		{"threshold", func(c *UptimeTargetConfig) { c.LossThreshold = threshold(25) }, true},
+		{"full loss threshold", func(c *UptimeTargetConfig) { c.LossThreshold = threshold(100) }, true},
+		{"zero threshold", func(c *UptimeTargetConfig) { c.LossThreshold = threshold(0) }, false},
+		{"negative threshold", func(c *UptimeTargetConfig) { c.LossThreshold = threshold(-1) }, false},
+		{"high threshold", func(c *UptimeTargetConfig) { c.LossThreshold = threshold(101) }, false},
+		{"IPv6", func(c *UptimeTargetConfig) { c.Address = "2001:db8::1" }, true},
+		{"option injection", func(c *UptimeTargetConfig) { c.Address = "-f" }, false},
+		{"host port", func(c *UptimeTargetConfig) { c.Address = "example.com:80" }, false},
+		{"blank label", func(c *UptimeTargetConfig) { c.Address = "a..example.com" }, false},
+		{"count on DNS", func(c *UptimeTargetConfig) { c.Kind = "dns"; c.Count = count(20) }, false},
+		{"interval on DNS", func(c *UptimeTargetConfig) { c.Kind = "dns"; c.Interval = "500ms" }, false},
+		{"threshold on DNS", func(c *UptimeTargetConfig) { c.Kind = "dns"; c.LossThreshold = threshold(50) }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := UptimeTargetConfig{ID: "router", Label: "Router", Kind: "icmp", Address: "router.example.lan"}
+			tc.mutate(&c)
+			err := validateUptimeTargets([]UptimeTargetConfig{c})
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v err=%v", tc.valid, err)
+			}
+		})
 	}
 }

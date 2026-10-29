@@ -5,7 +5,7 @@ section: Reference
 order: 220
 description: Example SQL queries for Pulse ingestor resources and metric series.
 tags: [dashboards, query, examples]
-updated: 2026-10-23
+updated: 2026-10-29
 ---
 
 # SQL query examples
@@ -123,3 +123,7 @@ ORDER BY series_count DESC
 ```
 
 Use `SELECT count() AS total_series FROM series` for the base total. See [fleet sizing](/en/rollout#size-the-base) for values/minute and enrollment bursts.
+
+## ICMP packet loss and latency
+
+Use `uptime.icmp.loss` (percent) and `uptime.icmp.rtt.median` (milliseconds) in separate panels. ICMP no longer emits `uptime.check.duration`. The [SmokePing replacement guide](/en/ingestor-uptime#replacing-smokeping) provides per-target time series and a five-minute percentile query. Those percentiles describe round medians; missing RTTs during total loss are not zero latency.
