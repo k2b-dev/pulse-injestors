@@ -143,13 +143,16 @@ func (c Collector) checkICMP(ctx context.Context, target Target) result {
 }
 
 func pingArgs(target Target, goos string) []string {
-	wait, deadlineFlag := "2", "-w" // iputils uses seconds; macOS uses milliseconds.
-	if goos == "darwin" {
-		wait, deadlineFlag = "2000", "-t"
+	args := []string{"-n", "-c", strconv.Itoa(target.pingCount()), "-i", strconv.FormatFloat(target.pingInterval().Seconds(), 'f', -1, 64)}
+	if goos != "darwin" {
+		// iputils -W is per reply in seconds. No -w: with a deadline, -c counts
+		// replies and ping keeps sending under loss, which breaks the round.
+		return append(args, "-W", "2", target.Address)
 	}
-	// Let ping print its summary before the Go context kills the process.
+	// macOS -W is per reply in milliseconds and -t bounds the whole round, so
+	// ping prints its summary before the Go context kills the process.
 	deadline := strconv.FormatInt(int64((target.ICMPTimeout()-3*time.Second)/time.Second), 10)
-	return []string{"-n", "-c", strconv.Itoa(target.pingCount()), "-i", strconv.FormatFloat(target.pingInterval().Seconds(), 'f', -1, 64), "-W", wait, deadlineFlag, deadline, target.Address}
+	return append(args, "-W", "2000", "-t", deadline, target.Address)
 }
 
 func runPing(ctx context.Context, target Target) ([]byte, error) {

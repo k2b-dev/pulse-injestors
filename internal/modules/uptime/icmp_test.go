@@ -188,11 +188,10 @@ func TestICMPUnmeasuredRoundsEmitNoMetrics(t *testing.T) {
 
 func TestPingArgumentsAndRoundBudget(t *testing.T) {
 	for _, platform := range []string{"linux", "darwin"} {
-		wait, lossExit, deadlineFlag := "2", 1, "-w"
+		lossExit, want := 1, []string{"-n", "-c", "20", "-i", "0.5", "-W", "2", "router.example.lan"}
 		if platform == "darwin" {
-			wait, lossExit, deadlineFlag = "2000", 2, "-t"
+			lossExit, want = 2, []string{"-n", "-c", "20", "-i", "0.5", "-W", "2000", "-t", "12", "router.example.lan"}
 		}
-		want := []string{"-n", "-c", "20", "-i", "0.5", "-W", wait, deadlineFlag, "12", "router.example.lan"}
 		if got := pingArgs(Target{Address: "router.example.lan"}, platform); !reflect.DeepEqual(got, want) {
 			t.Fatalf("%s: %v", platform, got)
 		}

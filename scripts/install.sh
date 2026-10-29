@@ -687,10 +687,14 @@ config_uses_managed_token() {
 install_systemd() {
     service_file="${TMP}/${SERVICE_ID}.service"
     # Root collectors read hardware and package state; uptime only needs the network.
+    # NoNewPrivileges drops ping's file capability, and many distributions keep
+    # unprivileged ICMP sockets disabled, so grant ping only CAP_NET_RAW.
     if [ "$INGESTOR" = "uptime" ]; then
         identity="DynamicUser=yes
 ProtectSystem=strict
-ProtectHome=yes"
+ProtectHome=yes
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW"
     else
         identity="ProtectSystem=full
 ProtectHome=read-only"
